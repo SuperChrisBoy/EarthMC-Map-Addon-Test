@@ -79,7 +79,7 @@ def oldModJarPrefixes = ['towny-map-addon', 'EarthMC Map Addon', 'EarthMC.Map.Ad
 def modrinthLauncherDb = file(new File(System.getProperty("user.home"), "Library/Application Support/ModrinthApp/app.db"))
 
 def commandResult = { List<String> args, String stdin = null ->
-    def process = new ProcessBuilder(args).start()
+    def process = new ProcessBuilder(args.collect { it.toString() }).start()
     if (stdin != null) {
         process.outputStream.withWriter('UTF-8') { writer -> writer << stdin }
     } else {
