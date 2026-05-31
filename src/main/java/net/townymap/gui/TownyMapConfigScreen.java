@@ -22,7 +22,7 @@ public class TownyMapConfigScreen extends Screen {
     private static final int CONTROL_WIDTH = 232;
     private static final int VIEW_TOP = 58;
     private static final int FOOTER_HEIGHT = 50;
-    private static final int CONTENT_HEIGHT = 526;
+    private static final int CONTENT_HEIGHT = 600;
     private static final int PANEL_BG = 0xE80E0F12;
     private static final int PANEL_BORDER = 0xCC3A3D42;
     private static final int PANEL_ACCENT = 0xFF4FA37A;
@@ -141,6 +141,28 @@ public class TownyMapConfigScreen extends Screen {
                 .create(controlX, 0, CONTROL_WIDTH, 20, Component.literal("Hide Minimap In Nether"),
                        (btn, val) -> { cfg.hideMinimapInNether = val; cfg.save(); }),
                 490);
+
+        addScrollingWidget(
+            CycleButton.onOffBuilder(cfg.iceHighwaysEnabled)
+                .create(controlX, 0, CONTROL_WIDTH, 20, Component.literal("Ice Highways"),
+                       (btn, val) -> {
+                           cfg.iceHighwaysEnabled = val;
+                           cfg.save();
+                           if (val) net.townymap.integration.IceHighwayManager.reload();
+                       }),
+                514);
+
+        addScrollingWidget(
+            Button.builder(Component.literal("Open Ice Highways Folder"),
+                       btn -> net.townymap.integration.IceHighwayManager.openFolder())
+                .bounds(controlX, 0, CONTROL_WIDTH, 20).build(),
+                538);
+
+        addScrollingWidget(
+            Button.builder(Component.literal("Reload Ice Highways"),
+                       btn -> net.townymap.integration.IceHighwayManager.reload())
+                .bounds(controlX, 0, CONTROL_WIDTH, 20).build(),
+                562);
 
         this.addRenderableWidget(
             Button.builder(CommonComponents.GUI_DONE, btn -> this.onClose())
