@@ -137,7 +137,7 @@ public class TownyMapMod implements ClientModInitializer {
         ChunkCounterOverlay.loadSelection(config.chunkCounterSelection,
                 config.chunkCounterGroups, config.activeChunkCounterGroup);
         loadTownDetailsCache();
-        net.townymap.integration.IceHighwayManager.reload();
+        net.townymap.integration.CustomOverlayManager.reload();
 
         apiClient.start();
         TownyMapCommand.register();
@@ -494,8 +494,8 @@ public class TownyMapMod implements ClientModInitializer {
             requestVisiblePlayerDetails(cameraX, cameraZ, scale, screenW, screenH);
             renderer.render(ctx, cameraX, cameraZ, scale, screenW, screenH,
                     townDetailsCache, playerDetailsCache, nationDetailsCache);
-            if (config.iceHighwaysEnabled) {
-                net.townymap.integration.IceHighwayManager.render(ctx, cameraX, cameraZ, scale, screenW, screenH);
+            if (config.customOverlaysEnabled) {
+                net.townymap.integration.CustomOverlayManager.render(ctx, cameraX, cameraZ, scale, screenW, screenH);
             }
         }
     }

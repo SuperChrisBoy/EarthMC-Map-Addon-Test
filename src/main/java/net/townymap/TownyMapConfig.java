@@ -39,7 +39,7 @@ public class TownyMapConfig {
     public boolean squaremapBackgroundEnabled = false;
     public boolean nationStarsEnabled = true;
     public boolean chunkGridEnabled = false;
-    public boolean iceHighwaysEnabled = false;
+    public boolean customOverlaysEnabled = false;
     /** 0 off, 1 public outsider-spawn, 2 overclaimed, 3 open, 4 for sale, 5 no nation. */
     public int townStatusOverlayMode = 0;
     public int borderOverlayMode = 0; // 0 off, 1 countries, 2 states + countries

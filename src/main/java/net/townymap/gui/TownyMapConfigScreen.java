@@ -143,24 +143,24 @@ public class TownyMapConfigScreen extends Screen {
                 490);
 
         addScrollingWidget(
-            CycleButton.onOffBuilder(cfg.iceHighwaysEnabled)
-                .create(controlX, 0, CONTROL_WIDTH, 20, Component.literal("Ice Highways"),
+            CycleButton.onOffBuilder(cfg.customOverlaysEnabled)
+                .create(controlX, 0, CONTROL_WIDTH, 20, Component.literal("Custom Overlays"),
                        (btn, val) -> {
-                           cfg.iceHighwaysEnabled = val;
+                           cfg.customOverlaysEnabled = val;
                            cfg.save();
-                           if (val) net.townymap.integration.IceHighwayManager.reload();
+                           if (val) net.townymap.integration.CustomOverlayManager.reload();
                        }),
                 514);
 
         addScrollingWidget(
-            Button.builder(Component.literal("Open Ice Highways Folder"),
-                       btn -> net.townymap.integration.IceHighwayManager.openFolder())
+            Button.builder(Component.literal("Open Overlays Folder"),
+                       btn -> net.townymap.integration.CustomOverlayManager.openFolder())
                 .bounds(controlX, 0, CONTROL_WIDTH, 20).build(),
                 538);
 
         addScrollingWidget(
-            Button.builder(Component.literal("Reload Ice Highways"),
-                       btn -> net.townymap.integration.IceHighwayManager.reload())
+            Button.builder(Component.literal("Reload Overlays"),
+                       btn -> net.townymap.integration.CustomOverlayManager.reload())
                 .bounds(controlX, 0, CONTROL_WIDTH, 20).build(),
                 562);
 
