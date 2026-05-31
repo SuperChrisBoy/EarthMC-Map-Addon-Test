@@ -203,6 +203,7 @@ jobs:
           done <<< "${ids}"
 
       - name: Publish version
+        id: publish
         shell: bash
         run: |
           set -euo pipefail
@@ -230,9 +231,38 @@ jobs:
               primary_file: "file"
             }' > modrinth-data.json
 
-          curl --fail-with-body \
+          response="$(curl --fail-with-body \
             -X POST "https://api.modrinth.com/v2/version" \
             -H "Authorization: ${MODRINTH_TOKEN}" \
             -H "User-Agent: JR1258/EarthMC-Map-Addon GitHub Actions" \
             -F "data=@modrinth-data.json;type=application/json" \
-            -F "file=@${JAR_PATH};type=application/java-archive"
+            -F "file=@${JAR_PATH};type=application/java-archive")"
+          printf '%s' "${response}" > modrinth-version-response.json
+          echo "version_id=$(jq -r '.id' modrinth-version-response.json)" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify Modrinth file hash lookup
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_id="${{ steps.publish.outputs.version_id }}"
+          sha1="$(sha1sum "${JAR_PATH}" | awk '{print $1}')"
+
+          lookup="$(jq -n --arg hash "${sha1}" '{hashes: [$hash], algorithm: "sha1"}' \
+            | curl --fail-with-body \
+                -X POST "https://api.modrinth.com/v2/version_files" \
+                -H "Content-Type: application/json" \
+                -H "User-Agent: JR1258/EarthMC-Map-Addon GitHub Actions" \
+                --data-binary @-)"
+
+          project_id="$(jq -r --arg hash "${sha1}" '.[$hash].project_id // empty' <<< "${lookup}")"
+          resolved_version_id="$(jq -r --arg hash "${sha1}" '.[$hash].id // empty' <<< "${lookup}")"
+
+          if [[ "${project_id}" != "${MODRINTH_PROJECT_ID}" || "${resolved_version_id}" != "${version_id}" ]]; then
+            echo "Uploaded jar is not publicly linked to the expected Modrinth project/version." >&2
+            echo "sha1=${sha1}" >&2
+            echo "expected project=${MODRINTH_PROJECT_ID} version=${version_id}" >&2
+            echo "resolved project=${project_id} version=${resolved_version_id}" >&2
+            exit 1
+          fi
+
+          echo "Verified ${JAR_PATH} is linked to Modrinth project ${project_id}, version ${resolved_version_id}."

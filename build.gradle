@@ -87,16 +87,23 @@ def modsDir = file(new File(System.getProperty("user.home"), "Library/Applicatio
 def oldModJarPrefixes = ['towny-map-addon', 'EarthMC Map Addon', 'EarthMC.Map.Addon', 'earthmc-map-addon']
 def modrinthLauncherDb = file(new File(System.getProperty("user.home"), "Library/Application Support/ModrinthApp/app.db"))
 
-def commandOutput = { List<String> args ->
+def commandResult = { List<String> args, String stdin = null ->
+    def process = new ProcessBuilder(args).start()
+    if (stdin != null) {
+        process.outputStream.withWriter('UTF-8') { writer -> writer << stdin }
+    } else {
+        process.outputStream.close()
+    }
     def output = new ByteArrayOutputStream()
     def error = new ByteArrayOutputStream()
-    def result = exec {
-        commandLine args
-        standardOutput = output
-        errorOutput = error
-        ignoreExitValue = true
-    }
-    result.exitValue == 0 ? output.toString('UTF-8').trim() : null
+    process.inputStream.transferTo(output)
+    process.errorStream.transferTo(error)
+    [exitValue: process.waitFor(), output: output.toString('UTF-8').trim()]
+}
+
+def commandOutput = { List<String> args ->
+    def result = commandResult(args)
+    result.exitValue == 0 ? result.output : null
 }
 
 def sqlEscape = { String value ->
@@ -116,19 +123,14 @@ def registerModrinthLauncherFile = { File deployedJar ->
     if (!sha1) return
 
     def requestBody = groovy.json.JsonOutput.toJson([hashes: [sha1], algorithm: 'sha1'])
-    def response = new ByteArrayOutputStream()
-    def error = new ByteArrayOutputStream()
-    def lookup = exec {
-        commandLine 'curl', '-sS', '-X', 'POST', 'https://api.modrinth.com/v2/version_files',
+    def lookup = commandResult([
+            'curl', '-sS', '-X', 'POST', 'https://api.modrinth.com/v2/version_files',
             '-H', 'Content-Type: application/json',
-            '--data', requestBody
-        standardOutput = response
-        errorOutput = error
-        ignoreExitValue = true
-    }
+            '--data-binary', '@-'
+    ], requestBody)
     if (lookup.exitValue != 0) return
 
-    def versions = new groovy.json.JsonSlurper().parseText(response.toString('UTF-8'))
+    def versions = new groovy.json.JsonSlurper().parseText(lookup.output)
     def version = versions[sha1]
     if (!version?.project_id || !version?.id) return
 
@@ -139,10 +141,7 @@ def registerModrinthLauncherFile = { File deployedJar ->
     ])
     def expires = ((System.currentTimeMillis() / 1000L) as long) + 60L * 60L * 24L * 30L
     def sql = "INSERT OR REPLACE INTO cache (id,data_type,alias,data,expires) VALUES ('${sqlEscape(sha1)}','file',NULL,'${sqlEscape(data)}',${expires});"
-    def update = exec {
-        commandLine 'sqlite3', modrinthLauncherDb.absolutePath, sql
-        ignoreExitValue = true
-    }
+    def update = commandResult(['sqlite3', modrinthLauncherDb.absolutePath, sql])
     if (update.exitValue == 0) {
         println "Registered ${deployedJar.name} with Modrinth launcher metadata (${version.project_id}/${version.id})."
     }
