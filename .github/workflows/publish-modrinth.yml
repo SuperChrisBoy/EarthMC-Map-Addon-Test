@@ -16,7 +16,7 @@ on:
           - beta
           - alpha
       game_version:
-        description: "Minecraft game version for the Modrinth version, for example 1.21.11 or 26.1.2"
+        description: "Minecraft game version(s), comma-separated if needed, for example 1.21.11 or 26.1.2,26.1.1,26.1"
         required: true
         default: "1.21.11"
       version_number:
@@ -151,13 +151,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
+          primary_game_version="${GAME_VERSION%%,*}"
           gh release download "${{ steps.meta.outputs.tag }}" \
             --repo "${GITHUB_REPOSITORY}" \
             --pattern "*.jar" \
             --clobber \
             --dir dist
 
-          jar="$(find dist -type f -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' | grep -F "${GAME_VERSION}" | sort | head -n 1 || true)"
+          jar="$(find dist -type f -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' | grep -F "${primary_game_version}" | sort | head -n 1 || true)"
           if [[ -z "${jar}" ]]; then
             jar="$(find dist -type f -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' | sort | head -n 1)"
           fi
@@ -179,8 +180,13 @@ jobs:
               "https://api.modrinth.com/v2/project/${MODRINTH_PROJECT_ID}/version" \
             | jq -r \
                 --arg version_number "${{ steps.meta.outputs.version_number }}" \
-                --arg game_version "${GAME_VERSION}" \
-                '.[] | select(.version_number == $version_number and (.game_versions | index($game_version))) | .id')"
+                --arg game_versions "${GAME_VERSION}" \
+                '
+                  ($game_versions | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $wanted
+                  | .[]
+                  | select(.version_number == $version_number and ([.game_versions[] as $version | $wanted | index($version)] | any))
+                  | .id
+                ')"
 
           if [[ -z "${ids}" ]]; then
             echo "No existing Modrinth version matched ${{ steps.meta.outputs.version_number }} for ${GAME_VERSION}."
@@ -207,7 +213,7 @@ jobs:
             --arg version_number "${{ steps.meta.outputs.version_number }}" \
             --arg changelog "${changelog}" \
             --arg project_id "${MODRINTH_PROJECT_ID}" \
-            --arg game_version "${GAME_VERSION}" \
+            --arg game_versions "${GAME_VERSION}" \
             --arg loader "${LOADER}" \
             --arg version_type "${VERSION_TYPE}" \
             '{
@@ -215,7 +221,7 @@ jobs:
               version_number: $version_number,
               changelog: $changelog,
               dependencies: [],
-              game_versions: [$game_version],
+              game_versions: ($game_versions | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))),
               version_type: $version_type,
               loaders: [$loader],
               featured: true,
