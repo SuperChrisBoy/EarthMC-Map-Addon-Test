@@ -689,6 +689,14 @@ public final class TownSearchOverlay {
         return List.copyOf(lines);
     }
 
+    private static boolean isNationCapital(String townName, String nationName,
+                                           Map<String, EarthMcNationData> nationDetails) {
+        if (nationName == null || nationName.isBlank() || nationDetails == null) return false;
+        EarthMcNationData nation = nationDetails.get(nationName.toLowerCase(Locale.ROOT));
+        return nation != null && nation.capitalName() != null
+                && nation.capitalName().equalsIgnoreCase(townName);
+    }
+
     private static List<InfoRow> townInfo(TownData town, TownPopupData details,
                                           Map<String, EarthMcNationData> nationDetails) {
         ArrayList<InfoRow> lines = new ArrayList<>();
@@ -698,7 +706,11 @@ public final class TownSearchOverlay {
             lines.add(InfoRow.text("§7Details: §fChecking..."));
             return List.copyOf(lines);
         }
-        if (!details.nationName().isBlank()) lines.add(InfoRow.link("§7Nation: §f", details.nationName(), "nation"));
+        if (!details.nationName().isBlank()) {
+            boolean capital = isNationCapital(town.name(), details.nationName(), nationDetails);
+            String label = capital ? "§7Capital of: §f" : "§7Nation: §f";
+            lines.add(InfoRow.link(label, details.nationName(), "nation"));
+        }
         if (!details.mayor().isBlank()) lines.add(InfoRow.link("§7Mayor: §f", details.mayor(), "player"));
         int possibleChunks = possibleTownChunks(details, nationDetails);
         String sizeColor = details.isOverClaimed() ? "§c" : "§f";

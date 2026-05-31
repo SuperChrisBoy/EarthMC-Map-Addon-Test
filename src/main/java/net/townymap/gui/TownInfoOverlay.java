@@ -197,10 +197,12 @@ public final class TownInfoOverlay {
         }
 
         // Title — the nation name (in parens) is a clickable nation search.
+        // Capital towns read "(Capital of <nation>)" instead of just "(<nation>)".
         if (d.nationName().isEmpty()) {
             lines.add(InfoRow.text("§f§l" + d.townName()));
         } else {
-            lines.add(InfoRow.link("§f§l" + d.townName() + " §7§l(", d.nationName(), "§7§l)", "nation"));
+            String capPrefix = isNationCapital(d, nationDetails) ? "Capital of " : "";
+            lines.add(InfoRow.link("§f§l" + d.townName() + " §7§l(" + capPrefix, d.nationName(), "§7§l)", "nation"));
         }
 
         // Board
@@ -226,6 +228,14 @@ public final class TownInfoOverlay {
         lines.add(InfoRow.text("§7Gold: §f§l"      + formatGold(d.balance())));
 
         return lines;
+    }
+
+    /** True if the town is its nation's capital (per EarthMC nation data). */
+    private static boolean isNationCapital(TownPopupData d, Map<String, EarthMcNationData> nationDetails) {
+        if (d.nationName() == null || d.nationName().isBlank() || nationDetails == null) return false;
+        EarthMcNationData nation = nationDetails.get(d.nationName().toLowerCase(Locale.ROOT));
+        return nation != null && nation.capitalName() != null
+                && nation.capitalName().equalsIgnoreCase(d.townName());
     }
 
     private static int possibleTownChunks(TownPopupData town, Map<String, EarthMcNationData> nationDetails) {
