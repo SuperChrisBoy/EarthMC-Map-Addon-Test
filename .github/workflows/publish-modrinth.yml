@@ -22,6 +22,11 @@ on:
       version_number:
         description: "Optional Modrinth version number. Defaults to the tag without v."
         required: false
+      replace_existing:
+        description: "Delete an existing Modrinth version with the same version number/game version before publishing."
+        required: true
+        default: false
+        type: boolean
       changelog:
         description: "Optional changelog override. If blank, the GitHub release notes are used."
         required: false
@@ -42,6 +47,7 @@ jobs:
       PROJECT_ISSUES_URL: "https://github.com/JR1258/EarthMC-Map-Addon/issues"
       PROJECT_SOURCE_URL: "https://github.com/JR1258/EarthMC-Map-Addon"
       PROJECT_TITLE: "EarthMC Map Addon"
+      REPLACE_EXISTING: ${{ inputs.replace_existing || false }}
       VERSION_TYPE: ${{ inputs.version_type || 'release' }}
       GH_TOKEN: ${{ github.token }}
 
@@ -160,6 +166,35 @@ jobs:
             exit 1
           fi
           echo "JAR_PATH=${jar}" >> "${GITHUB_ENV}"
+
+      - name: Delete existing Modrinth version
+        if: ${{ inputs.replace_existing }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ids="$(curl --fail-with-body \
+              -H "Authorization: ${MODRINTH_TOKEN}" \
+              -H "User-Agent: JR1258/EarthMC-Map-Addon GitHub Actions" \
+              "https://api.modrinth.com/v2/project/${MODRINTH_PROJECT_ID}/version" \
+            | jq -r \
+                --arg version_number "${{ steps.meta.outputs.version_number }}" \
+                --arg game_version "${GAME_VERSION}" \
+                '.[] | select(.version_number == $version_number and (.game_versions | index($game_version))) | .id')"
+
+          if [[ -z "${ids}" ]]; then
+            echo "No existing Modrinth version matched ${{ steps.meta.outputs.version_number }} for ${GAME_VERSION}."
+            exit 0
+          fi
+
+          while IFS= read -r id; do
+            [[ -z "${id}" ]] && continue
+            echo "Deleting existing Modrinth version ${id}."
+            curl --fail-with-body \
+              -X DELETE "https://api.modrinth.com/v2/version/${id}" \
+              -H "Authorization: ${MODRINTH_TOKEN}" \
+              -H "User-Agent: JR1258/EarthMC-Map-Addon GitHub Actions"
+          done <<< "${ids}"
 
       - name: Publish version
         shell: bash
