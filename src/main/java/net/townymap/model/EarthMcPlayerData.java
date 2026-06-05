@@ -14,9 +14,10 @@ public record EarthMcPlayerData(
         int friendCount,
         String lastOnline,
         long lastOnlineMs,
+        long registeredMs,
         String registered
 ) {
     public EarthMcPlayerData(String name, String uuid) {
-        this(name, uuid, "", "", "", false, false, false, false, 0, 0, "", 0L, "");
+        this(name, uuid, "", "", "", false, false, false, false, 0, 0, "", 0L, 0L, "");
     }
 }
