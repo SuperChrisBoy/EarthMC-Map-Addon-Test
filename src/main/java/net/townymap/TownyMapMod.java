@@ -936,19 +936,40 @@ public class TownyMapMod implements ClientModInitializer {
     public static void onMapRightClick(double worldX, double worldZ, int screenX, int screenY) {
         if (!isActiveOnCurrentServer()) return;
         if (earthMcApi == null) return;
+        TownData clickedTown = null;
         TownPopupData fallback = null;
         MapJumpTarget fallbackTarget = null;
+        String fallbackKey = "";
         if (apiClient != null) {
             TownData town = TownHoverOverlay.townAt(worldX, worldZ, apiClient.getTowns());
             if (town != null) {
-                fallback = townDetailsCache.get(townKey(town.name()));
+                clickedTown = town;
+                fallbackKey = townKey(town.name());
+                fallback = townDetailsCache.get(fallbackKey);
                 fallbackTarget = new MapJumpTarget(town.name(), town.centerX(), town.centerZ());
             }
         }
         long lookupId = townLookupId.incrementAndGet();
-        TownInfoOverlay.showLoading(screenX, screenY);
+        if (fallback != null) {
+            showLookupResult(fallback, screenX, screenY, worldX, worldZ, fallbackTarget);
+            if (isTownDetailsFresh(fallbackKey)) return;
+        } else {
+            TownInfoOverlay.showLoading(screenX, screenY);
+        }
         TownPopupData cachedFallback = fallback;
         MapJumpTarget cachedFallbackTarget = fallbackTarget;
+        if (clickedTown != null) {
+            earthMcApi.fetchTown(clickedTown.name()).thenAccept(data -> {
+                MinecraftClient client = MinecraftClient.getInstance();
+                if (client == null) return;
+                client.execute(() -> {
+                    if (lookupId != townLookupId.get()) return;
+                    showLookupResult(data != null ? data : cachedFallback, screenX, screenY,
+                            worldX, worldZ, cachedFallbackTarget);
+                });
+            });
+            return;
+        }
         earthMcApi.fetchTownAt(worldX, worldZ).thenAccept(data -> {
             MinecraftClient client = MinecraftClient.getInstance();
             if (client == null) return;
@@ -1397,6 +1418,21 @@ public class TownyMapMod implements ClientModInitializer {
         });
     }
 
+    public static RecruitmentPlayerProfile recruitmentPlayerProfile(String name) {
+        if (name == null || name.isBlank()) return null;
+        EarthMcPlayerData data = playerDetailsCache.get(townKey(name));
+        if (data == null || data.registeredMs() <= 0L) return null;
+        return new RecruitmentPlayerProfile(data.name(), data.townName(), data.nationName(), data.registeredMs());
+    }
+
+    public static boolean requestRecruitmentPlayerProfile(String name) {
+        if (name == null || name.isBlank()) return false;
+        String key = townKey(name);
+        return playerDetailsCache.containsKey(key) || playerDetailsLoading.contains(key);
+    }
+
     public static TownyMapConfig     getConfig()    { return config;    }
     public static SquaremapApiClient getApiClient() { return apiClient; }
+
+    public record RecruitmentPlayerProfile(String name, String town, String nation, long registeredMs) {}
 }

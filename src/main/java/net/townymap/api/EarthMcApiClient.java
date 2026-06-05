@@ -321,6 +321,7 @@ public class EarthMcApiClient {
 
         String lastOnline = "";
         long lastOnlineMs = 0L;
+        long registeredMs = 0L;
         String registered = "";
         if (p.has("timestamps") && p.get("timestamps").isJsonObject()) {
             JsonObject ts = p.getAsJsonObject("timestamps");
@@ -334,6 +335,7 @@ public class EarthMcApiClient {
             if (ts.has("registered") && !ts.get("registered").isJsonNull()) {
                 long regMs = ts.get("registered").getAsLong();
                 if (regMs > 0) {
+                    registeredMs = regMs;
                     registered = Instant.ofEpochMilli(regMs)
                             .atZone(ZoneOffset.UTC)
                             .toLocalDate()
@@ -343,7 +345,7 @@ public class EarthMcApiClient {
         }
 
         return new EarthMcPlayerData(name, uuid, town, nation, formatted,
-                online, npc, mayor, king, balance, friends, lastOnline, lastOnlineMs, registered);
+                online, npc, mayor, king, balance, friends, lastOnline, lastOnlineMs, registeredMs, registered);
     }
 
     private EarthMcNationData parseNation(JsonObject n) {
