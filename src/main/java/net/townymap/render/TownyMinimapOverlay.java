@@ -156,6 +156,7 @@ public final class TownyMinimapOverlay {
                 renderChunkCounterSelection(ctx, client, config, mapX, mapY, size, centerX, centerY,
                         playerX, playerZ, pixelsPerBlock, angle, sin, cos, clip);
             }
+            renderWaypointsOnTop(ctx, session, mapX, mapY, size);
             if (squaremapRendered) ctx.drawDeferredElements();
             recordMinimapFrameCost(renderStartNs);
             return;
@@ -277,6 +278,9 @@ public final class TownyMinimapOverlay {
                     clip.left(), clip.top(), clip.right(), clip.bottom());
         }
 
+        // Draw waypoints in THIS batch (before the flush) so they composite above the squaremap;
+        // the separate later mixin pass ended up in a batch that drew underneath it.
+        renderWaypointsOnTop(ctx, session, mapX, mapY, size);
         ctx.drawDeferredElements();
         recordMinimapFrameCost(renderStartNs);
     }
@@ -372,8 +376,6 @@ public final class TownyMinimapOverlay {
             }
             if (++drawn >= MAX_MINIMAP_WAYPOINTS_ON_TOP) break;
         }
-        // Flush these icons now so they composite on top of the (already-drawn) squaremap.
-        ctx.drawDeferredElements();
     }
 
     /** A small coloured badge with the waypoint's symbol, drawn at the already-translated origin. */
