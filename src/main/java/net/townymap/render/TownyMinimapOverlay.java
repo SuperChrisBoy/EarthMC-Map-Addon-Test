@@ -364,8 +364,9 @@ public final class TownyMinimapOverlay {
                 if (iconScale != 1.0F) {
                     matrices.scale(iconScale, iconScale);
                 }
-                session.getProcessor().getMinimap().getWaypointMapRenderer()
-                        .drawIconGUI(ctx, waypoint, 0, 0, opacity);
+                // Draw via DrawContext (deferred) so it composites on top of the squaremap,
+                // instead of Xaero's immediate drawIconGUI which renders underneath it.
+                drawWaypointBadge(ctx, waypoint, opacity);
             } finally {
                 matrices.popMatrix();
             }
@@ -373,6 +374,32 @@ public final class TownyMinimapOverlay {
         }
         // Flush these icons now so they composite on top of the (already-drawn) squaremap.
         ctx.drawDeferredElements();
+    }
+
+    /** A small coloured badge with the waypoint's symbol, drawn at the already-translated origin. */
+    private static void drawWaypointBadge(DrawContext ctx, Waypoint waypoint, int opacity) {
+        var tr = MinecraftClient.getInstance().textRenderer;
+        String label = waypoint.getSymbolSafe("");
+        if (label.isBlank()) label = waypoint.getInitialsSafe("");
+        if (label.isBlank()) label = "?";
+        int alpha = Math.max(60, Math.min(255, (int) Math.round(opacity * 2.55)));
+        int badge = (alpha << 24) | (waypointColorRgb(waypoint) & 0x00FFFFFF);
+        int outline = alpha << 24;
+        int w = tr.getWidth(label);
+        int halfW = w / 2 + 2;
+        int halfH = tr.fontHeight / 2 + 1;
+        ctx.fill(-halfW - 1, -halfH - 1, halfW + 1, halfH + 1, outline); // dark outline
+        ctx.fill(-halfW, -halfH, halfW, halfH, badge);                   // coloured badge
+        ctx.drawText(tr, label, -w / 2, -tr.fontHeight / 2 + 1, 0xFFFFFFFF, true);
+    }
+
+    private static int waypointColorRgb(Waypoint waypoint) {
+        try {
+            net.minecraft.util.Formatting fmt = net.minecraft.util.Formatting.byColorIndex(waypoint.getColor());
+            if (fmt != null && fmt.getColorValue() != null) return fmt.getColorValue();
+        } catch (RuntimeException ignored) {
+        }
+        return 0xFFFFFF;
     }
 
     private static List<Waypoint> cachedWaypoints(MinimapSession session) {
