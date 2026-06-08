@@ -1332,7 +1332,10 @@ public class TownyMapMod implements ClientModInitializer {
 
     public static boolean isFavorite(String townName) {
         if (config == null || townName == null) return false;
-        return favoriteTownKeys().contains(townKey(townName));
+        Set<String> favorites = favoriteTownKeys();
+        // Avoid the townKey() lower-casing allocation entirely when there are no favorites
+        // (the common case) — this runs per edge and per span every frame.
+        return !favorites.isEmpty() && favorites.contains(townKey(townName));
     }
 
     private static void toggleFavorite(String townName) {

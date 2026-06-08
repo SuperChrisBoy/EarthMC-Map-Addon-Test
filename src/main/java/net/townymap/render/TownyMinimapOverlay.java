@@ -754,10 +754,16 @@ public final class TownyMinimapOverlay {
                                                           double playerX, double playerZ,
                                                           double pixelsPerBlock, double sin, double cos,
                                                           boolean skipRim) {
+        TownData cachedTown = null;
+        int cachedColor = 0;
         for (ChunkFill span : fillSpans) {
             TownData town = span.town();
-            boolean favorite = TownyMapMod.isFavorite(town.name());
-            int fillColor = favorite ? FAVORITE_FILL : town.argbColor(config.fillAlpha);
+            if (town != cachedTown) {
+                cachedTown = town;
+                cachedColor = TownyMapMod.isFavorite(town.name())
+                        ? FAVORITE_FILL : town.argbColor(config.fillAlpha);
+            }
+            int fillColor = cachedColor;
             if ((fillColor >>> 24) == 0) continue;
             int x1 = span.blockX();
             int z1 = span.blockZ();
@@ -807,14 +813,20 @@ public final class TownyMinimapOverlay {
             matrices.rotate((float) Math.atan2(sin, cos));
             matrices.scale((float) pixelsPerBlock, (float) pixelsPerBlock);
             matrices.translate((float) -playerX, (float) -playerZ);
+            TownData cachedTown = null;
+            int cachedColor = 0;
             for (ChunkEdge edge : edges) {
-                boolean favorite = TownyMapMod.isFavorite(edge.town().name());
-                int outlineColor = favorite ? FAVORITE_OUTLINE : edge.town().argbColor(config.borderAlpha);
+                TownData town = edge.town();
+                if (town != cachedTown) {
+                    cachedTown = town;
+                    cachedColor = TownyMapMod.isFavorite(town.name())
+                            ? FAVORITE_OUTLINE : town.argbColor(config.borderAlpha);
+                }
                 // Trim the axis-aligned edge to the world circle and draw it with the SAME
                 // matrix-space primitive as the interior, so the rim looks identical (no
                 // screen-space 1px lines, no per-segment matrix push/pop).
                 drawEdgeClippedToCircle(ctx, edge.x1(), edge.z1(), edge.x2(), edge.z2(),
-                        outlineColor, playerX, playerZ, rwSq);
+                        cachedColor, playerX, playerZ, rwSq);
             }
         } finally {
             matrices.popMatrix();
