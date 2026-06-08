@@ -797,6 +797,9 @@ public final class TownyMinimapOverlay {
                                                           double playerX, double playerZ,
                                                           double pixelsPerBlock, double sin, double cos,
                                                           boolean drawRimSegments) {
+        // Conformal transform => the screen circle is a world circle around the player.
+        double rw = clip.radius() / pixelsPerBlock;
+        double rwSq = rw * rw;
         Matrix3x2fStack matrices = ctx.getMatrices();
         matrices.pushMatrix();
         try {
@@ -805,32 +808,38 @@ public final class TownyMinimapOverlay {
             matrices.scale((float) pixelsPerBlock, (float) pixelsPerBlock);
             matrices.translate((float) -playerX, (float) -playerZ);
             for (ChunkEdge edge : edges) {
-                if (!clip.worldLineFullyInside(edge.x1(), edge.z1(), edge.x2(), edge.z2(),
-                        centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos)) {
-                    continue;
-                }
                 boolean favorite = TownyMapMod.isFavorite(edge.town().name());
                 int outlineColor = favorite ? FAVORITE_OUTLINE : edge.town().argbColor(config.borderAlpha);
-                drawChunkEdge(ctx, edge.x1(), edge.z1(), edge.x2(), edge.z2(), outlineColor);
+                // Trim the axis-aligned edge to the world circle and draw it with the SAME
+                // matrix-space primitive as the interior, so the rim looks identical (no
+                // screen-space 1px lines, no per-segment matrix push/pop).
+                drawEdgeClippedToCircle(ctx, edge.x1(), edge.z1(), edge.x2(), edge.z2(),
+                        outlineColor, playerX, playerZ, rwSq);
             }
         } finally {
             matrices.popMatrix();
         }
+    }
 
-        if (!drawRimSegments) return;
-        for (ChunkEdge edge : edges) {
-            if (clip.worldLineFullyInside(edge.x1(), edge.z1(), edge.x2(), edge.z2(),
-                    centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos)) {
-                continue;
-            }
-            if (!clip.worldLineIntersects(edge.x1(), edge.z1(), edge.x2(), edge.z2(),
-                    centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos)) {
-                continue;
-            }
-            boolean favorite = TownyMapMod.isFavorite(edge.town().name());
-            int outlineColor = favorite ? FAVORITE_OUTLINE : edge.town().argbColor(config.borderAlpha);
-            drawWorldLineCircleClipped(ctx, edge.x1(), edge.z1(), edge.x2(), edge.z2(), outlineColor, clip,
-                    centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
+    /** Draws an axis-aligned chunk edge trimmed to the world circle (centre = player, r² = rwSq). */
+    private static void drawEdgeClippedToCircle(DrawContext ctx, int x1, int z1, int x2, int z2,
+                                                int color, double playerX, double playerZ, double rwSq) {
+        if (z1 == z2) {
+            double dz = z1 - playerZ;
+            double chordSq = rwSq - dz * dz;
+            if (chordSq <= 0.0) return;
+            double chord = Math.sqrt(chordSq);
+            double xa = Math.max(Math.min(x1, x2), playerX - chord);
+            double xb = Math.min(Math.max(x1, x2), playerX + chord);
+            if (xa < xb) drawChunkEdge(ctx, (int) Math.round(xa), z1, (int) Math.round(xb), z1, color);
+        } else {
+            double dx = x1 - playerX;
+            double chordSq = rwSq - dx * dx;
+            if (chordSq <= 0.0) return;
+            double chord = Math.sqrt(chordSq);
+            double za = Math.max(Math.min(z1, z2), playerZ - chord);
+            double zb = Math.min(Math.max(z1, z2), playerZ + chord);
+            if (za < zb) drawChunkEdge(ctx, x1, (int) Math.round(za), x1, (int) Math.round(zb), color);
         }
     }
 
@@ -898,18 +907,21 @@ public final class TownyMinimapOverlay {
                                               double centerX, double centerY,
                                               double playerX, double playerZ,
                                               double pixelsPerBlock, double sin, double cos) {
-        int step = clippedFillStep(pixelsPerBlock, clip);
+        double rwSq = clip.radius() * clip.radius() / (pixelsPerBlock * pixelsPerBlock);
         int maxX = blockX + blockWidth;
         int maxZ = blockZ + blockHeight;
+        int step = Math.max(1, (int) Math.floor(1.0 / Math.max(0.0001, pixelsPerBlock)));
         for (int z = blockZ; z < maxZ; z += step) {
             int z2 = Math.min(maxZ, z + step);
-            for (int x = blockX; x < maxX; x += step) {
-                int x2 = Math.min(maxX, x + step);
-                if (clip.worldRectCircleClass(x, z, x2, z2,
-                        centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos) > 0) {
-                    ctx.fill(x, z, x2, z2, color);
-                }
-            }
+            // Conservative chord: whichever row edge is farther from the player, so the strip
+            // never spills past the circle (matches the outline clipping for a clean rim).
+            double dz = Math.max(Math.abs(z - playerZ), Math.abs(z2 - playerZ));
+            double chordSq = rwSq - dz * dz;
+            if (chordSq <= 0.0) continue;
+            double chord = Math.sqrt(chordSq);
+            double xa = Math.max(blockX, playerX - chord);
+            double xb = Math.min(maxX, playerX + chord);
+            if (xa < xb) ctx.fill((int) Math.round(xa), z, (int) Math.round(xb), z2, color);
         }
     }
 
