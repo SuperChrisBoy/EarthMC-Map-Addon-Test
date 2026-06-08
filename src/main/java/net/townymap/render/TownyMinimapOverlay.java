@@ -342,6 +342,9 @@ public final class TownyMinimapOverlay {
 
         Matrix3x2fStack matrices = ctx.getMatrices();
         int drawn = 0;
+        // Clip the badges to the minimap interior so they can't spill past the edge / under the frame.
+        ctx.enableScissor(clip.left(), clip.top(), clip.right() + 1, clip.bottom() + 1);
+        try {
         for (Waypoint waypoint : waypoints) {
             if (waypoint == null || waypoint.isDisabled()) continue;
 
@@ -375,6 +378,9 @@ public final class TownyMinimapOverlay {
                 matrices.popMatrix();
             }
             if (++drawn >= MAX_MINIMAP_WAYPOINTS_ON_TOP) break;
+        }
+        } finally {
+            ctx.disableScissor();
         }
     }
 
