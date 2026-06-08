@@ -694,13 +694,19 @@ public class TownyMapMod implements ClientModInitializer {
         ctx.fill(x + size - thickness, y, x + size, y + size, color);
     }
 
+    private static boolean waypointRedrawErrorLogged = false;
+
     public static void renderMinimapWaypointsOnTop(DrawContext ctx, Object session, int mapX, int mapY, int size) {
         if (!isActiveOnCurrentServer()) return;
         try {
             TownyMinimapOverlay.renderWaypointsOnTop(ctx,
                     (xaero.hud.minimap.module.MinimapSession) session, mapX, mapY, size);
-        } catch (Exception e) {
-            LOGGER.debug("[TownyMap] Failed to redraw minimap waypoints: {}", e.getMessage());
+        } catch (Throwable e) {
+            if (!waypointRedrawErrorLogged) {
+                waypointRedrawErrorLogged = true;
+                LOGGER.warn("[TownyMap] Could not redraw minimap waypoints over the squaremap "
+                        + "(logged once) — they may appear underneath", e);
+            }
         }
     }
 

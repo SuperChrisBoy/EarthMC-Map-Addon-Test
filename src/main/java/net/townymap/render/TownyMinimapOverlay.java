@@ -142,6 +142,9 @@ public final class TownyMinimapOverlay {
             renderSquaremapBackground(ctx, mapX, mapY, size, playerX, playerZ,
                     pixelsPerBlock, angle, clip);
         }
+        // The squaremap covers Xaero's in-pip waypoints, so the on-top redraw must run whenever
+        // it (or the fills/grid) drew — set this now so any early-return below can't skip it.
+        lastRenderCanCoverWaypoints = squaremapRendered || config.chunkCounterEnabled;
 
         if (api.getTowns().isEmpty()) {
             lastRenderCanCoverWaypoints = !performanceShed && (squaremapRendered || config.chunkCounterEnabled);
@@ -368,6 +371,8 @@ public final class TownyMinimapOverlay {
             }
             if (++drawn >= MAX_MINIMAP_WAYPOINTS_ON_TOP) break;
         }
+        // Flush these icons now so they composite on top of the (already-drawn) squaremap.
+        ctx.drawDeferredElements();
     }
 
     private static List<Waypoint> cachedWaypoints(MinimapSession session) {
