@@ -116,7 +116,12 @@ public final class TownyMinimapOverlay {
         double cos = Math.cos(angle);
         boolean circular = isCircularMinimap(session);
         boolean enlarged = session.getProcessor().isEnlargedMap();
-        boolean performanceShed = System.currentTimeMillis() < minimapPerformanceShedUntilMs;
+        // Frame-budget shedding used to hide names / rim fills / rim outlines for ~2s whenever
+        // a one-off frame (cache rebuild, tile upload) blew the budget — which read on screen as
+        // the overlay flickering away every few seconds. With the world-space + merged-span
+        // rendering and the hard per-frame caps, that safety net is no longer needed and did more
+        // harm than good, so the overlay now renders fully every frame.
+        boolean performanceShed = false;
 
         int left = mapX;
         int top = mapY;
