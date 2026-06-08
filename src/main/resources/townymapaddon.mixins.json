@@ -6,7 +6,8 @@
   "client": [
     "MixinCommonMinimapRenderer",
     "MixinGuiMap",
-    "MixinMinimapModuleRenderer"
+    "MixinMinimapModuleRenderer",
+    "MixinWaypointMapRenderer"
   ],
   "injectors": {
     "defaultRequire": 0

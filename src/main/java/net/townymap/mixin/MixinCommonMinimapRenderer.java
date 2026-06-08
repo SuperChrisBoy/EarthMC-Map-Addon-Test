@@ -30,6 +30,7 @@ public abstract class MixinCommonMinimapRenderer {
                                                            @Coerce Object bufferProvider,
                                                            CallbackInfo ci) {
         TownyMapMod.setSuppressNativeMinimapCompass(session);
+        TownyMapMod.setSuppressNativeMinimapWaypoints();
     }
 
     @Inject(
@@ -50,6 +51,7 @@ public abstract class MixinCommonMinimapRenderer {
                                                              @Coerce Object bufferProvider,
                                                              CallbackInfo ci) {
         TownyMapMod.clearSuppressNativeMinimapCompass();
+        TownyMapMod.clearSuppressNativeMinimapWaypoints();
     }
 
     @Inject(

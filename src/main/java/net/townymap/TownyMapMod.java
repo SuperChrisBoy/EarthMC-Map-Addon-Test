@@ -109,6 +109,8 @@ public class TownyMapMod implements ClientModInitializer {
     private static volatile int minimapFrameColor = 0xFFFFFFFF;
     private static final ThreadLocal<Boolean> suppressNativeMinimapCompass =
             ThreadLocal.withInitial(() -> false);
+    private static final ThreadLocal<Boolean> suppressNativeMinimapWaypoints =
+            ThreadLocal.withInitial(() -> false);
     private static final AtomicBoolean nativeCompassSuppressionLogged = new AtomicBoolean(false);
     private static volatile long minimapPlayerDetailWindowMs = 0;
     private static volatile int minimapPlayerDetailRequests = 0;
@@ -644,6 +646,20 @@ public class TownyMapMod implements ClientModInitializer {
             LOGGER.info("[TownyMap] Suppressing Xaero native minimap compass while squaremap overlay is active");
         }
         return suppress;
+    }
+
+    /** While our squaremap overlay is active we draw waypoints ourselves (on top), so hide Xaero's. */
+    public static void setSuppressNativeMinimapWaypoints() {
+        suppressNativeMinimapWaypoints.set(config != null && config.minimapExtensionsEnabled
+                && config.squaremapBackgroundEnabled && isActiveOnCurrentServer());
+    }
+
+    public static void clearSuppressNativeMinimapWaypoints() {
+        suppressNativeMinimapWaypoints.remove();
+    }
+
+    public static boolean shouldSuppressNativeMinimapWaypoints() {
+        return suppressNativeMinimapWaypoints.get();
     }
 
     private static boolean shouldUseCustomEnlargedMinimapCompass(Object session) {
