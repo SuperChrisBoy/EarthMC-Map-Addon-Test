@@ -155,6 +155,12 @@ public class WorldMapRenderer {
     public void renderSquaremapMinimapViewport(DrawContext ctx,
                                                double cameraX, double cameraZ, double blockScale,
                                                int sw, int sh, boolean moving) {
+        renderSquaremapMinimapViewport(ctx, cameraX, cameraZ, blockScale, sw, sh, moving, 0.0);
+    }
+
+    public void renderSquaremapMinimapViewport(DrawContext ctx,
+                                               double cameraX, double cameraZ, double blockScale,
+                                               int sw, int sh, boolean moving, double circularClipRadius) {
         if (!config.squaremapBackgroundEnabled || blockScale <= 0 || sw <= 0 || sh <= 0) return;
 
         double worldLeft = cameraX - sw / 2.0 / blockScale;
@@ -163,7 +169,7 @@ public class WorldMapRenderer {
         double worldBottom = cameraZ + sh / 2.0 / blockScale;
 
         squaremapTiles.renderMinimap(ctx, cameraX, cameraZ, blockScale, sw, sh,
-                worldLeft, worldRight, worldTop, worldBottom, moving);
+                worldLeft, worldRight, worldTop, worldBottom, moving, circularClipRadius);
     }
 
     public boolean isSquaremapLoading() {

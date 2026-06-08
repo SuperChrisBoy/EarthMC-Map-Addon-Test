@@ -74,28 +74,39 @@ final class SquaremapTileRenderer {
                 double worldLeft, double worldRight, double worldTop, double worldBottom,
                 boolean moving) {
         render(ctx, cameraX, cameraZ, blockScale, sw, sh, worldLeft, worldRight, worldTop, worldBottom,
-                moving, NetworkPolicy.WORLD_MAP);
+                moving, NetworkPolicy.WORLD_MAP, null);
     }
 
     void renderMinimap(DrawContext ctx, double cameraX, double cameraZ, double blockScale, int sw, int sh,
                        double worldLeft, double worldRight, double worldTop, double worldBottom,
                        boolean moving) {
+        renderMinimap(ctx, cameraX, cameraZ, blockScale, sw, sh, worldLeft, worldRight, worldTop, worldBottom,
+                moving, 0.0);
+    }
+
+    void renderMinimap(DrawContext ctx, double cameraX, double cameraZ, double blockScale, int sw, int sh,
+                       double worldLeft, double worldRight, double worldTop, double worldBottom,
+                       boolean moving, double circularClipRadius) {
+        CircleClip circleClip = circularClipRadius > 0.0
+                ? new CircleClip(sw / 2.0, sh / 2.0, circularClipRadius,
+                circularClipRadius * circularClipRadius, circleClipStripHeight(circularClipRadius))
+                : null;
         render(ctx, cameraX, cameraZ, blockScale, sw, sh, worldLeft, worldRight, worldTop, worldBottom,
-                moving, NetworkPolicy.WORLD_MAP);
+                moving, NetworkPolicy.MINIMAP, circleClip);
     }
 
     private void render(DrawContext ctx, double cameraX, double cameraZ, double blockScale, int sw, int sh,
                         double worldLeft, double worldRight, double worldTop, double worldBottom,
-                        boolean moving, NetworkPolicy policy) {
+                        boolean moving, NetworkPolicy policy, CircleClip circleClip) {
         int zoom = chooseTileZoom(blockScale);
         PanDirection panDirection = updatePanDirection(cameraX, cameraZ);
         processCompletedTiles(moving, zoom, worldLeft, worldRight, worldTop, worldBottom);
-        if (zoom > 0) {
+        if (zoom > 0 && circleClip == null) {
             renderLayer(ctx, cameraX, cameraZ, blockScale, sw, sh,
-                    worldLeft, worldRight, worldTop, worldBottom, 0, moving, true, policy);
+                    worldLeft, worldRight, worldTop, worldBottom, 0, moving, true, policy, circleClip);
         }
         renderLayer(ctx, cameraX, cameraZ, blockScale, sw, sh,
-                worldLeft, worldRight, worldTop, worldBottom, zoom, moving, false, policy);
+                worldLeft, worldRight, worldTop, worldBottom, zoom, moving, false, policy, circleClip);
         if (!policy.allowPrefetch()) {
             return;
         }
@@ -138,7 +149,8 @@ final class SquaremapTileRenderer {
 
     private void renderLayer(DrawContext ctx, double cameraX, double cameraZ, double blockScale, int sw, int sh,
                              double worldLeft, double worldRight, double worldTop, double worldBottom,
-                             int zoom, boolean moving, boolean fallbackLayer, NetworkPolicy policy) {
+                             int zoom, boolean moving, boolean fallbackLayer, NetworkPolicy policy,
+                             CircleClip circleClip) {
         double pixelsPerBlock = pixelsPerBlock(zoom);
         double tileWorldSize = TILE_PIXELS / pixelsPerBlock;
 
@@ -165,7 +177,8 @@ final class SquaremapTileRenderer {
                     Identifier texture = textures.get(key);
                     if (texture == null) {
                         if (requested++ < requestBudget) requestTile(key, false, policy.maxConcurrentLoads());
-                        renderParentFallback(ctx, key, tileWorldSize, cameraX, cameraZ, blockScale, sw, sh);
+                        renderParentFallback(ctx, key, tileWorldSize, cameraX, cameraZ, blockScale, sw, sh,
+                                circleClip);
                         continue;
                     }
                     if (policy.allowRefresh()) {
@@ -173,7 +186,7 @@ final class SquaremapTileRenderer {
                     }
 
                     renderTile(ctx, texture, tileX, tileY, tileWorldSize, cameraX, cameraZ,
-                            blockScale, sw, sh);
+                            blockScale, sw, sh, circleClip);
                 }
             }
         }
@@ -255,7 +268,7 @@ final class SquaremapTileRenderer {
 
     private boolean renderParentFallback(DrawContext ctx, TileKey childKey, double childTileWorldSize,
                                          double cameraX, double cameraZ, double blockScale,
-                                         int sw, int sh) {
+                                         int sw, int sh, CircleClip circleClip) {
         for (int parentZoom = childKey.zoom() - 1; parentZoom >= 0; parentZoom--) {
             int factor = 1 << (childKey.zoom() - parentZoom);
             TileKey parentKey = new TileKey(parentZoom,
@@ -270,7 +283,7 @@ final class SquaremapTileRenderer {
             int u = localX * srcSize;
             int v = localY * srcSize;
             renderTileRegion(ctx, parentTexture, childKey.x(), childKey.y(), childTileWorldSize,
-                    cameraX, cameraZ, blockScale, sw, sh, u, v, srcSize, srcSize);
+                    cameraX, cameraZ, blockScale, sw, sh, u, v, srcSize, srcSize, circleClip);
             return true;
         }
         return false;
@@ -278,7 +291,7 @@ final class SquaremapTileRenderer {
 
     private void renderTile(DrawContext ctx, Identifier texture, int tileX, int tileY,
                             double tileWorldSize, double cameraX, double cameraZ,
-                            double blockScale, int sw, int sh) {
+                            double blockScale, int sw, int sh, CircleClip circleClip) {
         double tileWorldX = tileX * tileWorldSize;
         double tileWorldZ = tileY * tileWorldSize;
         int x1 = toScreenX(tileWorldX, cameraX, blockScale, sw);
@@ -289,6 +302,11 @@ final class SquaremapTileRenderer {
         if (x2 <= 0 || x1 >= sw || y2 <= 0 || y1 >= sh) return;
         int drawW = Math.max(1, x2 - x1);
         int drawH = Math.max(1, y2 - y1);
+        if (circleClip != null) {
+            renderTileRegionCircleClipped(ctx, texture, x1, y1, drawW, drawH,
+                    0, 0, TILE_PIXELS, TILE_PIXELS, circleClip);
+            return;
+        }
         ctx.drawTexture(PIPELINE, texture, x1, y1, 0.0F, 0.0F,
                 drawW, drawH,
                 TILE_PIXELS, TILE_PIXELS, TILE_PIXELS, TILE_PIXELS);
@@ -297,7 +315,7 @@ final class SquaremapTileRenderer {
     private void renderTileRegion(DrawContext ctx, Identifier texture, int tileX, int tileY,
                                   double tileWorldSize, double cameraX, double cameraZ,
                                   double blockScale, int sw, int sh,
-                                  int u, int v, int regionW, int regionH) {
+                                  int u, int v, int regionW, int regionH, CircleClip circleClip) {
         double tileWorldX = tileX * tileWorldSize;
         double tileWorldZ = tileY * tileWorldSize;
         int x1 = toScreenX(tileWorldX, cameraX, blockScale, sw);
@@ -308,9 +326,50 @@ final class SquaremapTileRenderer {
         if (x2 <= 0 || x1 >= sw || y2 <= 0 || y1 >= sh) return;
         int drawW = Math.max(1, x2 - x1);
         int drawH = Math.max(1, y2 - y1);
+        if (circleClip != null) {
+            renderTileRegionCircleClipped(ctx, texture, x1, y1, drawW, drawH,
+                    u, v, regionW, regionH, circleClip);
+            return;
+        }
         ctx.drawTexture(PIPELINE, texture, x1, y1, (float) u, (float) v,
                 drawW, drawH,
                 regionW, regionH, TILE_PIXELS, TILE_PIXELS);
+    }
+
+    private void renderTileRegionCircleClipped(DrawContext ctx, Identifier texture,
+                                               int x, int y, int drawW, int drawH,
+                                               int u, int v, int regionW, int regionH,
+                                               CircleClip circleClip) {
+        int x2 = x + drawW;
+        int y2 = y + drawH;
+        if (!circleClip.intersectsRect(x, y, x2, y2)) return;
+        if (circleClip.containsRect(x, y, x2, y2)) {
+            ctx.drawTexture(PIPELINE, texture, x, y, (float) u, (float) v,
+                    drawW, drawH, regionW, regionH, TILE_PIXELS, TILE_PIXELS);
+            return;
+        }
+
+        int top = Math.max(y, (int) Math.floor(circleClip.centerY() - circleClip.radius()));
+        int bottom = Math.min(y2, (int) Math.ceil(circleClip.centerY() + circleClip.radius()));
+        int stripHeight = circleClip.stripHeight();
+        for (int stripY = top; stripY < bottom; stripY += stripHeight) {
+            int stripBottom = Math.min(bottom, stripY + stripHeight);
+            double dy = Math.max(Math.abs(stripY - circleClip.centerY()),
+                    Math.abs(stripBottom - circleClip.centerY()));
+            double chordSq = circleClip.radiusSq() - dy * dy;
+            if (chordSq <= 0.0) continue;
+
+            double halfChord = Math.sqrt(chordSq);
+            int stripLeft = Math.max(x, (int) Math.floor(circleClip.centerX() - halfChord));
+            int stripRight = Math.min(x2, (int) Math.ceil(circleClip.centerX() + halfChord));
+            if (stripLeft >= stripRight) continue;
+
+            float u1 = (float) ((u + (stripLeft - x) * (double) regionW / drawW) / TILE_PIXELS);
+            float u2 = (float) ((u + (stripRight - x) * (double) regionW / drawW) / TILE_PIXELS);
+            float v1 = (float) ((v + (stripY - y) * (double) regionH / drawH) / TILE_PIXELS);
+            float v2 = (float) ((v + (stripBottom - y) * (double) regionH / drawH) / TILE_PIXELS);
+            ctx.drawTexturedQuad(texture, stripLeft, stripY, stripRight, stripBottom, u1, u2, v1, v2);
+        }
     }
 
     private void processCompletedTiles(boolean moving, int currentZoom,
@@ -473,6 +532,14 @@ final class SquaremapTileRenderer {
         return Math.log(value) / Math.log(2.0);
     }
 
+    private static int circleClipStripHeight(double radius) {
+        if (radius < 72.0) return 6;
+        if (radius < 128.0) return 8;
+        if (radius < 220.0) return 12;
+        if (radius < 360.0) return 18;
+        return 24;
+    }
+
     private static int toScreenX(double worldX, double camX, double scale, int sw) {
         return sw / 2 + (int) Math.round((worldX - camX) * scale);
     }
@@ -484,9 +551,33 @@ final class SquaremapTileRenderer {
     private record TileKey(int zoom, int x, int y) {}
     private record LoadedTile(TileKey key, NativeImage image) {}
     private record PanDirection(double x, double z) {}
+    private record CircleClip(double centerX, double centerY, double radius, double radiusSq,
+                              int stripHeight) {
+        private boolean containsRect(double left, double top, double right, double bottom) {
+            return containsPoint(left, top)
+                    && containsPoint(right, top)
+                    && containsPoint(right, bottom)
+                    && containsPoint(left, bottom);
+        }
+
+        private boolean intersectsRect(double left, double top, double right, double bottom) {
+            double closestX = Math.max(left, Math.min(centerX, right));
+            double closestY = Math.max(top, Math.min(centerY, bottom));
+            double dx = closestX - centerX;
+            double dy = closestY - centerY;
+            return dx * dx + dy * dy <= radiusSq;
+        }
+
+        private boolean containsPoint(double x, double y) {
+            double dx = x - centerX;
+            double dy = y - centerY;
+            return dx * dx + dy * dy <= radiusSq;
+        }
+    }
 
     private enum NetworkPolicy {
-        WORLD_MAP(true, true, MAX_CONCURRENT_LOADS);
+        WORLD_MAP(true, true, MAX_CONCURRENT_LOADS),
+        MINIMAP(false, false, 8);
 
         private final boolean allowPrefetch;
         private final boolean allowRefresh;

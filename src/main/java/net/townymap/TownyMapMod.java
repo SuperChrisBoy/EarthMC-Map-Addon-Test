@@ -541,9 +541,17 @@ public class TownyMapMod implements ClientModInitializer {
     public static void renderSquaremapMinimapViewport(DrawContext ctx,
                                                       double cameraX, double cameraZ,
                                                       double scale, int width, int height) {
+        renderSquaremapMinimapViewport(ctx, cameraX, cameraZ, scale, width, height, false, 0.0);
+    }
+
+    public static void renderSquaremapMinimapViewport(DrawContext ctx,
+                                                      double cameraX, double cameraZ,
+                                                      double scale, int width, int height,
+                                                      boolean circularClip, double circularClipRadius) {
         if (!isActiveOnCurrentServer()) return;
         if (renderer != null) {
-            renderer.renderSquaremapMinimapViewport(ctx, cameraX, cameraZ, scale, width, height, true);
+            renderer.renderSquaremapMinimapViewport(ctx, cameraX, cameraZ, scale, width, height,
+                    true, circularClip ? circularClipRadius : 0.0);
         }
     }
 
@@ -661,7 +669,7 @@ public class TownyMapMod implements ClientModInitializer {
         }
     }
 
-    public static void renderMinimapNationAlert(DrawContext ctx, int x, int y, int size) {
+    public static void renderMinimapNationAlert(DrawContext ctx, Object session, int x, int y, int size) {
         if (!isActiveOnCurrentServer()) return;
         if (config == null || !config.minimapNationAlertEnabled) return;
         long remaining = minimapNationAlertFlashUntilMs - System.currentTimeMillis();
@@ -671,6 +679,15 @@ public class TownyMapMod implements ClientModInitializer {
         int alpha = 120 + (int) Math.round(110.0 * pulse);
         int color = ((alpha & 0xFF) << 24) | (minimapFrameColor() & 0x00FFFFFF);
         int thickness = 3;
+        try {
+            xaero.hud.minimap.module.MinimapSession minimapSession =
+                    (xaero.hud.minimap.module.MinimapSession) session;
+            if (TownyMinimapOverlay.isCircularMinimap(minimapSession)) {
+                TownyMinimapOverlay.renderCircularOutline(ctx, x, y, size, color, 0, thickness);
+                return;
+            }
+        } catch (Exception ignored) {
+        }
         ctx.fill(x, y, x + size, y + thickness, color);
         ctx.fill(x, y + size - thickness, x + size, y + size, color);
         ctx.fill(x, y, x + thickness, y + size, color);
@@ -699,6 +716,10 @@ public class TownyMapMod implements ClientModInitializer {
             int color = 0xFF000000 | (minimapFrameColor() & 0x00FFFFFF);
             int shadow = 0xAA000000;
             int thickness = 1;
+            if (TownyMinimapOverlay.isCircularMinimap(minimapSession)) {
+                TownyMinimapOverlay.renderCircularOutline(ctx, x, y, size, color, shadow, thickness);
+                return;
+            }
             ctx.fill(x - 1, y - 1, x + size + 1, y, shadow);
             ctx.fill(x - 1, y + size, x + size + 1, y + size + 1, shadow);
             ctx.fill(x - 1, y, x, y + size, shadow);

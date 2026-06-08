@@ -70,7 +70,7 @@ public class MixinMinimapModuleRenderer {
         renderer.renderOutsidePip(session, x, y, screenW, screenH, screenScale, minimapScale,
                 configuredWidth, tickDelta, drawContext);
         TownyMapMod.renderMinimapFrame(drawContext, session, bounds.x(), bounds.y(), bounds.size());
-        TownyMapMod.renderMinimapNationAlert(drawContext, bounds.x(), bounds.y(), bounds.size());
+        TownyMapMod.renderMinimapNationAlert(drawContext, session, bounds.x(), bounds.y(), bounds.size());
         TownyMapMod.renderMinimapWaypointsOnTop(drawContext, session, bounds.x(), bounds.y(), bounds.size());
         // Draw after renderOutsidePip so our indicator composites on top of Xaero's arrow
         TownyMapMod.renderMinimapPlayerIndicator(drawContext, session, bounds.x(), bounds.y(), bounds.size());
