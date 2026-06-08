@@ -713,9 +713,12 @@ public class TownyMapMod implements ClientModInitializer {
     private static boolean waypointRedrawErrorLogged = false;
 
     public static void renderMinimapWaypointsOnTop(DrawContext ctx, Object session, int mapX, int mapY, int size) {
-        // No-op: waypoints are now drawn inside renderOnMinimap (the same DrawContext batch as the
-        // town overlay, before its flush) so they composite above the squaremap. Drawing them here,
-        // in a separate later batch after the flush, put them underneath it.
+        if (!isActiveOnCurrentServer()) return;
+        try {
+            TownyMinimapOverlay.renderWaypointsOnTop(ctx,
+                    (xaero.hud.minimap.module.MinimapSession) session, mapX, mapY, size);
+        } catch (Throwable ignored) {
+        }
     }
 
     public static void renderMinimapFrame(DrawContext ctx, Object session, int x, int y, int size) {
