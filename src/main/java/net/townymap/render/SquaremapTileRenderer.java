@@ -467,6 +467,45 @@ final class SquaremapTileRenderer {
         });
     }
 
+    /**
+     * Light 3x3 box blur baked into the tile on load (off-thread). The squaremap tiles are 1px per
+     * block, so when the minimap scales them they alias into hard squares — and the new GUI render
+     * path ignores the texture's linear sampler. Pre-blurring softens the block-colour edges so the
+     * terrain reads smoothly instead of blocky. One-time per tile, so no per-frame cost.
+     */
+    private static void smoothTile(NativeImage img) {
+        int w = img.getWidth();
+        int h = img.getHeight();
+        int[] src = new int[w * h];
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                src[y * w + x] = img.getColorArgb(x, y);
+            }
+        }
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                long c0 = 0, c1 = 0, c2 = 0, c3 = 0;
+                int n = 0;
+                for (int dy = -1; dy <= 1; dy++) {
+                    int ny = y + dy;
+                    if (ny < 0 || ny >= h) continue;
+                    for (int dx = -1; dx <= 1; dx++) {
+                        int nx = x + dx;
+                        if (nx < 0 || nx >= w) continue;
+                        int c = src[ny * w + nx];
+                        c0 += c & 0xFF;
+                        c1 += (c >>> 8) & 0xFF;
+                        c2 += (c >>> 16) & 0xFF;
+                        c3 += (c >>> 24) & 0xFF;
+                        n++;
+                    }
+                }
+                int avg = (int) (((c3 / n) << 24) | ((c2 / n) << 16) | ((c1 / n) << 8) | (c0 / n));
+                img.setColorArgb(x, y, avg);
+            }
+        }
+    }
+
     private void fetchTile(TileKey key) {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(tileUrl(key)))
@@ -482,7 +521,9 @@ final class SquaremapTileRenderer {
                 return;
             }
             byte[] bytes = response.body();
-            LoadedTile previous = completedTiles.put(key, new LoadedTile(key, NativeImage.read(bytes)));
+            NativeImage image = NativeImage.read(bytes);
+            smoothTile(image);
+            LoadedTile previous = completedTiles.put(key, new LoadedTile(key, image));
             if (previous != null) previous.image().close();
         } catch (Exception e) {
             failedAt.put(key, System.currentTimeMillis());
