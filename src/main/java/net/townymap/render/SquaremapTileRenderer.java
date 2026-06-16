@@ -351,24 +351,33 @@ final class SquaremapTileRenderer {
 
         int top = Math.max(y, (int) Math.floor(circleClip.centerY() - circleClip.radius()));
         int bottom = Math.min(y2, (int) Math.ceil(circleClip.centerY() + circleClip.radius()));
-        int stripHeight = circleClip.stripHeight();
-        for (int stripY = top; stripY < bottom; stripY += stripHeight) {
+        int baseStrip = circleClip.stripHeight();
+        double cy = circleClip.centerY();
+        double radius = circleClip.radius();
+        int stripY = top;
+        while (stripY < bottom) {
+            // The conservative (narrowest-in-strip) chord flattens the curve where the circle is
+            // most horizontal — its top and bottom — into a boxy edge. Use 1-2px strips there,
+            // where the curve bends fastest, and coarse strips through the middle (cheap, since
+            // the chord barely changes there). Smooth edge without fine strips everywhere.
+            double edgeDist = radius - Math.abs((stripY + 0.5) - cy);
+            int stripHeight = edgeDist < 8.0 ? 1 : edgeDist < 24.0 ? 2 : baseStrip;
             int stripBottom = Math.min(bottom, stripY + stripHeight);
-            double dy = Math.max(Math.abs(stripY - circleClip.centerY()),
-                    Math.abs(stripBottom - circleClip.centerY()));
+            double dy = Math.max(Math.abs(stripY - cy), Math.abs(stripBottom - cy));
             double chordSq = circleClip.radiusSq() - dy * dy;
-            if (chordSq <= 0.0) continue;
-
-            double halfChord = Math.sqrt(chordSq);
-            int stripLeft = Math.max(x, (int) Math.floor(circleClip.centerX() - halfChord));
-            int stripRight = Math.min(x2, (int) Math.ceil(circleClip.centerX() + halfChord));
-            if (stripLeft >= stripRight) continue;
-
-            float u1 = (float) ((u + (stripLeft - x) * (double) regionW / drawW) / TILE_PIXELS);
-            float u2 = (float) ((u + (stripRight - x) * (double) regionW / drawW) / TILE_PIXELS);
-            float v1 = (float) ((v + (stripY - y) * (double) regionH / drawH) / TILE_PIXELS);
-            float v2 = (float) ((v + (stripBottom - y) * (double) regionH / drawH) / TILE_PIXELS);
-            ctx.drawTexturedQuad(texture, stripLeft, stripY, stripRight, stripBottom, u1, u2, v1, v2);
+            if (chordSq > 0.0) {
+                double halfChord = Math.sqrt(chordSq);
+                int stripLeft = Math.max(x, (int) Math.floor(circleClip.centerX() - halfChord));
+                int stripRight = Math.min(x2, (int) Math.ceil(circleClip.centerX() + halfChord));
+                if (stripLeft < stripRight) {
+                    float u1 = (float) ((u + (stripLeft - x) * (double) regionW / drawW) / TILE_PIXELS);
+                    float u2 = (float) ((u + (stripRight - x) * (double) regionW / drawW) / TILE_PIXELS);
+                    float v1 = (float) ((v + (stripY - y) * (double) regionH / drawH) / TILE_PIXELS);
+                    float v2 = (float) ((v + (stripBottom - y) * (double) regionH / drawH) / TILE_PIXELS);
+                    ctx.drawTexturedQuad(texture, stripLeft, stripY, stripRight, stripBottom, u1, u2, v1, v2);
+                }
+            }
+            stripY = stripBottom;
         }
     }
 
@@ -467,45 +476,6 @@ final class SquaremapTileRenderer {
         });
     }
 
-    /**
-     * Light 3x3 box blur baked into the tile on load (off-thread). The squaremap tiles are 1px per
-     * block, so when the minimap scales them they alias into hard squares — and the new GUI render
-     * path ignores the texture's linear sampler. Pre-blurring softens the block-colour edges so the
-     * terrain reads smoothly instead of blocky. One-time per tile, so no per-frame cost.
-     */
-    private static void smoothTile(NativeImage img) {
-        int w = img.getWidth();
-        int h = img.getHeight();
-        int[] src = new int[w * h];
-        for (int y = 0; y < h; y++) {
-            for (int x = 0; x < w; x++) {
-                src[y * w + x] = img.getColorArgb(x, y);
-            }
-        }
-        for (int y = 0; y < h; y++) {
-            for (int x = 0; x < w; x++) {
-                long c0 = 0, c1 = 0, c2 = 0, c3 = 0;
-                int n = 0;
-                for (int dy = -1; dy <= 1; dy++) {
-                    int ny = y + dy;
-                    if (ny < 0 || ny >= h) continue;
-                    for (int dx = -1; dx <= 1; dx++) {
-                        int nx = x + dx;
-                        if (nx < 0 || nx >= w) continue;
-                        int c = src[ny * w + nx];
-                        c0 += c & 0xFF;
-                        c1 += (c >>> 8) & 0xFF;
-                        c2 += (c >>> 16) & 0xFF;
-                        c3 += (c >>> 24) & 0xFF;
-                        n++;
-                    }
-                }
-                int avg = (int) (((c3 / n) << 24) | ((c2 / n) << 16) | ((c1 / n) << 8) | (c0 / n));
-                img.setColorArgb(x, y, avg);
-            }
-        }
-    }
-
     private void fetchTile(TileKey key) {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(tileUrl(key)))
@@ -521,9 +491,7 @@ final class SquaremapTileRenderer {
                 return;
             }
             byte[] bytes = response.body();
-            NativeImage image = NativeImage.read(bytes);
-            smoothTile(image);
-            LoadedTile previous = completedTiles.put(key, new LoadedTile(key, image));
+            LoadedTile previous = completedTiles.put(key, new LoadedTile(key, NativeImage.read(bytes)));
             if (previous != null) previous.image().close();
         } catch (Exception e) {
             failedAt.put(key, System.currentTimeMillis());
