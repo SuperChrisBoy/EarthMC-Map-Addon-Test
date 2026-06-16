@@ -533,11 +533,13 @@ final class SquaremapTileRenderer {
     }
 
     private static int circleClipStripHeight(double radius) {
-        if (radius < 72.0) return 6;
-        if (radius < 128.0) return 8;
-        if (radius < 220.0) return 12;
-        if (radius < 360.0) return 18;
-        return 24;
+        // Height (px) of each horizontal strip the rim tiles are sliced into to follow the circle.
+        // Smaller = smoother circle edge, more draws. The interior tiles still draw whole, so only
+        // the thin ring of rim tiles pays this; keep it fine for the normal minimap and only ease
+        // off for a very large (enlarged) map.
+        if (radius < 160.0) return 2;
+        if (radius < 320.0) return 3;
+        return 5;
     }
 
     private static int toScreenX(double worldX, double camX, double scale, int sw) {
