@@ -41,6 +41,8 @@ final class SquaremapTileRenderer {
     private static final long FAILED_RETRY_MS = 60_000;
     private static final long TILE_REFRESH_MS = 20 * 60_000L;
     private static final int QUALITY_ZOOM_BIAS = 2;
+    /** Target horizontal step (px) of the circular rim clip. Lower = flusher edge, more strips. */
+    private static final double CIRCLE_EDGE_STEP_PX = 1.5;
     private static final int PREFETCH_TILE_MARGIN = 1;
     private static final int MOVING_CURRENT_ZOOM_PREFETCH_REQUESTS = 8;
     private static final int MOVING_ADJACENT_ZOOM_PREFETCH_REQUESTS = 3;
@@ -356,12 +358,15 @@ final class SquaremapTileRenderer {
         double radius = circleClip.radius();
         int stripY = top;
         while (stripY < bottom) {
-            // The conservative (narrowest-in-strip) chord flattens the curve where the circle is
-            // most horizontal — its top and bottom — into a boxy edge. Use 1-2px strips there,
-            // where the curve bends fastest, and coarse strips through the middle (cheap, since
-            // the chord barely changes there). Smooth edge without fine strips everywhere.
-            double edgeDist = radius - Math.abs((stripY + 0.5) - cy);
-            int stripHeight = edgeDist < 8.0 ? 1 : edgeDist < 24.0 ? 2 : baseStrip;
+            // Pick a strip height that keeps the chord's horizontal step ~TARGET px *everywhere*,
+            // not just at the top/bottom: tall strips where the circle is near-vertical (chord
+            // changes slowly with y), short strips where it curves hard. This is the minimum number
+            // of strips for a given edge smoothness, so the whole rim is uniformly flush.
+            double dyHere = Math.abs((stripY + 0.5) - cy);
+            double chordHere = dyHere < radius ? Math.sqrt(radius * radius - dyHere * dyHere) : 0.0;
+            int stripHeight = dyHere < 1.0
+                    ? baseStrip
+                    : (int) Math.max(1, Math.min(baseStrip, Math.round(CIRCLE_EDGE_STEP_PX * chordHere / dyHere)));
             int stripBottom = Math.min(bottom, stripY + stripHeight);
             double dy = Math.max(Math.abs(stripY - cy), Math.abs(stripBottom - cy));
             double chordSq = circleClip.radiusSq() - dy * dy;
