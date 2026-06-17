@@ -27,6 +27,10 @@ public class TownyMapConfig {
     public boolean hideMinimapInNether = false;
     public boolean minimapNationAlertEnabled = true;
     public boolean minimapTownNamesEnabled = true;
+    // ── Info display (text lines under the minimap, stacked with Xaero's coords) ──
+    public boolean infoDisplayTownEnabled = true;
+    public boolean infoDisplayNearbyPlayersEnabled = true;
+    public boolean infoDisplayNearestTownEnabled = true;
     /** 0 off, 1 nearby only, 2 major visible towns, 3 all visible towns. */
     public int minimapTownNameMode = 2;
     /** 0 off, 1 always, 2 enlarged minimap only. */

@@ -711,6 +711,75 @@ public class TownyMapMod implements ClientModInitializer {
         ctx.fill(x + size - thickness, y, x + size, y + size, color);
     }
 
+    /**
+     * Renders our info lines (town/nation, nearby players, nearest town) centred at {@code centerX}
+     * starting at {@code topY}, stacked downward. Returns their total pixel height so the caller can
+     * push Xaero's own info lines below ours (no overlap). Per-line config toggles; empty lines auto-hide.
+     */
+    public static int renderMinimapInfoLines(DrawContext ctx, int centerX, int topY) {
+        if (!isActiveOnCurrentServer() || config == null || apiClient == null) return 0;
+        if (!config.infoDisplayTownEnabled && !config.infoDisplayNearbyPlayersEnabled
+                && !config.infoDisplayNearestTownEnabled) return 0;
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.player == null || client.getSession() == null) return 0;
+
+        double px = client.player.getX();
+        double pz = client.player.getZ();
+        java.util.List<TownData> towns = apiClient.getTowns();
+        TownData here = TownHoverOverlay.townAt(px, pz, towns);
+        java.util.List<String> lines = new java.util.ArrayList<>();
+
+        if (config.infoDisplayTownEnabled) {
+            if (here != null) {
+                String key = townKey(here.name());
+                requestTownDetails(here.name(), key);
+                TownPopupData details = townDetailsCache.get(key);
+                String nation = details != null ? details.nationName() : null;
+                lines.add(nation != null && !nation.isBlank()
+                        ? "§fTown: §a" + here.name() + " §7(" + nation + ")"
+                        : "§fTown: §a" + here.name());
+            } else {
+                lines.add("§7Wilderness");
+            }
+        }
+
+        if (config.infoDisplayNearbyPlayersEnabled) {
+            String self = client.getSession().getUsername();
+            java.util.List<String> near = new java.util.ArrayList<>();
+            for (var m : apiClient.getPlayers()) {
+                if (m.name() == null || m.name().equalsIgnoreCase(self)) continue;
+                if (Math.hypot(m.x() - px, m.z() - pz) <= 100.0) near.add(m.name());
+            }
+            if (!near.isEmpty()) {
+                String names = near.size() <= 4 ? String.join(", ", near)
+                        : String.join(", ", near.subList(0, 4)) + " §7+" + (near.size() - 4);
+                lines.add("§fNearby: §e" + names);
+            }
+        }
+
+        if (config.infoDisplayNearestTownEnabled && here == null && !towns.isEmpty()) {
+            TownData nearest = null;
+            double best = Double.MAX_VALUE;
+            for (TownData t : towns) {
+                double d = Math.hypot(t.centerX() - px, t.centerZ() - pz);
+                if (d < best) { best = d; nearest = t; }
+            }
+            if (nearest != null) {
+                lines.add("§fNearest: §b" + nearest.name() + " §7(" + (int) Math.round(best) + "m)");
+            }
+        }
+
+        if (lines.isEmpty()) return 0;
+        int lineH = client.textRenderer.fontHeight + 1;
+        int yy = topY;
+        for (String line : lines) {
+            int w = client.textRenderer.getWidth(line);
+            ctx.drawText(client.textRenderer, line, centerX - w / 2, yy, 0xFFFFFFFF, true);
+            yy += lineH;
+        }
+        return lines.size() * lineH;
+    }
+
     private static boolean waypointRedrawErrorLogged = false;
 
     public static void renderMinimapWaypointsOnTop(DrawContext ctx, Object session, int mapX, int mapY, int size) {

@@ -6,7 +6,12 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Coerce;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.util.math.BlockPos;
+import xaero.hud.minimap.Minimap;
+import xaero.hud.minimap.info.render.InfoDisplayRenderer;
 import xaero.hud.minimap.module.MinimapSession;
 
 @Mixin(value = xaero.common.minimap.render.MinimapRenderer.class, remap = false)
@@ -75,5 +80,26 @@ public abstract class MixinCommonMinimapRenderer {
         if (TownyMapMod.shouldSuppressNativeMinimapCompass()) {
             ci.cancel();
         }
+    }
+
+    // Insert our info lines (town/nation, nearby players, nearest town) at the top of Xaero's info
+    // area, then shift Xaero's own info lines down by our height so the two stack without overlap.
+    @Redirect(
+            method = "renderOutsidePip(Lxaero/hud/minimap/module/MinimapSession;IIIIDFIFLnet/minecraft/class_332;)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lxaero/hud/minimap/info/render/InfoDisplayRenderer;render(Lxaero/hud/minimap/module/MinimapSession;Lxaero/hud/minimap/Minimap;IILnet/minecraft/class_2338;IIFLnet/minecraft/class_332;)V"
+            ),
+            remap = false
+    )
+    private void townymapaddon$infoLines(InfoDisplayRenderer infoRenderer, MinimapSession session,
+                                         Minimap minimap, int x, int y, BlockPos pos,
+                                         int infoWidth, int infoExtra, float partial, DrawContext ctx) {
+        int myHeight = 0;
+        try {
+            myHeight = TownyMapMod.renderMinimapInfoLines(ctx, x, y);
+        } catch (Throwable ignored) {
+        }
+        infoRenderer.render(session, minimap, x, y + myHeight, pos, infoWidth, infoExtra, partial, ctx);
     }
 }
