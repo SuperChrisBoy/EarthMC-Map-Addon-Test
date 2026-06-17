@@ -241,6 +241,17 @@ public abstract class MixinGuiMap {
                 return;
             }
 
+            // Right-click on our buttons: consume so it never falls through to the map (no
+            // town/wilderness selection behind the button), and cycle mode toggles backward.
+            if (button == 1 && TownyMapMod.onSettingsButtonClick(click.x(), click.y(), sh)) {
+                cir.setReturnValue(true);
+                return;
+            }
+            if (button == 1 && TownyMapMod.onMapToggleClick(click.x(), click.y(), sh, true)) {
+                cir.setReturnValue(true);
+                return;
+            }
+
             if (button == 1 && TownyMapMod.isChunkCounterActive()) {
                 double guiScale = (screenScale > 0) ? scale / screenScale : scale;
                 if (guiScale > 0) {

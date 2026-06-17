@@ -49,7 +49,7 @@ public final class MapToggleOverlay {
     }
 
     /** Returns true if a toggle was clicked (caller should NOT open settings). */
-    public static boolean handleClick(double mouseX, double mouseY, int sh, TownyMapConfig config) {
+    public static boolean handleClick(double mouseX, double mouseY, int sh, TownyMapConfig config, boolean backward) {
         if (ChunkCounterOverlay.isMultiMode(config)) {
             int group = counterGroupAt(mouseX, mouseY, config);
             if (group >= 0) {
@@ -71,8 +71,8 @@ public final class MapToggleOverlay {
         if (row >= 0) {
             switch (row) {
                 case 0 -> config.squaremapBackgroundEnabled = !config.squaremapBackgroundEnabled;
-                case 1 -> config.borderOverlayMode = (config.borderOverlayMode + 1) % 3;
-                case 2 -> config.townStatusOverlayMode = (config.townStatusOverlayMode + 1) % 6;
+                case 1 -> config.borderOverlayMode = (config.borderOverlayMode + (backward ? 2 : 1)) % 3;
+                case 2 -> config.townStatusOverlayMode = (config.townStatusOverlayMode + (backward ? 5 : 1)) % 6;
                 case 3 -> config.chunkGridEnabled = !config.chunkGridEnabled;
                 case 4 -> {
                     if (config.chunkCounterEnabled) ChunkCounterOverlay.flushSelection();

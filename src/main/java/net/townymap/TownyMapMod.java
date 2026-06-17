@@ -692,14 +692,15 @@ public class TownyMapMod implements ClientModInitializer {
         if (remaining <= 0 || size <= 8) return;
 
         double pulse = 0.5 + 0.5 * Math.sin(System.currentTimeMillis() / 95.0);
-        int alpha = 120 + (int) Math.round(110.0 * pulse);
+        int alpha = 175 + (int) Math.round(80.0 * pulse); // 175..255 — bolder so it reads over the squaremap
         int color = ((alpha & 0xFF) << 24) | (minimapFrameColor() & 0x00FFFFFF);
-        int thickness = 3;
+        int shadow = 0xC8000000; // dark backing so the pulse pops over busy terrain
+        int thickness = 5;
         try {
             xaero.hud.minimap.module.MinimapSession minimapSession =
                     (xaero.hud.minimap.module.MinimapSession) session;
             if (TownyMinimapOverlay.isCircularMinimap(minimapSession)) {
-                TownyMinimapOverlay.renderCircularOutline(ctx, x, y, size, color, 0, thickness);
+                TownyMinimapOverlay.renderCircularOutline(ctx, x, y, size, color, shadow, thickness);
                 return;
             }
         } catch (Exception ignored) {
@@ -904,8 +905,12 @@ public class TownyMapMod implements ClientModInitializer {
     }
 
     public static boolean onMapToggleClick(double mouseX, double mouseY, int screenH) {
+        return onMapToggleClick(mouseX, mouseY, screenH, false);
+    }
+
+    public static boolean onMapToggleClick(double mouseX, double mouseY, int screenH, boolean backward) {
         if (!isActiveOnCurrentServer()) return false;
-        return config != null && MapToggleOverlay.handleClick(mouseX, mouseY, screenH, config);
+        return config != null && MapToggleOverlay.handleClick(mouseX, mouseY, screenH, config, backward);
     }
 
     public static boolean onSettingsButtonClick(double mouseX, double mouseY, int screenH) {
