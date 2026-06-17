@@ -262,7 +262,8 @@ public final class ChunkCounterOverlay {
                                            int mapX, int mapY, int size,
                                            double playerX, double playerZ,
                                            double pixelsPerBlock, double sin, double cos,
-                                           int clipLeft, int clipTop, int clipRight, int clipBottom) {
+                                           int clipLeft, int clipTop, int clipRight, int clipBottom,
+                                           boolean circular, double radius) {
         TownyMapConfig config = TownyMapMod.getConfig();
         if (config == null || !config.chunkCounterEnabled || client == null) return;
         double centerX = mapX + size / 2.0;
@@ -274,7 +275,7 @@ public final class ChunkCounterOverlay {
             for (int i = 0; i < groupCount; i++) {
                 drawMinimapLabelsForSelection(ctx, client.textRenderer, GROUPS.get(i), GROUP_LABELS[i],
                         centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos,
-                        clipLeft, clipTop, clipRight, clipBottom);
+                        clipLeft, clipTop, clipRight, clipBottom, circular, radius);
             }
         } finally {
             ctx.disableScissor();
@@ -452,7 +453,8 @@ public final class ChunkCounterOverlay {
                                                       String prefix, double centerX, double centerY,
                                                       double playerX, double playerZ, double pixelsPerBlock,
                                                       double sin, double cos,
-                                                      int clipLeft, int clipTop, int clipRight, int clipBottom) {
+                                                      int clipLeft, int clipTop, int clipRight, int clipBottom,
+                                                      boolean circular, double radius) {
         selection.ensureBuilt();
         for (Component component : selection.components) {
             double dx = component.centerX - playerX;
@@ -461,6 +463,12 @@ public final class ChunkCounterOverlay {
             int y = (int) Math.round(centerY + (dx * sin + dz * cos) * pixelsPerBlock);
             if (x < clipLeft || x > clipRight || y < clipTop || y > clipBottom) continue;
             String text = prefix.equals("Chunks") ? Integer.toString(component.count) : prefix + ":" + component.count;
+            if (circular) {
+                // Cull labels whose box would cross the circular minimap edge (the rectangular
+                // scissor alone lets them spill into the corners).
+                double half = Math.hypot(tr.getWidth(text) / 2.0 + 1.0, tr.fontHeight / 2.0 + 1.0);
+                if (Math.hypot(x - centerX, y - centerY) + half > radius) continue;
+            }
             drawLabel(ctx, tr, text, x, y, selection.rgb);
         }
     }

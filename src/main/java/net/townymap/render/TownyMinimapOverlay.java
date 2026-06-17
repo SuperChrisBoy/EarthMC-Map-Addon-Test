@@ -274,7 +274,7 @@ public final class TownyMinimapOverlay {
         if (!performanceShed && config.chunkCounterEnabled) {
             ChunkCounterOverlay.renderMinimapLabels(ctx, client, mapX, mapY, size,
                     playerX, playerZ, pixelsPerBlock, sin, cos,
-                    clip.left(), clip.top(), clip.right(), clip.bottom());
+                    clip.left(), clip.top(), clip.right(), clip.bottom(), clip.circular(), clip.radius());
         }
 
         ctx.drawDeferredElements();
@@ -517,7 +517,7 @@ public final class TownyMinimapOverlay {
         }
         ChunkCounterOverlay.renderMinimapLabels(ctx, client, mapX, mapY, size,
                 playerX, playerZ, pixelsPerBlock, sin, cos,
-                clip.left(), clip.top(), clip.right(), clip.bottom());
+                clip.left(), clip.top(), clip.right(), clip.bottom(), clip.circular(), clip.radius());
     }
 
     private static void renderMinimapChunkGrid(DrawContext ctx, MinimapSession session, TownyMapConfig config,
