@@ -41,8 +41,10 @@ final class SquaremapTileRenderer {
     private static final long FAILED_RETRY_MS = 60_000;
     private static final long TILE_REFRESH_MS = 20 * 60_000L;
     private static final int QUALITY_ZOOM_BIAS = 2;
-    /** Target horizontal step (px) of the circular rim clip. Lower = flusher edge, more strips. */
-    private static final double CIRCLE_EDGE_STEP_PX = 1.5;
+    /** Target horizontal step (px) of the circular rim clip. Lower = flusher edge, more strips.
+     *  1.0 is the practical floor — the strips are integer-pixel rectangles, so sub-pixel smoothing
+     *  isn't possible here (that needs the GPU-mask approach). */
+    private static final double CIRCLE_EDGE_STEP_PX = 1.0;
     private static final int PREFETCH_TILE_MARGIN = 1;
     private static final int MOVING_CURRENT_ZOOM_PREFETCH_REQUESTS = 8;
     private static final int MOVING_ADJACENT_ZOOM_PREFETCH_REQUESTS = 3;
