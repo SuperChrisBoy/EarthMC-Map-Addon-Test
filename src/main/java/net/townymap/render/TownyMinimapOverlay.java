@@ -1325,7 +1325,9 @@ public final class TownyMinimapOverlay {
         double centerX = x + size / 2.0;
         double centerY = y + size / 2.0;
         double radius = Math.max(1.0, size / 2.0 - 0.75);
-        int segments = Math.max(32, Math.min(56, (int) Math.round(radius * 0.45)));
+        // ~1 segment per 3px of circumference so the ring reads as a true circle, not a polygon.
+        // Drawn once per frame, so a high count is cheap. (Old cap of 56 made the facets visible.)
+        int segments = Math.max(64, Math.min(360, (int) Math.round(radius * 2.0)));
         if ((shadowColor >>> 24) != 0) {
             drawCircleOutline(ctx, centerX, centerY, radius + 1.0, segments, shadowColor);
         }
