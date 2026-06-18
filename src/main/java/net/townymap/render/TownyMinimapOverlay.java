@@ -233,7 +233,11 @@ public final class TownyMinimapOverlay {
                         matrices.rotate((float) angle);
                         matrices.scale((float) pixelsPerBlock, (float) pixelsPerBlock);
                         matrices.translate((float) -playerX, (float) -playerZ);
-                        ChunkCounterOverlay.renderWorldSpace(ctx);
+                        // Clip the counter fills/edges to the circle (like the town fills) so they
+                        // don't spill into the rectangular corners outside the ring.
+                        ChunkCounterOverlay.renderMinimapFillsClipped((bx, bz, bw, bh, c) ->
+                                fillRectCircleClipped(ctx, bx, bz, bw, bh, c, clip,
+                                        centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos));
                     } finally {
                         matrices.popMatrix();
                     }
@@ -1311,11 +1315,13 @@ public final class TownyMinimapOverlay {
         double centerX = mapX + size / 2.0;
         double centerY = mapY + size / 2.0;
         boolean circular = isCircularMinimap(session);
+        // Match the user's chosen Xaero minimap frame colour (the ring around the minimap).
+        int accent = 0xFF000000 | (TownyMapMod.minimapFrameColor() & 0x00FFFFFF);
 
-        drawCompassLetterOnBorder(ctx, client, "N", centerX, centerY, sin, -cos, size, circular);
-        drawCompassLetterOnBorder(ctx, client, "E", centerX, centerY, cos, sin, size, circular);
-        drawCompassLetterOnBorder(ctx, client, "S", centerX, centerY, -sin, cos, size, circular);
-        drawCompassLetterOnBorder(ctx, client, "W", centerX, centerY, -cos, -sin, size, circular);
+        drawCompassLetterOnBorder(ctx, client, "N", centerX, centerY, sin, -cos, size, circular, accent);
+        drawCompassLetterOnBorder(ctx, client, "E", centerX, centerY, cos, sin, size, circular, accent);
+        drawCompassLetterOnBorder(ctx, client, "S", centerX, centerY, -sin, cos, size, circular, accent);
+        drawCompassLetterOnBorder(ctx, client, "W", centerX, centerY, -cos, -sin, size, circular, accent);
         ctx.drawDeferredElements();
     }
 
@@ -1353,22 +1359,23 @@ public final class TownyMinimapOverlay {
     private static void drawCompassLetterOnBorder(DrawContext ctx, MinecraftClient client, String letter,
                                                   double centerX, double centerY,
                                                   double dirX, double dirY, int size,
-                                                  boolean circular) {
+                                                  boolean circular, int accent) {
         double length = Math.hypot(dirX, dirY);
         if (length < 0.0001) return;
         double edgeDistance = size / 2.0 + 1.0;
         double scale = circular ? edgeDistance / length
                 : edgeDistance / Math.max(Math.abs(dirX), Math.abs(dirY));
-        drawCompassLetter(ctx, client, letter, centerX + dirX * scale, centerY + dirY * scale);
+        drawCompassLetter(ctx, client, letter, centerX + dirX * scale, centerY + dirY * scale, accent);
     }
 
     private static void drawCompassLetter(DrawContext ctx, MinecraftClient client, String letter,
-                                          double centerX, double centerY) {
+                                          double centerX, double centerY, int accent) {
         int width = client.textRenderer.getWidth(letter);
         int height = client.textRenderer.fontHeight;
         int x = (int) Math.round(centerX - width / 2.0);
         int y = (int) Math.round(centerY - height / 2.0);
-        ctx.drawText(client.textRenderer, letter, x + 1, y + 1, 0xFFFF5ACD, false);
+        // Coloured drop-shadow in the chosen frame colour, white letter on top for legibility.
+        ctx.drawText(client.textRenderer, letter, x + 1, y + 1, accent, false);
         ctx.drawText(client.textRenderer, letter, x, y, 0xFFFFFFFF, false);
     }
 

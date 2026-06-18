@@ -258,6 +258,47 @@ public final class ChunkCounterOverlay {
         }
     }
 
+    /** Sink for a world-space (block-coordinate) rectangle fill, so the caller controls clipping. */
+    public interface RectSink {
+        void fill(int blockX, int blockZ, int blockWidth, int blockHeight, int color);
+    }
+
+    /**
+     * Same selection rects as {@link #renderWorldSpace}, but routed through a sink so a circular
+     * minimap can clip each rect to the ring (the caller sets up the world→screen matrix).
+     */
+    public static void renderMinimapFillsClipped(RectSink sink) {
+        TownyMapConfig config = TownyMapMod.getConfig();
+        if (config == null || !config.chunkCounterEnabled) return;
+        int groupCount = visibleGroupCount(config);
+        for (int i = 0; i < groupCount; i++) {
+            drawSelectionClipped(GROUPS.get(i), i == normalizedActiveGroup(config), sink);
+        }
+    }
+
+    private static void drawSelectionClipped(SelectionState selection, boolean active, RectSink sink) {
+        selection.ensureBuilt();
+        int fill = argb(active ? 0x42 : 0x2B, selection.rgb);
+        int border = argb(active ? 0xE8 : 0xA0, selection.rgb);
+        for (long key : selection.chunks) {
+            int blockX = chunkX(key) * CHUNK_SIZE;
+            int blockZ = chunkZ(key) * CHUNK_SIZE;
+            sink.fill(blockX, blockZ, CHUNK_SIZE, CHUNK_SIZE, fill);
+        }
+        for (Edge edge : selection.edges) {
+            int blockX = edge.chunkX * CHUNK_SIZE;
+            int blockZ = edge.chunkZ * CHUNK_SIZE;
+            switch (edge.side) {
+                case 0 -> sink.fill(blockX, blockZ, CHUNK_SIZE, 1, border);
+                case 1 -> sink.fill(blockX + CHUNK_SIZE - 1, blockZ, 1, CHUNK_SIZE, border);
+                case 2 -> sink.fill(blockX, blockZ + CHUNK_SIZE - 1, CHUNK_SIZE, 1, border);
+                case 3 -> sink.fill(blockX, blockZ, 1, CHUNK_SIZE, border);
+                default -> {
+                }
+            }
+        }
+    }
+
     public static void renderMinimapLabels(DrawContext ctx, MinecraftClient client,
                                            int mapX, int mapY, int size,
                                            double playerX, double playerZ,

@@ -301,7 +301,8 @@ public class WorldMapRenderer {
             if (details != null && config.townStatusOverlayMode > 0) {
                 statusHighlighted = switch (config.townStatusOverlayMode) {
                     case 1 -> details.canOutsidersSpawn();
-                    case 2 -> details.isOverClaimed();
+                    // Overclaim disabled until the API exposes active residents (claim max is wrong):
+                    // case 2 -> details.isOverClaimed();
                     case 3 -> details.isOpen();
                     case 4 -> details.isForSale();
                     case 5 -> !details.hasNation();
