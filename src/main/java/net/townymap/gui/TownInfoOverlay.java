@@ -224,7 +224,11 @@ public final class TownInfoOverlay {
         }
         lines.add(InfoRow.text("§7Open: §f§l"      + (d.isOpen()   ? "Yes" : "No")));
         lines.add(InfoRow.text("§7Public: §f§l"    + (d.isPublic() ? "Yes" : "No")));
-        lines.add(InfoRow.text("§7Residents: §f§l" + d.residentCount()));
+        String residentsLine = "§7Residents: §f§l" + d.residentCount();
+        if (d.activeResidentCount() >= 0 && d.activeResidentCount() < d.residentCount()) {
+            residentsLine += " §8(" + d.activeResidentCount() + " active)";
+        }
+        lines.add(InfoRow.text(residentsLine));
         lines.add(InfoRow.text("§7Gold: §f§l"      + formatGold(d.balance())));
 
         return lines;
@@ -239,7 +243,9 @@ public final class TownInfoOverlay {
     }
 
     private static int possibleTownChunks(TownPopupData town, Map<String, EarthMcNationData> nationDetails) {
-        int residentChunks = Math.max(0, town.residentCount()) * 12;
+        int residents = town.activeResidentCount() >= 0
+                ? town.activeResidentCount() : Math.max(0, town.residentCount());
+        int residentChunks = residents * 12;
         if (town.nationName() == null || town.nationName().isBlank() || nationDetails == null) {
             return residentChunks;
         }

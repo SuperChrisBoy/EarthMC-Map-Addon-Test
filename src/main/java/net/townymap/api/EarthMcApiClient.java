@@ -253,8 +253,69 @@ public class EarthMcApiClient {
             if (status.has("hasNation")) hasNation = status.get("hasNation").getAsBoolean();
         }
 
+        int activeResidents = countActiveResidents(t);
         return new TownPopupData(name, nation, discord, board, mayor, chunks, founded, pvp,
-                isPublic, canOutsidersSpawn, isOverClaimed, isOpen, isForSale, hasNation, residents, balance);
+                isPublic, canOutsidersSpawn, isOverClaimed, isOpen, isForSale, hasNation, residents, balance,
+                activeResidents);
+    }
+
+    private static final long INACTIVE_THRESHOLD_MS = 42L * 24 * 3600 * 1000;
+    private static final int RESIDENT_QUERY_BATCH = 50;
+
+    /**
+     * Counts the town's residents active within 42 days. EarthMC's API reports all residents and
+     * does not apply the inactive rule, so we look up each resident's last-login ourselves.
+     * Returns -1 if it can't be determined (caller falls back to the raw resident count).
+     */
+    private int countActiveResidents(JsonObject town) {
+        if (!town.has("residents") || !town.get("residents").isJsonArray()) return -1;
+        JsonArray residents = town.getAsJsonArray("residents");
+        java.util.List<String> ids = new java.util.ArrayList<>();
+        for (com.google.gson.JsonElement el : residents) {
+            if (el.isJsonObject()) {
+                JsonObject r = el.getAsJsonObject();
+                String id = str(r, "uuid", null);
+                if (id == null || id.isBlank()) id = str(r, "name", null);
+                if (id != null && !id.isBlank()) ids.add(id);
+            } else if (el.isJsonPrimitive()) {
+                ids.add(el.getAsString());
+            }
+        }
+        if (ids.isEmpty()) return 0;
+
+        long now = System.currentTimeMillis();
+        int active = 0;
+        for (int i = 0; i < ids.size(); i += RESIDENT_QUERY_BATCH) {
+            java.util.List<String> batch = ids.subList(i, Math.min(ids.size(), i + RESIDENT_QUERY_BATCH));
+            JsonObject body = new JsonObject();
+            JsonArray q = new JsonArray();
+            batch.forEach(q::add);
+            body.add("query", q);
+            String json = post(BASE + "/players", body.toString());
+            if (json == null) return -1;
+            JsonArray arr;
+            try {
+                arr = JsonParser.parseString(json).getAsJsonArray();
+            } catch (RuntimeException e) {
+                return -1;
+            }
+            for (com.google.gson.JsonElement pe : arr) {
+                if (!pe.isJsonObject()) continue;
+                JsonObject p = pe.getAsJsonObject();
+                boolean online = false;
+                if (p.has("status") && p.get("status").isJsonObject()) {
+                    JsonObject st = p.getAsJsonObject("status");
+                    if (st.has("isOnline")) online = st.get("isOnline").getAsBoolean();
+                }
+                long lastOnline = 0;
+                if (p.has("timestamps") && p.get("timestamps").isJsonObject()) {
+                    JsonObject ts = p.getAsJsonObject("timestamps");
+                    if (ts.has("lastOnline")) lastOnline = ts.get("lastOnline").getAsLong();
+                }
+                if (online || (lastOnline > 0 && now - lastOnline < INACTIVE_THRESHOLD_MS)) active++;
+            }
+        }
+        return active;
     }
 
     private String post(String url, String body) {
