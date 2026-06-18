@@ -714,6 +714,39 @@ public class TownyMapMod implements ClientModInitializer {
     /** name -> {lastX, lastZ, lastSeenMs} for players that have been within 100 blocks. */
     private static final java.util.Map<String, double[]> nearbyLastKnown = new java.util.HashMap<>();
 
+    // On-screen vertical bounds of Xaero's own info block (coords/biome/etc.), captured each frame
+    // while Xaero draws it so we can stack our lines just outside it without overlapping.
+    private static boolean xaeroInfoCaptured = false;
+    private static double xaeroInfoTopScreenY = 0;
+    private static double xaeroInfoBottomScreenY = 0;
+
+    /** Reset Xaero info-block capture; called right before Xaero renders the minimap info each frame. */
+    public static void beginXaeroInfoCapture() {
+        xaeroInfoCaptured = false;
+    }
+
+    /**
+     * Record one of Xaero's info lines. Xaero draws inside a scaled matrix, so we transform the line's
+     * (x, y) through the current matrix to get its true on-screen vertical span and accumulate the
+     * top/bottom across all lines.
+     */
+    public static void captureXaeroInfoLine(DrawContext ctx, int x, int y, int fontHeight) {
+        try {
+            org.joml.Matrix3x2f m = ctx.getMatrices();
+            double topY = (double) m.m01 * x + (double) m.m11 * y + m.m21;
+            double botY = (double) m.m01 * x + (double) m.m11 * (y + fontHeight) + m.m21;
+            if (!xaeroInfoCaptured) {
+                xaeroInfoTopScreenY = topY;
+                xaeroInfoBottomScreenY = botY;
+                xaeroInfoCaptured = true;
+            } else {
+                xaeroInfoTopScreenY = Math.min(xaeroInfoTopScreenY, topY);
+                xaeroInfoBottomScreenY = Math.max(xaeroInfoBottomScreenY, botY);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
     /**
      * Renders our info lines centred under the minimap: current town + nation, nearby players
      * (within 100 blocks, with distance), and nearest town when in the wilderness. A player who was
@@ -811,15 +844,31 @@ public class TownyMapMod implements ClientModInitializer {
         int screenW = client.getWindow().getScaledWidth();
         int screenH = client.getWindow().getScaledHeight();
         int pad = 2;
-        // Xaero renders its coordinate line just outside the minimap (below it normally, above it when
-        // the minimap is near the screen bottom). Clear that line plus a small gap on whichever side we
-        // land, so our info never sits on top of the coords.
-        int coordClearance = lineH + 12;
 
-        // Prefer below the minimap (under the coords). If that runs off the bottom, flip above it.
-        int top = mapBottom + coordClearance;
-        if (top + totalH > screenH - pad) {
-            top = mapTop - coordClearance - totalH;
+        // Anchor below Xaero's whole info block (coords + biome + whatever else is enabled), using the
+        // on-screen bounds we captured while Xaero drew it — so we never overlap regardless of how many
+        // lines it shows or its info-display scale. Xaero puts that block just below the minimap normally,
+        // or just above it near the screen bottom; we match whichever side and stack just outside it.
+        int top;
+        boolean usedCapture = false;
+        if (xaeroInfoCaptured && xaeroInfoBottomScreenY >= xaeroInfoTopScreenY) {
+            int xTop = (int) Math.floor(xaeroInfoTopScreenY);
+            int xBot = (int) Math.ceil(xaeroInfoBottomScreenY);
+            if (xTop >= mapBottom - 6 && xTop <= mapBottom + 80) {
+                top = xBot + 3;                 // Xaero info sits below the minimap → stack under it
+                usedCapture = true;
+            } else if (xBot <= mapTop + 6 && xBot >= mapTop - 80) {
+                top = xTop - 3 - totalH;        // Xaero info sits above the minimap → stack above it
+                usedCapture = true;
+            } else {
+                top = mapBottom + lineH + 12;
+            }
+        } else {
+            top = mapBottom + lineH + 12;
+        }
+        // Fallback flip when we couldn't measure Xaero's block and ours would run off the bottom.
+        if (!usedCapture && top + totalH > screenH - pad) {
+            top = mapTop - (lineH + 12) - totalH;
         }
         top = Math.max(pad, Math.min(top, screenH - pad - totalH));
 

@@ -67,6 +67,9 @@ public class MixinMinimapModuleRenderer {
         MinimapBounds bounds = actualMinimapBounds(session, x, y, screenScale, minimapScale,
                 renderContext, configuredWidth);
         TownyMapMod.renderOnMinimap(drawContext, session, bounds.x(), bounds.y(), bounds.size());
+        // Reset before Xaero draws its info block; our InfoDisplayRenderer mixin records its on-screen
+        // bounds during this call so renderMinimapInfoLines (below) can stack under it without overlap.
+        TownyMapMod.beginXaeroInfoCapture();
         renderer.renderOutsidePip(session, x, y, screenW, screenH, screenScale, minimapScale,
                 configuredWidth, tickDelta, drawContext);
         TownyMapMod.renderMinimapFrame(drawContext, session, bounds.x(), bounds.y(), bounds.size());
