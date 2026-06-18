@@ -21,7 +21,7 @@ public record EarthMcNationData(
         boolean hasSpawn,
         int spawnX,
         int spawnZ,
-        int activeResidentCount  // members active within 42 days; -1 if not looked up
+        int nationBonus  // EarthMC's own nation chunk bonus (stats.nationBonus); -1 if absent
 ) {
     public EarthMcNationData(String name, String uuid) {
         this(name, uuid, "", "", "", "", "", 0, 0, 0, 0, 0, 0, 0,

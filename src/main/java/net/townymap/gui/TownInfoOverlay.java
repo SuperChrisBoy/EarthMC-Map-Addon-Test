@@ -218,7 +218,8 @@ public final class TownInfoOverlay {
         int possibleChunks = possibleTownChunks(d, nationDetails);
         boolean overLimit = d.isOverClaimed() || d.numChunks() > possibleChunks;
         String sizeColor = overLimit ? "§c§l" : "§f§l";
-        lines.add(InfoRow.text("§7Size: " + sizeColor + d.numChunks() + " / " + possibleChunks + " chunks"));
+        String maxStr = (d.activeResidentCount() < 0 ? "~" : "") + possibleChunks;
+        lines.add(InfoRow.text("§7Size: " + sizeColor + d.numChunks() + " / " + maxStr + " chunks"));
         if (!d.founded().isEmpty()) {
             lines.add(InfoRow.text("§7Founded: §f§l" + d.founded()));
         }
@@ -251,9 +252,8 @@ public final class TownInfoOverlay {
         }
         EarthMcNationData nation = nationDetails.get(town.nationName().toLowerCase(Locale.ROOT));
         if (nation == null) return residentChunks;
-        int nationResidents = nation.activeResidentCount() >= 0
-                ? nation.activeResidentCount() : nation.residentCount();
-        return residentChunks + nationBonus(nationResidents);
+        int bonus = nation.nationBonus() >= 0 ? nation.nationBonus() : nationBonus(nation.residentCount());
+        return residentChunks + bonus;
     }
 
     private static int nationBonus(int residents) {

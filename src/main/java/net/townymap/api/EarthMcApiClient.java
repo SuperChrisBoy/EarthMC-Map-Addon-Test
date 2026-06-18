@@ -261,6 +261,9 @@ public class EarthMcApiClient {
 
     private static final long INACTIVE_THRESHOLD_MS = 42L * 24 * 3600 * 1000;
     private static final int RESIDENT_QUERY_BATCH = 50;
+    /** Skip the per-resident active lookup above this many residents (too many API calls); the max
+     *  then falls back to the raw count (shown approximate). Interim until EarthMC exposes it. */
+    private static final int MAX_RESIDENT_LOOKUP = 100;
 
     /**
      * Counts the town's residents active within 42 days. EarthMC's API reports all residents and
@@ -282,6 +285,7 @@ public class EarthMcApiClient {
             }
         }
         if (ids.isEmpty()) return 0;
+        if (ids.size() > MAX_RESIDENT_LOOKUP) return -1;  // too many — fall back to raw (approximate)
 
         long now = System.currentTimeMillis();
         int active = 0;
@@ -435,6 +439,7 @@ public class EarthMcApiClient {
         int allies = 0;
         int enemies = 0;
         double balance = 0;
+        int nationBonusVal = -1;
         if (n.has("stats") && n.get("stats").isJsonObject()) {
             JsonObject stats = n.getAsJsonObject("stats");
             if (stats.has("numTowns")) towns = stats.get("numTowns").getAsInt();
@@ -444,6 +449,7 @@ public class EarthMcApiClient {
             if (stats.has("numAllies")) allies = stats.get("numAllies").getAsInt();
             if (stats.has("numEnemies")) enemies = stats.get("numEnemies").getAsInt();
             if (stats.has("balance")) balance = stats.get("balance").getAsDouble();
+            if (stats.has("nationBonus")) nationBonusVal = stats.get("nationBonus").getAsInt();
         }
 
         boolean isPublic = false;
@@ -471,10 +477,9 @@ public class EarthMcApiClient {
             }
         }
 
-        int activeResidents = countActiveResidents(n);
         return new EarthMcNationData(name, uuid, discord, board, king, capital, founded, towns, residents, chunks,
                 outlaws, allies, enemies, balance, isPublic, isOpen, isNeutral, hasSpawn, spawnX, spawnZ,
-                activeResidents);
+                nationBonusVal);
     }
 
     private static String objectName(JsonObject obj, String key) {
