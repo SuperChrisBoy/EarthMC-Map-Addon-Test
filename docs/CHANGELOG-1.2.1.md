@@ -11,4 +11,4 @@
 **Temporarily disabled (will return when EarthMC's API is updated)**
 - The town **"X / max claims" ("out of")** display and the **Overclaim** map mode are turned off for now. EarthMC's API currently counts inactive residents toward a town's claim limit, so the calculated maximum is wrong. These will be re-enabled once the API exposes active-resident counts — expected in roughly **2 weeks**. The town info popup shows the actual claimed chunk count in the meantime, and all of the logic is kept in the code so it can be switched straight back on.
 
-This release is available for Minecraft **1.21.11**, **26.1.x**, and **26.2**.
+Available for Minecraft **1.21.11** and **26.1.x**. (26.2 support will follow once Xaero's Minimap updates for 26.2.)
