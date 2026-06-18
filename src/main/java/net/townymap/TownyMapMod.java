@@ -811,14 +811,15 @@ public class TownyMapMod implements ClientModInitializer {
         int screenW = client.getWindow().getScaledWidth();
         int screenH = client.getWindow().getScaledHeight();
         int pad = 2;
-        // Gap below the minimap that clears Xaero's coordinate line; gap above it when we flip up.
-        int belowGap = 22;
-        int aboveGap = 4;
+        // Xaero renders its coordinate line just outside the minimap (below it normally, above it when
+        // the minimap is near the screen bottom). Clear that line plus a small gap on whichever side we
+        // land, so our info never sits on top of the coords.
+        int coordClearance = lineH + 12;
 
         // Prefer below the minimap (under the coords). If that runs off the bottom, flip above it.
-        int top = mapBottom + belowGap;
+        int top = mapBottom + coordClearance;
         if (top + totalH > screenH - pad) {
-            top = mapTop - aboveGap - totalH;
+            top = mapTop - coordClearance - totalH;
         }
         top = Math.max(pad, Math.min(top, screenH - pad - totalH));
 
