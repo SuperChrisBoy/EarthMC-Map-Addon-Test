@@ -116,6 +116,13 @@ jobs:
               issues_url: $issues_url
             }' > modrinth-project-data.json
 
+          # Publish the long project body (feature list) from the repo, when present on this ref.
+          if [[ -f docs/MODRINTH-description.md ]]; then
+            jq --rawfile body docs/MODRINTH-description.md '. + {body: $body}' \
+              modrinth-project-data.json > modrinth-project-data.tmp.json
+            mv modrinth-project-data.tmp.json modrinth-project-data.json
+          fi
+
           curl --fail-with-body \
             -X PATCH "https://api.modrinth.com/v2/project/${MODRINTH_PROJECT_ID}" \
             -H "Authorization: ${MODRINTH_TOKEN}" \

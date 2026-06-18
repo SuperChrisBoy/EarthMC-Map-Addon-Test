@@ -4,7 +4,8 @@ EarthMC Map Addon is a client-side EarthMC map extension for Xaero’s World Map
 
 - Displays EarthMC town claims on Xaero’s World Map.
 - Optional Squaremap background layer for a fuller EarthMC map view.
-- Right-click town info popup with mayor, nation, residents, gold, town size, open/public status, founded date, and overclaim warning.
+- Right-click town info popup with mayor, nation, residents (with inactive-resident count), gold, claimed chunk count, open/public status, and founded date.
+- Info panel under the minimap: your current town & nation, nearby players with live distance (a player who leaves view stays listed in red at their last-known spot briefly), and the nearest town when you're in the wilderness — each line individually toggleable. It anchors below Xaero's own info so it never overlaps.
 - Search for towns, nations, and players from the map UI.
 - Nation search includes capital, king, residents, nation bonus, chunk count, balance, outlaws, and enemies.
 - Player search can show online, offline, hidden, last-known, town, nation, and role information when available.
@@ -18,14 +19,14 @@ EarthMC Map Addon is a client-side EarthMC map extension for Xaero’s World Map
 - Nation capital stars.
 - Real-world country and state border overlays for EarthMC.
 - Configurable border thickness and town fill opacity.
-- Town status map modes, including public towns, overclaimed towns, open towns, towns for sale, and towns without nations.
+- Town status map modes: public towns, open towns, towns for sale, and towns without nations.
 - Optional RGB/custom-color status highlighting.
 - Persistent multi-group chunk counter for planning claims or regions.
 - Right-click drag selection for chunk counting.
 - Minimap town overlays, town names, player dots, chunk grid options, and Squaremap support.
 - Wilderness player alert for nearby outsiders on the minimap.
 - Optional hiding of the minimap in the Nether.
-- Mod Menu settings screen with organized toggles and sliders.
+- Searchable, sectioned Mod Menu settings screen (General / Minimap / World Map / Players / Info Display / Advanced) with a per-row Reset button and right-click to cycle a setting backward.
 - EarthMC-only mode so the addon only activates on servers containing `earthmc.net`.
 - `/townymap refresh` command to manually refresh town claims.
 - Client commands for quickly toggling towns, players, and Squaremap background.
@@ -47,3 +48,5 @@ EarthMC Map Addon is a client-side EarthMC map extension for Xaero’s World Map
 ## Notes
 
 This mod is made specifically for EarthMC and is designed to work with Xaero’s World Map and Xaero’s Minimap. Most data is pulled from EarthMC’s public map/API data and cached or refreshed automatically while playing.
+
+The town "X / max claims" display and the Overclaim map mode are temporarily disabled: EarthMC's API currently counts inactive residents toward a town's claim limit, so the calculated maximum is wrong. They will return once the API exposes active-resident counts (expected in ~2 weeks). The town info popup shows the actual claimed chunk count in the meantime.
