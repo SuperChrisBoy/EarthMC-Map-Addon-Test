@@ -711,20 +711,25 @@ public class TownyMapMod implements ClientModInitializer {
         ctx.fill(x + size - thickness, y, x + size, y + size, color);
     }
 
+    /** name -> {lastX, lastZ, lastSeenMs} for players that have been within 100 blocks. */
+    private static final java.util.Map<String, double[]> nearbyLastKnown = new java.util.HashMap<>();
+
     /**
-     * Renders our info lines (town/nation, nearby players, nearest town) centred at {@code centerX}
-     * starting at {@code topY}, stacked downward. Returns their total pixel height so the caller can
-     * push Xaero's own info lines below ours (no overlap). Per-line config toggles; empty lines auto-hide.
+     * Renders our info lines centred under the minimap: current town + nation, nearby players
+     * (within 100 blocks, with distance), and nearest town when in the wilderness. A player who was
+     * nearby but is no longer visible stays listed in red with their last-known distance until you
+     * are 100 blocks from that spot or one minute passes. Per-line config toggles.
      */
-    public static int renderMinimapInfoLines(DrawContext ctx, int centerX, int topY) {
-        if (!isActiveOnCurrentServer() || config == null || apiClient == null) return 0;
+    public static void renderMinimapInfoLines(DrawContext ctx, int mapX, int mapY, int size) {
+        if (!isActiveOnCurrentServer() || config == null || apiClient == null) return;
         if (!config.infoDisplayTownEnabled && !config.infoDisplayNearbyPlayersEnabled
-                && !config.infoDisplayNearestTownEnabled) return 0;
+                && !config.infoDisplayNearestTownEnabled) return;
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client == null || client.player == null || client.getSession() == null) return 0;
+        if (client == null || client.player == null || client.getSession() == null) return;
 
         double px = client.player.getX();
         double pz = client.player.getZ();
+        long now = System.currentTimeMillis();
         java.util.List<TownData> towns = apiClient.getTowns();
         TownData here = TownHoverOverlay.townAt(px, pz, towns);
         java.util.List<String> lines = new java.util.ArrayList<>();
@@ -745,15 +750,37 @@ public class TownyMapMod implements ClientModInitializer {
 
         if (config.infoDisplayNearbyPlayersEnabled) {
             String self = client.getSession().getUsername();
-            java.util.List<String> near = new java.util.ArrayList<>();
+            java.util.Map<String, Double> current = new java.util.HashMap<>();
             for (var m : apiClient.getPlayers()) {
                 if (m.name() == null || m.name().equalsIgnoreCase(self)) continue;
-                if (Math.hypot(m.x() - px, m.z() - pz) <= 100.0) near.add(m.name());
+                double d = Math.hypot(m.x() - px, m.z() - pz);
+                if (d <= 100.0) {
+                    current.put(m.name(), d);
+                    nearbyLastKnown.put(m.name(), new double[]{m.x(), m.z(), now});
+                }
             }
-            if (!near.isEmpty()) {
-                String names = near.size() <= 4 ? String.join(", ", near)
-                        : String.join(", ", near.subList(0, 4)) + " §7+" + (near.size() - 4);
-                lines.add("§fNearby: §e" + names);
+            java.util.List<String> entries = new java.util.ArrayList<>();
+            current.entrySet().stream()
+                    .sorted(java.util.Map.Entry.comparingByValue())
+                    .forEach(e -> entries.add("§e" + e.getKey() + " §7(" + (int) Math.round(e.getValue()) + "m)"));
+            java.util.Iterator<java.util.Map.Entry<String, double[]>> it = nearbyLastKnown.entrySet().iterator();
+            while (it.hasNext()) {
+                java.util.Map.Entry<String, double[]> e = it.next();
+                if (current.containsKey(e.getKey())) continue;
+                double[] t = e.getValue();
+                double d = Math.hypot(t[0] - px, t[1] - pz);
+                if (d > 100.0 || now - (long) t[2] > 60_000L) {
+                    it.remove();
+                    continue;
+                }
+                entries.add("§c" + e.getKey() + " §7(~" + (int) Math.round(d) + "m)");
+            }
+            if (!entries.isEmpty()) {
+                int cap = 5;
+                String joined = entries.size() <= cap
+                        ? String.join("§f, ", entries)
+                        : String.join("§f, ", entries.subList(0, cap)) + " §7+" + (entries.size() - cap);
+                lines.add("§fNearby: " + joined);
             }
         }
 
@@ -769,15 +796,15 @@ public class TownyMapMod implements ClientModInitializer {
             }
         }
 
-        if (lines.isEmpty()) return 0;
+        if (lines.isEmpty()) return;
+        int centerX = mapX + size / 2;
         int lineH = client.textRenderer.fontHeight + 1;
-        int yy = topY;
+        int yy = mapY + size + 6;
         for (String line : lines) {
             int w = client.textRenderer.getWidth(line);
             ctx.drawText(client.textRenderer, line, centerX - w / 2, yy, 0xFFFFFFFF, true);
             yy += lineH;
         }
-        return lines.size() * lineH;
     }
 
     private static boolean waypointRedrawErrorLogged = false;
