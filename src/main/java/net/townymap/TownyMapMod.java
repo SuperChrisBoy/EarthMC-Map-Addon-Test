@@ -720,12 +720,12 @@ public class TownyMapMod implements ClientModInitializer {
      * nearby but is no longer visible stays listed in red with their last-known distance until you
      * are 100 blocks from that spot or one minute passes. Per-line config toggles.
      */
-    public static void renderMinimapInfoLines(DrawContext ctx, int mapX, int mapY, int size) {
-        if (!isActiveOnCurrentServer() || config == null || apiClient == null) return;
+    public static int renderMinimapInfoLines(DrawContext ctx, int centerX, int topY) {
+        if (!isActiveOnCurrentServer() || config == null || apiClient == null) return 0;
         if (!config.infoDisplayTownEnabled && !config.infoDisplayNearbyPlayersEnabled
-                && !config.infoDisplayNearestTownEnabled) return;
+                && !config.infoDisplayNearestTownEnabled) return 0;
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client == null || client.player == null || client.getSession() == null) return;
+        if (client == null || client.player == null || client.getSession() == null) return 0;
 
         double px = client.player.getX();
         double pz = client.player.getZ();
@@ -800,15 +800,15 @@ public class TownyMapMod implements ClientModInitializer {
             }
         }
 
-        if (lines.isEmpty()) return;
-        int centerX = mapX + size / 2;
+        if (lines.isEmpty()) return 0;
         int lineH = client.textRenderer.fontHeight + 1;
-        int yy = mapY + size + 6;
+        int yy = topY;
         for (String line : lines) {
             int w = client.textRenderer.getWidth(line);
             ctx.drawText(client.textRenderer, line, centerX - w / 2, yy, 0xFFFFFFFF, true);
             yy += lineH;
         }
+        return lines.size() * lineH;
     }
 
     private static boolean waypointRedrawErrorLogged = false;
