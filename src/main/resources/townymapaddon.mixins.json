@@ -4,6 +4,7 @@
   "package": "net.townymap.mixin",
   "compatibilityLevel": "JAVA_21",
   "client": [
+    "CyclingButtonWidgetAccessor",
     "MixinCommonMinimapRenderer",
     "MixinGuiMap",
     "MixinMinimapModuleRenderer",

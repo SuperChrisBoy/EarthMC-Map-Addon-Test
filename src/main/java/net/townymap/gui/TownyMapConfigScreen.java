@@ -1,18 +1,25 @@
 package net.townymap.gui;
 
+import net.minecraft.client.gui.Click;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.ClickableWidget;
 import net.minecraft.client.gui.widget.CyclingButtonWidget;
 import net.minecraft.client.gui.widget.SliderWidget;
+import net.minecraft.client.sound.PositionedSoundInstance;
 import net.minecraft.screen.ScreenTexts;
+import net.minecraft.sound.SoundEvents;
 import net.minecraft.text.Text;
 import net.townymap.TownyMapConfig;
 import net.townymap.TownyMapMod;
+import net.townymap.mixin.CyclingButtonWidgetAccessor;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.IntConsumer;
 
 public class TownyMapConfigScreen extends Screen {
 
@@ -22,14 +29,24 @@ public class TownyMapConfigScreen extends Screen {
     private static final int CONTROL_WIDTH = 232;
     private static final int VIEW_TOP = 58;
     private static final int FOOTER_HEIGHT = 50;
-    private static final int CONTENT_HEIGHT = 600;
     private static final int PANEL_BG = 0xE80E0F12;
     private static final int PANEL_BORDER = 0xCC3A3D42;
     private static final int PANEL_ACCENT = 0xFF4FA37A;
 
+    // Auto-layout metrics (content-space, before scroll offset).
+    private static final int ROW_H = 24;            // height allotted to each control row
+    private static final int SECTION_HEADER_H = 18; // header label + underline + gap to first control
+    private static final int SECTION_GAP = 12;      // extra space above each header after the first
+
     private final Screen parent;
     private final List<PositionedWidget> scrollingWidgets = new ArrayList<>();
+    private final List<Section> sections = new ArrayList<>();
     private int scrollOffset;
+
+    // Running cursor + derived totals, populated during init().
+    private int cursorY;
+    private int controlX;
+    private int contentHeight;
 
     public TownyMapConfigScreen(Screen parent) {
         super(Text.literal("EarthMC Map Addon Settings"));
@@ -40,135 +57,107 @@ public class TownyMapConfigScreen extends Screen {
     protected void init() {
         TownyMapConfig cfg = TownyMapMod.getConfig();
         scrollingWidgets.clear();
+        sections.clear();
+        controlX = this.width / 2 - CONTROL_WIDTH / 2;
+        cursorY = 0;
+
+        section("General");
+        control(onOff("EarthMC Only", cfg.earthmcOnly, v -> { cfg.earthmcOnly = v; cfg.save(); }));
+
+        section("Minimap");
+        control(onOff("Minimap Extensions", cfg.minimapExtensionsEnabled,
+                v -> { cfg.minimapExtensionsEnabled = v; cfg.save(); }));
+        control(cycle("Minimap Town Names", cfg.minimapTownNameMode, new int[]{0, 1, 2, 3},
+                TownyMapConfigScreen::minimapTownNameModeText,
+                v -> { cfg.minimapTownNameMode = v; cfg.minimapTownNamesEnabled = v != 0; cfg.save(); }));
+        control(onOff("Players On Minimap", cfg.minimapPlayersEnabled,
+                v -> { cfg.minimapPlayersEnabled = v; cfg.save(); }));
+        control(cycle("Minimap Chunk Grid", cfg.minimapChunkGridMode, new int[]{0, 1, 2},
+                TownyMapConfigScreen::minimapChunkGridModeText,
+                v -> { cfg.minimapChunkGridMode = v; cfg.save(); }));
+        control(onOff("Wilderness Player Alert", cfg.minimapNationAlertEnabled,
+                v -> { cfg.minimapNationAlertEnabled = v; cfg.save(); }));
+        control(onOff("Hide Minimap In Nether", cfg.hideMinimapInNether,
+                v -> { cfg.hideMinimapInNether = v; cfg.save(); }));
+
+        section("World Map");
+        control(onOff("Town Borders", cfg.townsEnabled, v -> { cfg.townsEnabled = v; cfg.save(); }));
+        control(onOff("Squaremap Background", cfg.squaremapBackgroundEnabled,
+                v -> { cfg.squaremapBackgroundEnabled = v; cfg.save(); }));
+        control(onOff("Nation Capital Stars", cfg.nationStarsEnabled,
+                v -> { cfg.nationStarsEnabled = v; cfg.save(); }));
+        control(cycle("Real Borders", cfg.borderOverlayMode, new int[]{0, 1, 2},
+                TownyMapConfigScreen::borderModeText,
+                v -> { cfg.borderOverlayMode = v; cfg.save(); }));
+        control(new BorderThicknessSlider(controlX, 0, CONTROL_WIDTH, 20, cfg));
+        control(onOff("Map Mode RGB", cfg.statusHighlightRainbow,
+                v -> { cfg.statusHighlightRainbow = v; cfg.save(); }));
+        control(new StatusHighlightHueSlider(controlX, 0, CONTROL_WIDTH, 20, cfg));
+
+        section("Players");
+        control(onOff("Online Players", cfg.playersEnabled, v -> { cfg.playersEnabled = v; cfg.save(); }));
+        control(onOff("Player Names", cfg.showPlayerNames, v -> { cfg.showPlayerNames = v; cfg.save(); }));
+        control(new PlayerNameRangeSlider(controlX, 0, CONTROL_WIDTH, 20, cfg));
+        control(new PlayerAffiliationRangeSlider(controlX, 0, CONTROL_WIDTH, 20, cfg));
+
+        section("Info Display");
+        control(onOff("Current Town & Nation", cfg.infoDisplayTownEnabled,
+                v -> { cfg.infoDisplayTownEnabled = v; cfg.save(); }));
+        control(onOff("Nearby Players", cfg.infoDisplayNearbyPlayersEnabled,
+                v -> { cfg.infoDisplayNearbyPlayersEnabled = v; cfg.save(); }));
+        control(onOff("Nearest Town (Wilderness)", cfg.infoDisplayNearestTownEnabled,
+                v -> { cfg.infoDisplayNearestTownEnabled = v; cfg.save(); }));
+
+        section("Advanced");
+        control(onOff("Custom Overlays", cfg.customOverlaysEnabled, v -> {
+            cfg.customOverlaysEnabled = v;
+            cfg.save();
+            if (v) net.townymap.integration.CustomOverlayManager.reload();
+        }));
+        control(ButtonWidget.builder(Text.literal("Open Overlays Folder"),
+                        btn -> net.townymap.integration.CustomOverlayManager.openFolder())
+                .dimensions(controlX, 0, CONTROL_WIDTH, 20).build());
+        control(ButtonWidget.builder(Text.literal("Reload Overlays"),
+                        btn -> net.townymap.integration.CustomOverlayManager.reload())
+                .dimensions(controlX, 0, CONTROL_WIDTH, 20).build());
+
+        contentHeight = cursorY + 8;
         scrollOffset = Math.min(scrollOffset, maxScroll());
-        int cx = this.width / 2;
-        int controlX = cx - CONTROL_WIDTH / 2;
-
-        addScrollingWidget(
-            CyclingButtonWidget.onOffBuilder(cfg.earthmcOnly)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("EarthMC Only"),
-                       (btn, val) -> { cfg.earthmcOnly = val; cfg.save(); }),
-                18);
-
-        addScrollingWidget(
-            CyclingButtonWidget.onOffBuilder(cfg.townsEnabled)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("Town Borders"),
-                       (btn, val) -> { cfg.townsEnabled = val; cfg.save(); }),
-                74);
-
-        addScrollingWidget(
-            CyclingButtonWidget.onOffBuilder(cfg.squaremapBackgroundEnabled)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("Squaremap Background"),
-                       (btn, val) -> { cfg.squaremapBackgroundEnabled = val; cfg.save(); }),
-                98);
-
-        addScrollingWidget(
-            CyclingButtonWidget.onOffBuilder(cfg.nationStarsEnabled)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("Nation Capital Stars"),
-                       (btn, val) -> { cfg.nationStarsEnabled = val; cfg.save(); }),
-                122);
-
-        addScrollingWidget(
-            CyclingButtonWidget.builder(TownyMapConfigScreen::borderModeText, cfg.borderOverlayMode)
-                .values(0, 1, 2)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("Real Borders"),
-                       (btn, val) -> { cfg.borderOverlayMode = val; cfg.save(); }),
-                146);
-
-        addScrollingWidget(new BorderThicknessSlider(controlX, 0, CONTROL_WIDTH, 20, cfg), 170);
-
-        addScrollingWidget(
-            CyclingButtonWidget.onOffBuilder(cfg.statusHighlightRainbow)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("Map Mode RGB"),
-                       (btn, val) -> { cfg.statusHighlightRainbow = val; cfg.save(); }),
-                194);
-
-        addScrollingWidget(new StatusHighlightHueSlider(controlX, 0, CONTROL_WIDTH, 20, cfg), 218);
-
-        addScrollingWidget(
-            CyclingButtonWidget.onOffBuilder(cfg.playersEnabled)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("Online Players"),
-                       (btn, val) -> { cfg.playersEnabled = val; cfg.save(); }),
-                242);
-
-        addScrollingWidget(
-            CyclingButtonWidget.onOffBuilder(cfg.showPlayerNames)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("Player Names"),
-                       (btn, val) -> { cfg.showPlayerNames = val; cfg.save(); }),
-                266);
-
-        addScrollingWidget(new PlayerNameRangeSlider(controlX, 0, CONTROL_WIDTH, 20, cfg), 290);
-        addScrollingWidget(new PlayerAffiliationRangeSlider(controlX, 0, CONTROL_WIDTH, 20, cfg), 314);
-
-        addScrollingWidget(
-            CyclingButtonWidget.onOffBuilder(cfg.minimapExtensionsEnabled)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("Minimap Extensions"),
-                       (btn, val) -> { cfg.minimapExtensionsEnabled = val; cfg.save(); }),
-                370);
-
-        addScrollingWidget(
-            CyclingButtonWidget.builder(TownyMapConfigScreen::minimapTownNameModeText, cfg.minimapTownNameMode)
-                .values(0, 1, 2, 3)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("Minimap Town Names"),
-                       (btn, val) -> {
-                           cfg.minimapTownNameMode = val;
-                           cfg.minimapTownNamesEnabled = val != 0;
-                           cfg.save();
-                       }),
-                394);
-
-        addScrollingWidget(
-            CyclingButtonWidget.onOffBuilder(cfg.minimapPlayersEnabled)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("Players On Minimap"),
-                       (btn, val) -> { cfg.minimapPlayersEnabled = val; cfg.save(); }),
-                418);
-
-        addScrollingWidget(
-            CyclingButtonWidget.builder(TownyMapConfigScreen::minimapChunkGridModeText, cfg.minimapChunkGridMode)
-                .values(0, 1, 2)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("Minimap Chunk Grid"),
-                       (btn, val) -> { cfg.minimapChunkGridMode = val; cfg.save(); }),
-                442);
-
-        addScrollingWidget(
-            CyclingButtonWidget.onOffBuilder(cfg.minimapNationAlertEnabled)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("Wilderness Player Alert"),
-                       (btn, val) -> { cfg.minimapNationAlertEnabled = val; cfg.save(); }),
-                466);
-
-        addScrollingWidget(
-            CyclingButtonWidget.onOffBuilder(cfg.hideMinimapInNether)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("Hide Minimap In Nether"),
-                       (btn, val) -> { cfg.hideMinimapInNether = val; cfg.save(); }),
-                490);
-
-        addScrollingWidget(
-            CyclingButtonWidget.onOffBuilder(cfg.customOverlaysEnabled)
-                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal("Custom Overlays"),
-                       (btn, val) -> {
-                           cfg.customOverlaysEnabled = val;
-                           cfg.save();
-                           if (val) net.townymap.integration.CustomOverlayManager.reload();
-                       }),
-                514);
-
-        addScrollingWidget(
-            ButtonWidget.builder(Text.literal("Open Overlays Folder"),
-                       btn -> net.townymap.integration.CustomOverlayManager.openFolder())
-                .dimensions(controlX, 0, CONTROL_WIDTH, 20).build(),
-                538);
-
-        addScrollingWidget(
-            ButtonWidget.builder(Text.literal("Reload Overlays"),
-                       btn -> net.townymap.integration.CustomOverlayManager.reload())
-                .dimensions(controlX, 0, CONTROL_WIDTH, 20).build(),
-                562);
 
         this.addDrawableChild(
             ButtonWidget.builder(ScreenTexts.DONE, btn -> this.close())
                 .dimensions(controlX, this.height - 30, CONTROL_WIDTH, 20)
                 .build());
         updateScrollingWidgetPositions();
+    }
+
+    /** Record a section header at the cursor and advance past it. */
+    private void section(String label) {
+        if (!sections.isEmpty()) cursorY += SECTION_GAP;
+        sections.add(new Section(label, cursorY));
+        cursorY += SECTION_HEADER_H;
+    }
+
+    /** Place a control at the cursor and advance one row. */
+    private void control(ClickableWidget widget) {
+        addScrollingWidget(widget, cursorY);
+        cursorY += ROW_H;
+    }
+
+    private CyclingButtonWidget<Boolean> onOff(String label, boolean value, Consumer<Boolean> onChange) {
+        return CyclingButtonWidget.onOffBuilder(value)
+                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal(label),
+                       (btn, val) -> onChange.accept(val));
+    }
+
+    private CyclingButtonWidget<Integer> cycle(String label, int value, int[] values,
+                                               Function<Integer, Text> valueToText, IntConsumer onChange) {
+        Integer[] boxed = new Integer[values.length];
+        for (int i = 0; i < values.length; i++) boxed[i] = values[i];
+        return CyclingButtonWidget.builder(valueToText, value)
+                .values(boxed)
+                .build(controlX, 0, CONTROL_WIDTH, 20, Text.literal(label),
+                       (btn, val) -> onChange.accept(val));
     }
 
     @Override
@@ -182,6 +171,27 @@ public class TownyMapConfigScreen extends Screen {
         drawSections(ctx);
         drawScrollbar(ctx);
         drawScrollFades(ctx);
+    }
+
+    @Override
+    public boolean mouseClicked(Click click, boolean doubled) {
+        // Right-click a cycling button to step it backward (mirrors right-click on the in-game map buttons).
+        if (click.button() == 1) {
+            double mx = click.x();
+            double my = click.y();
+            for (PositionedWidget entry : scrollingWidgets) {
+                ClickableWidget w = entry.widget();
+                if (w.visible && w.isMouseOver(mx, my) && w instanceof CyclingButtonWidget<?> cycling) {
+                    ((CyclingButtonWidgetAccessor) cycling).townymap$cycle(-1);
+                    if (this.client != null) {
+                        this.client.getSoundManager().play(
+                                PositionedSoundInstance.ui(SoundEvents.UI_BUTTON_CLICK, 1.0F));
+                    }
+                    return true;
+                }
+            }
+        }
+        return super.mouseClicked(click, doubled);
     }
 
     @Override
@@ -223,10 +233,9 @@ public class TownyMapConfigScreen extends Screen {
     }
 
     private void drawSections(DrawContext ctx) {
-        drawSection(ctx, "General", 0);
-        drawSection(ctx, "World Map", 56);
-        drawSection(ctx, "Players", 224);
-        drawSection(ctx, "Minimap", 352);
+        for (Section s : sections) {
+            drawSection(ctx, s.label(), s.contentY());
+        }
     }
 
     private void drawSection(DrawContext ctx, String label, int contentY) {
@@ -245,7 +254,7 @@ public class TownyMapConfigScreen extends Screen {
         int trackTop = bodyTop();
         int trackBottom = bodyBottom();
         int trackHeight = trackBottom - trackTop;
-        int thumbHeight = Math.max(24, trackHeight * trackHeight / CONTENT_HEIGHT);
+        int thumbHeight = Math.max(24, trackHeight * trackHeight / Math.max(1, contentHeight));
         int thumbY = trackTop + (trackHeight - thumbHeight) * scrollOffset / maxScroll;
         int x = panelLeft() + PANEL_WIDTH - 8;
         ctx.fill(x, trackTop + 4, x + 2, trackBottom - 4, 0x663A3D42);
@@ -281,7 +290,7 @@ public class TownyMapConfigScreen extends Screen {
     }
 
     private int maxScroll() {
-        return Math.max(0, CONTENT_HEIGHT - (bodyBottom() - bodyTop()));
+        return Math.max(0, contentHeight - (bodyBottom() - bodyTop()));
     }
 
     private static Text borderModeText(Integer mode) {
@@ -314,6 +323,8 @@ public class TownyMapConfigScreen extends Screen {
     }
 
     private record PositionedWidget(ClickableWidget widget, int contentY) {}
+
+    private record Section(String label, int contentY) {}
 
     private static final class PlayerNameRangeSlider extends SliderWidget {
         private final TownyMapConfig config;
