@@ -720,7 +720,7 @@ public class TownyMapMod implements ClientModInitializer {
      * nearby but is no longer visible stays listed in red with their last-known distance until you
      * are 100 blocks from that spot or one minute passes. Per-line config toggles.
      */
-    public static int renderMinimapInfoLines(DrawContext ctx, int centerX, int topY) {
+    public static int renderMinimapInfoLines(DrawContext ctx, int mapCenterX, int mapTop, int mapBottom) {
         if (!isActiveOnCurrentServer() || config == null || apiClient == null) return 0;
         if (!config.infoDisplayTownEnabled && !config.infoDisplayNearbyPlayersEnabled
                 && !config.infoDisplayNearestTownEnabled) return 0;
@@ -802,13 +802,38 @@ public class TownyMapMod implements ClientModInitializer {
 
         if (lines.isEmpty()) return 0;
         int lineH = client.textRenderer.fontHeight + 1;
-        int yy = topY;
+        int totalH = lines.size() * lineH;
+
+        // Block width = widest line, so we can center the column and clamp it as one unit.
+        int maxW = 0;
+        for (String line : lines) maxW = Math.max(maxW, client.textRenderer.getWidth(line));
+
+        int screenW = client.getWindow().getScaledWidth();
+        int screenH = client.getWindow().getScaledHeight();
+        int pad = 2;
+        // Gap below the minimap that clears Xaero's coordinate line; gap above it when we flip up.
+        int belowGap = 22;
+        int aboveGap = 4;
+
+        // Prefer below the minimap (under the coords). If that runs off the bottom, flip above it.
+        int top = mapBottom + belowGap;
+        if (top + totalH > screenH - pad) {
+            top = mapTop - aboveGap - totalH;
+        }
+        top = Math.max(pad, Math.min(top, screenH - pad - totalH));
+
+        // Center the column on the minimap, then clamp the whole block onto the screen.
+        int blockLeft = mapCenterX - maxW / 2;
+        blockLeft = Math.max(pad, Math.min(blockLeft, screenW - pad - maxW));
+        int blockCenterX = blockLeft + maxW / 2;
+
+        int yy = top;
         for (String line : lines) {
             int w = client.textRenderer.getWidth(line);
-            ctx.drawText(client.textRenderer, line, centerX - w / 2, yy, 0xFFFFFFFF, true);
+            ctx.drawText(client.textRenderer, line, blockCenterX - w / 2, yy, 0xFFFFFFFF, true);
             yy += lineH;
         }
-        return lines.size() * lineH;
+        return totalH;
     }
 
     private static boolean waypointRedrawErrorLogged = false;

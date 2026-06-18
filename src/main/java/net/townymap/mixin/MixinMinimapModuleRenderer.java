@@ -75,9 +75,10 @@ public class MixinMinimapModuleRenderer {
         // Draw after renderOutsidePip so our indicator composites on top of Xaero's arrow
         TownyMapMod.renderMinimapPlayerIndicator(drawContext, session, bounds.x(), bounds.y(), bounds.size());
         TownyMapMod.renderMinimapCompassDirections(drawContext, session, bounds.x(), bounds.y(), bounds.size());
-        // Anchor our info to the minimap itself (so it moves with it), below Xaero's coordinate line.
+        // Anchor our info to the minimap itself (so it moves with it). The method places the block
+        // below Xaero's coordinate line, or flips it above and clamps to the screen near the edges.
         TownyMapMod.renderMinimapInfoLines(drawContext,
-                bounds.x() + bounds.size() / 2, bounds.y() + bounds.size() + 30);
+                bounds.x() + bounds.size() / 2, bounds.y(), bounds.y() + bounds.size());
     }
 
     private static MinimapBounds actualMinimapBounds(MinimapSession session, int x, int y,
