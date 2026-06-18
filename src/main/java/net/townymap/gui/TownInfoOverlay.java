@@ -215,10 +215,14 @@ public final class TownInfoOverlay {
 
         // Mayor name → clickable player search.
         lines.add(InfoRow.link("§7Mayor: §f§l", d.mayor(), "", "player"));
-        int possibleChunks = possibleTownChunks(d, nationDetails);
-        boolean overLimit = d.isOverClaimed() || d.numChunks() > possibleChunks;
-        String sizeColor = overLimit ? "§c§l" : "§f§l";
-        lines.add(InfoRow.text("§7Size: " + sizeColor + d.numChunks() + " / " + possibleChunks + " chunks"));
+        // Show only the town's actual claimed chunks. The "X / max" ("out of") display and the
+        // over-limit highlight depend on EarthMC's claim max, which is wrong until the API exposes
+        // active-resident counts (inactive residents still inflate it). Kept commented for reuse:
+        //   int possibleChunks = possibleTownChunks(d, nationDetails);
+        //   boolean overLimit = d.isOverClaimed() || d.numChunks() > possibleChunks;
+        //   String sizeColor = overLimit ? "§c§l" : "§f§l";
+        //   lines.add(InfoRow.text("§7Size: " + sizeColor + d.numChunks() + " / " + possibleChunks + " chunks"));
+        lines.add(InfoRow.text("§7Size: §f§l" + d.numChunks() + " chunks"));
         if (!d.founded().isEmpty()) {
             lines.add(InfoRow.text("§7Founded: §f§l" + d.founded()));
         }

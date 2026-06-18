@@ -832,31 +832,34 @@ public final class TownyMinimapOverlay {
         double cos = Math.cos(angle);
         double centerX = mapX + size / 2.0;
         double centerY = mapY + size / 2.0;
+        // Match the user's chosen Xaero minimap frame colour (the ring around the minimap).
+        int accent = 0xFF000000 | (TownyMapMod.minimapFrameColor() & 0x00FFFFFF);
 
-        drawCompassLetterOnBorder(ctx, client, "N", centerX, centerY, sin, -cos, size);
-        drawCompassLetterOnBorder(ctx, client, "E", centerX, centerY, cos, sin, size);
-        drawCompassLetterOnBorder(ctx, client, "S", centerX, centerY, -sin, cos, size);
-        drawCompassLetterOnBorder(ctx, client, "W", centerX, centerY, -cos, -sin, size);
+        drawCompassLetterOnBorder(ctx, client, "N", centerX, centerY, sin, -cos, size, accent);
+        drawCompassLetterOnBorder(ctx, client, "E", centerX, centerY, cos, sin, size, accent);
+        drawCompassLetterOnBorder(ctx, client, "S", centerX, centerY, -sin, cos, size, accent);
+        drawCompassLetterOnBorder(ctx, client, "W", centerX, centerY, -cos, -sin, size, accent);
         ctx.extractDeferredElements(0, 0, 0.0F);
     }
 
     private static void drawCompassLetterOnBorder(GuiGraphicsExtractor ctx, Minecraft client, String letter,
                                                   double centerX, double centerY,
-                                                  double dirX, double dirY, int size) {
+                                                  double dirX, double dirY, int size, int accent) {
         double maxComponent = Math.max(Math.abs(dirX), Math.abs(dirY));
         if (maxComponent < 0.0001) return;
         double edgeDistance = size / 2.0 + 1.0;
         double scale = edgeDistance / maxComponent;
-        drawCompassLetter(ctx, client, letter, centerX + dirX * scale, centerY + dirY * scale);
+        drawCompassLetter(ctx, client, letter, centerX + dirX * scale, centerY + dirY * scale, accent);
     }
 
     private static void drawCompassLetter(GuiGraphicsExtractor ctx, Minecraft client, String letter,
-                                          double centerX, double centerY) {
+                                          double centerX, double centerY, int accent) {
         int width = client.font.width(letter);
         int height = client.font.lineHeight;
         int x = (int) Math.round(centerX - width / 2.0);
         int y = (int) Math.round(centerY - height / 2.0);
-        ctx.text(client.font, letter, x + 1, y + 1, 0xFFFF5ACD, false);
+        // Coloured drop-shadow in the chosen frame colour, white letter on top for legibility.
+        ctx.text(client.font, letter, x + 1, y + 1, accent, false);
         ctx.text(client.font, letter, x, y, 0xFFFFFFFF, false);
     }
 

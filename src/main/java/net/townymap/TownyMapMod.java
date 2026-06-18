@@ -343,9 +343,24 @@ public class TownyMapMod implements ClientModInitializer {
                 config.borderOverlayMode == 0 ? ChatFormatting.RED : ChatFormatting.GREEN);
     }
 
+    // Selectable map modes. "Overclaim" (2) is omitted until EarthMC's API exposes active-resident
+    // counts — its claim max is wrong without them, so over-claim detection misfires. The case is kept
+    // (commented) in the highlight switch and labels so it can be re-enabled later.
+    private static final int[] STATUS_MODES = {0, 1, 3, 4, 5};
+
+    /** Advance the map-mode value to the next/previous selectable mode, skipping disabled ones. */
+    public static int nextStatusMode(int current, boolean backward) {
+        int idx = 0;
+        for (int i = 0; i < STATUS_MODES.length; i++) {
+            if (STATUS_MODES[i] == current) { idx = i; break; }
+        }
+        idx = Math.floorMod(idx + (backward ? -1 : 1), STATUS_MODES.length);
+        return STATUS_MODES[idx];
+    }
+
     public static void cycleTownStatusOverlayMode() {
         if (!canUseKeybindAction()) return;
-        config.townStatusOverlayMode = (config.townStatusOverlayMode + 1) % 6;
+        config.townStatusOverlayMode = nextStatusMode(config.townStatusOverlayMode, false);
         config.save();
         sendFeedback("Map mode: " + townStatusModeLabel(config.townStatusOverlayMode),
                 config.townStatusOverlayMode == 0 ? ChatFormatting.RED : ChatFormatting.GREEN);
@@ -712,7 +727,7 @@ public class TownyMapMod implements ClientModInitializer {
         }
     }
 
-    private static int minimapFrameColor() {
+    public static int minimapFrameColor() {
         long now = System.currentTimeMillis();
         if (now - minimapFrameColorReadAtMs < 1_000L) return minimapFrameColor;
         minimapFrameColorReadAtMs = now;

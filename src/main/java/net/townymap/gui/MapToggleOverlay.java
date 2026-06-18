@@ -7,6 +7,7 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.network.chat.Style;
 import net.minecraft.network.chat.Component;
 import net.townymap.TownyMapConfig;
+import net.townymap.TownyMapMod;
 
 public final class MapToggleOverlay {
 
@@ -72,7 +73,7 @@ public final class MapToggleOverlay {
             switch (row) {
                 case 0 -> config.squaremapBackgroundEnabled = !config.squaremapBackgroundEnabled;
                 case 1 -> config.borderOverlayMode = (config.borderOverlayMode + 1) % 3;
-                case 2 -> config.townStatusOverlayMode = (config.townStatusOverlayMode + 1) % 6;
+                case 2 -> config.townStatusOverlayMode = TownyMapMod.nextStatusMode(config.townStatusOverlayMode, false);
                 case 3 -> config.chunkGridEnabled = !config.chunkGridEnabled;
                 case 4 -> {
                     if (config.chunkCounterEnabled) ChunkCounterOverlay.flushSelection();

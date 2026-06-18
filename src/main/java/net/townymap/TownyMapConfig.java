@@ -123,7 +123,8 @@ public class TownyMapConfig {
             borderOverlayMode = 0;
             changed = true;
         }
-        if (townStatusOverlayMode < 0 || townStatusOverlayMode > 5) {
+        // Mode 2 (overclaim) is disabled until the API exposes active-resident counts; coerce it off.
+        if (townStatusOverlayMode < 0 || townStatusOverlayMode > 5 || townStatusOverlayMode == 2) {
             townStatusOverlayMode = 0;
             changed = true;
         }
