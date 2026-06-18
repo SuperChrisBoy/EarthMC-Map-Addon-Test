@@ -776,38 +776,14 @@ public class TownyMapMod implements ClientModInitializer {
                 entries.add("§c" + e.getKey() + " §7(~" + (int) Math.round(d) + "m)");
             }
             if (!entries.isEmpty()) {
-                int cap = 12;
-                java.util.List<String> display = entries;
+                // One player per line (a column); cap the list and summarise the rest.
+                int cap = 5;
+                int shown = Math.min(cap, entries.size());
+                for (int i = 0; i < shown; i++) {
+                    lines.add(i == 0 ? "§fNearby: " + entries.get(i) : entries.get(i));
+                }
                 if (entries.size() > cap) {
-                    display = new java.util.ArrayList<>(entries.subList(0, cap));
-                    display.add("§7+" + (entries.size() - cap) + " more");
-                }
-                // Wrap players across rows (~minimap width each) instead of one long line.
-                String prefix = "§fNearby: ";
-                int prefixW = client.textRenderer.getWidth(prefix);
-                int sepW = client.textRenderer.getWidth(", ");
-                int maxRowW = Math.max(160, size + 30);
-                java.util.List<String> rows = new java.util.ArrayList<>();
-                StringBuilder cur = new StringBuilder();
-                int curW = 0;
-                for (String entry : display) {
-                    int ew = client.textRenderer.getWidth(entry);
-                    int limit = maxRowW - (rows.isEmpty() ? prefixW : 0);
-                    if (cur.length() > 0 && curW + sepW + ew > limit) {
-                        rows.add(cur.toString());
-                        cur.setLength(0);
-                        curW = 0;
-                    }
-                    if (cur.length() > 0) {
-                        cur.append("§f, ");
-                        curW += sepW;
-                    }
-                    cur.append(entry);
-                    curW += ew;
-                }
-                if (cur.length() > 0) rows.add(cur.toString());
-                for (int i = 0; i < rows.size(); i++) {
-                    lines.add(i == 0 ? prefix + rows.get(i) : rows.get(i));
+                    lines.add("§7+" + (entries.size() - cap) + " more");
                 }
             }
         }
