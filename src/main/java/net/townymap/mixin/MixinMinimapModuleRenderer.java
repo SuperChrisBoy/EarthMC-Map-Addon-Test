@@ -75,6 +75,9 @@ public class MixinMinimapModuleRenderer {
         // Draw after renderOutsidePip so our indicator composites on top of Xaero's arrow
         TownyMapMod.renderMinimapPlayerIndicator(drawContext, session, bounds.x(), bounds.y(), bounds.size());
         TownyMapMod.renderMinimapCompassDirections(drawContext, session, bounds.x(), bounds.y(), bounds.size());
+        // Our info lines (town/nation, nearby players, nearest town), anchored under the minimap.
+        TownyMapMod.renderMinimapInfoLines(drawContext,
+                bounds.x() + bounds.size() / 2, bounds.y(), bounds.y() + bounds.size());
     }
 
     private static MinimapBounds actualMinimapBounds(MinimapSession session, int x, int y,

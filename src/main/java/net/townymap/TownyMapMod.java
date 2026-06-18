@@ -676,6 +676,129 @@ public class TownyMapMod implements ClientModInitializer {
         }
     }
 
+    // Name → {lastX, lastZ, lastSeenMs} for players who were recently nearby (info-panel red tracking).
+    private static final java.util.Map<String, double[]> nearbyLastKnown = new java.util.HashMap<>();
+
+    /**
+     * Renders our info lines centred under the minimap: current town + nation, nearby players
+     * (within 100 blocks, with distance), and nearest town when in the wilderness. A player who was
+     * nearby but is no longer visible stays listed in red with their last-known distance until you
+     * are 100 blocks from that spot or one minute passes. Per-line config toggles.
+     */
+    public static int renderMinimapInfoLines(GuiGraphicsExtractor ctx, int mapCenterX, int mapTop, int mapBottom) {
+        if (!isActiveOnCurrentServer() || config == null || apiClient == null) return 0;
+        if (!config.infoDisplayTownEnabled && !config.infoDisplayNearbyPlayersEnabled
+                && !config.infoDisplayNearestTownEnabled) return 0;
+        Minecraft client = Minecraft.getInstance();
+        if (client == null || client.player == null || client.getUser() == null) return 0;
+
+        double px = client.player.getX();
+        double pz = client.player.getZ();
+        long now = System.currentTimeMillis();
+        java.util.List<TownData> towns = apiClient.getTowns();
+        TownData here = TownHoverOverlay.townAt(px, pz, towns);
+        java.util.List<String> lines = new java.util.ArrayList<>();
+
+        if (config.infoDisplayTownEnabled) {
+            if (here != null) {
+                String key = townKey(here.name());
+                requestTownDetails(here.name(), key);
+                TownPopupData details = townDetailsCache.get(key);
+                String nation = details != null ? details.nationName() : null;
+                lines.add(nation != null && !nation.isBlank()
+                        ? "§fTown: " + here.name() + " §7(" + nation + ")"
+                        : "§fTown: " + here.name());
+            } else {
+                lines.add("§7Wilderness");
+            }
+        }
+
+        if (config.infoDisplayNearbyPlayersEnabled) {
+            String self = client.getUser().getName();
+            java.util.Map<String, Double> current = new java.util.HashMap<>();
+            for (var m : apiClient.getPlayers()) {
+                if (m.name() == null || m.name().equalsIgnoreCase(self)) continue;
+                double d = Math.hypot(m.x() - px, m.z() - pz);
+                if (d <= 100.0) {
+                    current.put(m.name(), d);
+                    nearbyLastKnown.put(m.name(), new double[]{m.x(), m.z(), now});
+                }
+            }
+            java.util.List<String> entries = new java.util.ArrayList<>();
+            current.entrySet().stream()
+                    .sorted(java.util.Map.Entry.comparingByValue())
+                    .forEach(e -> entries.add("§e" + e.getKey() + " §7(" + (int) Math.round(e.getValue()) + "m)"));
+            java.util.Iterator<java.util.Map.Entry<String, double[]>> it = nearbyLastKnown.entrySet().iterator();
+            while (it.hasNext()) {
+                java.util.Map.Entry<String, double[]> e = it.next();
+                if (current.containsKey(e.getKey())) continue;
+                double[] t = e.getValue();
+                double d = Math.hypot(t[0] - px, t[1] - pz);
+                if (d > 100.0 || now - (long) t[2] > 60_000L) {
+                    it.remove();
+                    continue;
+                }
+                entries.add("§c" + e.getKey() + " §7(~" + (int) Math.round(d) + "m)");
+            }
+            if (!entries.isEmpty()) {
+                // One player per line (a column); cap the list and summarise the rest.
+                int cap = 5;
+                int shown = Math.min(cap, entries.size());
+                for (int i = 0; i < shown; i++) {
+                    lines.add(i == 0 ? "§fNearby: " + entries.get(i) : entries.get(i));
+                }
+                if (entries.size() > cap) {
+                    lines.add("§7+" + (entries.size() - cap) + " more");
+                }
+            }
+        }
+
+        if (config.infoDisplayNearestTownEnabled && here == null && !towns.isEmpty()) {
+            TownData nearest = null;
+            double best = Double.MAX_VALUE;
+            for (TownData t : towns) {
+                double d = Math.hypot(t.centerX() - px, t.centerZ() - pz);
+                if (d < best) { best = d; nearest = t; }
+            }
+            if (nearest != null) {
+                lines.add("§fNearest: " + nearest.name() + " §7(" + (int) Math.round(best) + "m)");
+            }
+        }
+
+        if (lines.isEmpty()) return 0;
+        int lineH = client.font.lineHeight + 1;
+        int totalH = lines.size() * lineH;
+
+        int maxW = 0;
+        for (String line : lines) maxW = Math.max(maxW, client.font.width(line));
+
+        int screenW = client.getWindow().getGuiScaledWidth();
+        int screenH = client.getWindow().getGuiScaledHeight();
+        int pad = 2;
+
+        // Place the block just below the minimap (clearing Xaero's coordinate line); flip above near
+        // the screen bottom. (The live Xaero-info-block measurement used on the 1.21.11 branch, which
+        // prevents overlap with multi-line Xaero info, is not ported here yet.)
+        int top = mapBottom + lineH + 12;
+        if (top + totalH > screenH - pad) {
+            top = mapTop - (lineH + 12) - totalH;
+        }
+        top = Math.max(pad, Math.min(top, screenH - pad - totalH));
+
+        // Center the column on the minimap, then clamp the whole block onto the screen.
+        int blockLeft = mapCenterX - maxW / 2;
+        blockLeft = Math.max(pad, Math.min(blockLeft, screenW - pad - maxW));
+        int blockCenterX = blockLeft + maxW / 2;
+
+        int yy = top;
+        for (String line : lines) {
+            int w = client.font.width(line);
+            ctx.text(client.font, line, blockCenterX - w / 2, yy, 0xFFFFFFFF, true);
+            yy += lineH;
+        }
+        return totalH;
+    }
+
     public static void renderMinimapNationAlert(GuiGraphicsExtractor ctx, int x, int y, int size) {
         if (!isActiveOnCurrentServer()) return;
         if (config == null || !config.minimapNationAlertEnabled) return;
