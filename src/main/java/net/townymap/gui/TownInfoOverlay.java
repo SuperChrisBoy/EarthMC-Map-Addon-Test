@@ -226,7 +226,7 @@ public final class TownInfoOverlay {
         lines.add(InfoRow.text("§7Public: §f§l"    + (d.isPublic() ? "Yes" : "No")));
         String residentsLine = "§7Residents: §f§l" + d.residentCount();
         if (d.activeResidentCount() >= 0 && d.activeResidentCount() < d.residentCount()) {
-            residentsLine += " §8(" + d.activeResidentCount() + " active)";
+            residentsLine += " §8(" + (d.residentCount() - d.activeResidentCount()) + " Inactive)";
         }
         lines.add(InfoRow.text(residentsLine));
         lines.add(InfoRow.text("§7Gold: §f§l"      + formatGold(d.balance())));
@@ -251,7 +251,9 @@ public final class TownInfoOverlay {
         }
         EarthMcNationData nation = nationDetails.get(town.nationName().toLowerCase(Locale.ROOT));
         if (nation == null) return residentChunks;
-        return residentChunks + nationBonus(nation.residentCount());
+        int nationResidents = nation.activeResidentCount() >= 0
+                ? nation.activeResidentCount() : nation.residentCount();
+        return residentChunks + nationBonus(nationResidents);
     }
 
     private static int nationBonus(int residents) {

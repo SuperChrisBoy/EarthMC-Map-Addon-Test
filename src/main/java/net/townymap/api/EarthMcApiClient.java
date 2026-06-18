@@ -471,8 +471,10 @@ public class EarthMcApiClient {
             }
         }
 
+        int activeResidents = countActiveResidents(n);
         return new EarthMcNationData(name, uuid, discord, board, king, capital, founded, towns, residents, chunks,
-                outlaws, allies, enemies, balance, isPublic, isOpen, isNeutral, hasSpawn, spawnX, spawnZ);
+                outlaws, allies, enemies, balance, isPublic, isOpen, isNeutral, hasSpawn, spawnX, spawnZ,
+                activeResidents);
     }
 
     private static String objectName(JsonObject obj, String key) {
