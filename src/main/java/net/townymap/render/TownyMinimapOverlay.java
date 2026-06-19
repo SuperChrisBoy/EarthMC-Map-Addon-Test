@@ -37,7 +37,10 @@ public final class TownyMinimapOverlay {
     private static final int MAX_CHUNK_CELLS_PER_FRAME = 7000;
     private static final int MAX_MINIMAP_CHUNK_GRID_LINES = 260;
     private static final int MAX_MINIMAP_LABELS = 24;
-    private static final int MINIMAP_CLIP_INSET = 2;
+    private static final int MINIMAP_CLIP_INSET = 0;
+    private static final int MINIMAP_RENDER_CACHE_STEP_CHUNKS = 4;
+    private static final int MINIMAP_RENDER_CACHE_PADDING_CHUNKS = 4;
+    private static final long MINIMAP_SHAPE_CACHE_MS = 100L;
     private static final double MIN_MINIMAP_CHUNK_GRID_SPACING = 3.5;
     private static final int CHUNK_SIZE = 16;
     private static final int MINIMAP_CHUNK_GRID_COLOR = 0xCC000000;
@@ -50,6 +53,8 @@ public final class TownyMinimapOverlay {
             new VisibleRenderData(new TownData[0], List.of(), List.of(), List.of());
     private static int lastSyncedXaeroChunkGrid = Integer.MIN_VALUE;
     private static long lastXaeroChunkGridSyncAttemptMs;
+    private static long lastMinimapShapeReadAtMs;
+    private static int cachedMinimapShape = 0;
     private static long lastWaypointConfigReadAtMs;
     private static WaypointDrawConfig cachedWaypointDrawConfig =
             new WaypointDrawConfig(true, 100, 1.0F, 0.0, false, false);
@@ -102,11 +107,10 @@ public final class TownyMinimapOverlay {
         double centerY = mapY + size / 2.0;
         double playerX = player.getX();
         double playerZ = player.getZ();
-        double visibleBlocks = blocksAcross / 2.0 + EXTRA_BLOCK_PADDING;
-        TownyMapMod.updateMinimapNationAlert(playerX, playerZ, visibleBlocks);
         double angle = minimapAngle(session, client);
         double sin = Math.sin(angle);
         double cos = Math.cos(angle);
+        boolean circular = isCircularMinimap(session);
 
         int left = mapX;
         int top = mapY;
@@ -116,40 +120,61 @@ public final class TownyMinimapOverlay {
         int clipTop = top + MINIMAP_CLIP_INSET;
         int clipRight = right - MINIMAP_CLIP_INSET;
         int clipBottom = bottom - MINIMAP_CLIP_INSET;
+        MinimapClip clip = MinimapClip.of(clipLeft, clipTop, clipRight, clipBottom, circular);
+        double visibleBlocks = circular
+                ? clip.radius() / pixelsPerBlock + CHUNK_SIZE * 1.5
+                : blocksAcross / 2.0 + EXTRA_BLOCK_PADDING;
+        TownyMapMod.updateMinimapNationAlert(playerX, playerZ, visibleBlocks);
 
         boolean squaremapRendered = config.squaremapBackgroundEnabled;
         if (squaremapRendered) {
             renderSquaremapBackground(ctx, mapX, mapY, size, playerX, playerZ,
-                    pixelsPerBlock, angle, clipLeft, clipTop, clipRight, clipBottom);
+                    pixelsPerBlock, angle, clip);
         }
 
         if (api.getTowns().isEmpty()) {
             lastRenderCanCoverWaypoints = squaremapRendered || config.chunkCounterEnabled;
             if (squaremapRendered) {
                 renderMinimapChunkGrid(ctx, session, config, centerX, centerY, playerX, playerZ,
-                        visibleBlocks, pixelsPerBlock, angle, clipLeft, clipTop, clipRight, clipBottom);
+                        visibleBlocks, pixelsPerBlock, angle, clip);
             }
             renderChunkCounterSelection(ctx, client, config, mapX, mapY, size, centerX, centerY,
-                    playerX, playerZ, pixelsPerBlock, angle, sin, cos, clipLeft, clipTop, clipRight, clipBottom);
+                    playerX, playerZ, pixelsPerBlock, angle, sin, cos, clip);
             if (squaremapRendered) ctx.extractDeferredElements(0, 0, 0.0F);
             return;
         }
 
-        int minChunkX = floorToChunk(playerX - visibleBlocks);
-        int maxChunkX = floorToChunk(playerX + visibleBlocks);
-        int minChunkZ = floorToChunk(playerZ - visibleBlocks);
-        int maxChunkZ = floorToChunk(playerZ + visibleBlocks);
+        int rawMinChunkX = floorToChunk(playerX - visibleBlocks);
+        int rawMaxChunkX = floorToChunk(playerX + visibleBlocks);
+        int rawMinChunkZ = floorToChunk(playerZ - visibleBlocks);
+        int rawMaxChunkZ = floorToChunk(playerZ + visibleBlocks);
+        int minChunkX = alignDown(rawMinChunkX - MINIMAP_RENDER_CACHE_PADDING_CHUNKS,
+                MINIMAP_RENDER_CACHE_STEP_CHUNKS);
+        int maxChunkX = alignUp(rawMaxChunkX + MINIMAP_RENDER_CACHE_PADDING_CHUNKS + 1,
+                MINIMAP_RENDER_CACHE_STEP_CHUNKS) - 1;
+        int minChunkZ = alignDown(rawMinChunkZ - MINIMAP_RENDER_CACHE_PADDING_CHUNKS,
+                MINIMAP_RENDER_CACHE_STEP_CHUNKS);
+        int maxChunkZ = alignUp(rawMaxChunkZ + MINIMAP_RENDER_CACHE_PADDING_CHUNKS + 1,
+                MINIMAP_RENDER_CACHE_STEP_CHUNKS) - 1;
         int chunkWidth = maxChunkX - minChunkX + 1;
         int chunkHeight = maxChunkZ - minChunkZ + 1;
         if (chunkWidth <= 0 || chunkHeight <= 0 || chunkWidth * chunkHeight > MAX_CHUNK_CELLS_PER_FRAME) {
-            return;
+            minChunkX = rawMinChunkX;
+            maxChunkX = rawMaxChunkX;
+            minChunkZ = rawMinChunkZ;
+            maxChunkZ = rawMaxChunkZ;
+            chunkWidth = maxChunkX - minChunkX + 1;
+            chunkHeight = maxChunkZ - minChunkZ + 1;
+            if (chunkWidth <= 0 || chunkHeight <= 0 || chunkWidth * chunkHeight > MAX_CHUNK_CELLS_PER_FRAME) {
+                return;
+            }
         }
 
         List<TownData> towns = api.getTowns();
         VisibleRenderData renderData = cachedVisibleRenderData(towns, minChunkX, minChunkZ, chunkWidth, chunkHeight);
-        lastRenderCanCoverWaypoints = squaremapRendered || config.chunkCounterEnabled || !renderData.fillCells().isEmpty();
+        lastRenderCanCoverWaypoints = squaremapRendered || config.chunkCounterEnabled || !renderData.fillSpans().isEmpty();
 
-        ctx.enableScissor(clipLeft, clipTop, clipRight + 1, clipBottom + 1);
+        ctx.enableScissor(clip.left(), clip.top(), clip.right() + 1, clip.bottom() + 1);
         Matrix3x2fStack matrices = ctx.pose();
         matrices.pushMatrix();
         try {
@@ -158,7 +183,12 @@ public final class TownyMinimapOverlay {
             matrices.scale((float) pixelsPerBlock, (float) pixelsPerBlock);
             matrices.translate((float) -playerX, (float) -playerZ);
 
-            fillVisibleTownChunks(ctx, renderData.fillCells(), config);
+            if (clip.circular()) {
+                fillVisibleTownSpansCircleClipped(ctx, renderData.fillSpans(), config, clip,
+                        centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
+            } else {
+                fillVisibleTownSpans(ctx, renderData.fillSpans(), config);
+            }
         } finally {
             matrices.popMatrix();
             ctx.disableScissor();
@@ -166,42 +196,53 @@ public final class TownyMinimapOverlay {
 
         if (squaremapRendered) {
             renderMinimapChunkGrid(ctx, session, config, centerX, centerY, playerX, playerZ,
-                    visibleBlocks, pixelsPerBlock, angle, clipLeft, clipTop, clipRight, clipBottom);
+                    visibleBlocks, pixelsPerBlock, angle, clip);
         }
 
-        ctx.enableScissor(clipLeft, clipTop, clipRight + 1, clipBottom + 1);
-        matrices.pushMatrix();
+        ctx.enableScissor(clip.left(), clip.top(), clip.right() + 1, clip.bottom() + 1);
         try {
-            matrices.translate((float) centerX, (float) centerY);
-            matrices.rotate((float) angle);
-            matrices.scale((float) pixelsPerBlock, (float) pixelsPerBlock);
-            matrices.translate((float) -playerX, (float) -playerZ);
+            if (clip.circular()) {
+                drawVisibleTownEdgesCircleClipped(ctx, renderData.edges(), config, clip,
+                        centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
+                drawOptimisticClaimChunks(ctx, clip,
+                        centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
+            } else {
+                matrices.pushMatrix();
+                try {
+                    matrices.translate((float) centerX, (float) centerY);
+                    matrices.rotate((float) angle);
+                    matrices.scale((float) pixelsPerBlock, (float) pixelsPerBlock);
+                    matrices.translate((float) -playerX, (float) -playerZ);
 
-            drawVisibleTownEdges(ctx, renderData.edges(), config);
-            drawOptimisticClaimChunks(ctx);
-            if (config.chunkCounterEnabled) {
-                ChunkCounterOverlay.renderWorldSpace(ctx);
+                    drawVisibleTownEdges(ctx, renderData.edges(), config);
+                    drawOptimisticClaimChunks(ctx);
+                    if (config.chunkCounterEnabled) {
+                        ChunkCounterOverlay.renderWorldSpace(ctx);
+                    }
+                } finally {
+                    matrices.popMatrix();
+                }
             }
         } finally {
-            matrices.popMatrix();
             ctx.disableScissor();
         }
 
         if (config.playersEnabled && config.minimapPlayersEnabled) {
             renderPlayerDots(ctx, api.getPlayers(), player.getName().getString(),
                     mapX, mapY, size, playerX, playerZ, pixelsPerBlock, sin, cos,
-                    clipLeft, clipTop, clipRight, clipBottom);
+                    clip);
         }
 
         if (config.minimapTownNamesEnabled && config.minimapTownNameMode != 0) {
             renderTownNames(ctx, client, renderData.labelAnchors(),
                     mapX, mapY, size, playerX, playerZ, pixelsPerBlock, sin, cos, config.minimapTownNameMode,
-                    clipLeft, clipTop, clipRight, clipBottom);
+                    clip);
         }
 
         if (config.chunkCounterEnabled) {
             ChunkCounterOverlay.renderMinimapLabels(ctx, client, mapX, mapY, size,
-                    playerX, playerZ, pixelsPerBlock, sin, cos, clipLeft, clipTop, clipRight, clipBottom);
+                    playerX, playerZ, pixelsPerBlock, sin, cos,
+                    clip.left(), clip.top(), clip.right(), clip.bottom());
         }
 
         ctx.extractDeferredElements(0, 0, 0.0F);
@@ -395,9 +436,9 @@ public final class TownyMinimapOverlay {
                                                     double playerX, double playerZ,
                                                     double pixelsPerBlock, double angle,
                                                     double sin, double cos,
-                                                    int clipLeft, int clipTop, int clipRight, int clipBottom) {
+                                                    MinimapClip clip) {
         if (!config.chunkCounterEnabled) return;
-        ctx.enableScissor(clipLeft, clipTop, clipRight + 1, clipBottom + 1);
+        ctx.enableScissor(clip.left(), clip.top(), clip.right() + 1, clip.bottom() + 1);
         Matrix3x2fStack matrices = ctx.pose();
         matrices.pushMatrix();
         try {
@@ -411,16 +452,18 @@ public final class TownyMinimapOverlay {
             ctx.disableScissor();
         }
         ChunkCounterOverlay.renderMinimapLabels(ctx, client, mapX, mapY, size,
-                playerX, playerZ, pixelsPerBlock, sin, cos, clipLeft, clipTop, clipRight, clipBottom);
+                playerX, playerZ, pixelsPerBlock, sin, cos,
+                clip.left(), clip.top(), clip.right(), clip.bottom());
     }
 
     private static void renderMinimapChunkGrid(GuiGraphicsExtractor ctx, MinimapSession session, TownyMapConfig config,
                                                double centerX, double centerY,
                                                double playerX, double playerZ,
                                                double visibleBlocks, double pixelsPerBlock, double angle,
-                                               int clipLeft, int clipTop, int clipRight, int clipBottom) {
+                                               MinimapClip clip) {
         if (!shouldRenderMinimapChunkGrid(session, config, pixelsPerBlock)) return;
-        ctx.enableScissor(clipLeft, clipTop, clipRight + 1, clipBottom + 1);
+        if (clip.circular()) return;
+        ctx.enableScissor(clip.left(), clip.top(), clip.right() + 1, clip.bottom() + 1);
         Matrix3x2fStack matrices = ctx.pose();
         matrices.pushMatrix();
         try {
@@ -525,18 +568,29 @@ public final class TownyMinimapOverlay {
 
     private static VisibleRenderData buildRenderData(TownData[] chunkTowns, int minChunkX, int minChunkZ,
                                                      int chunkWidth, int chunkHeight) {
-        ArrayList<ChunkCell> fillCells = new ArrayList<>();
+        ArrayList<ChunkFill> fillSpans = new ArrayList<>();
         ArrayList<ChunkEdge> edges = new ArrayList<>();
         Map<String, LabelAnchor> anchors = new LinkedHashMap<>();
 
         for (int z = 0; z < chunkHeight; z++) {
             int blockZ = (minChunkZ + z) * CHUNK_SIZE;
             double labelZ = blockZ + CHUNK_SIZE / 2.0;
+            TownData runTown = null;
+            int runStartX = 0;
             for (int x = 0; x < chunkWidth; x++) {
                 TownData town = chunkTowns[index(x, z, chunkWidth)];
-                if (town == null) continue;
                 int blockX = (minChunkX + x) * CHUNK_SIZE;
-                fillCells.add(new ChunkCell(blockX, blockZ, town));
+
+                if (!sameTownNullable(runTown, town)) {
+                    if (runTown != null) {
+                        fillSpans.add(new ChunkFill((minChunkX + runStartX) * CHUNK_SIZE, blockZ,
+                                (x - runStartX) * CHUNK_SIZE, runTown));
+                    }
+                    runTown = town;
+                    runStartX = x;
+                }
+
+                if (town == null) continue;
                 anchors.computeIfAbsent(town.name(), LabelAnchor::new)
                         .add(blockX + CHUNK_SIZE / 2.0, labelZ);
 
@@ -557,12 +611,16 @@ public final class TownyMinimapOverlay {
                     edges.add(new ChunkEdge(blockX, blockZ, blockX, blockZ + CHUNK_SIZE, town));
                 }
             }
+            if (runTown != null) {
+                fillSpans.add(new ChunkFill((minChunkX + runStartX) * CHUNK_SIZE, blockZ,
+                        (chunkWidth - runStartX) * CHUNK_SIZE, runTown));
+            }
         }
 
         ArrayList<LabelAnchor> labelAnchors = new ArrayList<>(anchors.values());
         labelAnchors.sort(Comparator.comparingInt(LabelAnchor::count).reversed()
                 .thenComparing(LabelAnchor::name, String.CASE_INSENSITIVE_ORDER));
-        return new VisibleRenderData(chunkTowns, List.copyOf(fillCells), List.copyOf(edges), List.copyOf(labelAnchors));
+        return new VisibleRenderData(chunkTowns, List.copyOf(fillSpans), List.copyOf(edges), List.copyOf(labelAnchors));
     }
 
     private static void closeOneChunkHoles(TownData[] chunkTowns, int width, int height) {
@@ -599,13 +657,60 @@ public final class TownyMinimapOverlay {
         return null;
     }
 
-    private static void fillVisibleTownChunks(GuiGraphicsExtractor ctx, List<ChunkCell> fillCells, TownyMapConfig config) {
-        for (ChunkCell cell : fillCells) {
-            TownData town = cell.town();
+    /** Minimap town fill alpha. (Boosting it exposed the world-space row banding under rotation, so
+     *  we keep the config value here and rely on the outline to delineate towns.) */
+    private static int minimapFillAlpha(TownyMapConfig config) {
+        return config.fillAlpha;
+    }
+
+    private static void fillVisibleTownSpans(GuiGraphicsExtractor ctx, List<ChunkFill> fillSpans, TownyMapConfig config) {
+        for (ChunkFill span : fillSpans) {
+            TownData town = span.town();
             boolean favorite = TownyMapMod.isFavorite(town.name());
-            int fillColor = favorite ? FAVORITE_FILL : town.argbColor(config.fillAlpha);
+            int fillColor = favorite ? FAVORITE_FILL : town.argbColor(minimapFillAlpha(config));
             if ((fillColor >>> 24) == 0) continue;
-            ctx.fill(cell.blockX(), cell.blockZ(), cell.blockX() + CHUNK_SIZE, cell.blockZ() + CHUNK_SIZE, fillColor);
+            ctx.fill(span.blockX(), span.blockZ(),
+                    span.blockX() + span.blockWidth(), span.blockZ() + CHUNK_SIZE, fillColor);
+        }
+    }
+
+    private static void fillVisibleTownSpansCircleClipped(GuiGraphicsExtractor ctx, List<ChunkFill> fillSpans,
+                                                          TownyMapConfig config, MinimapClip clip,
+                                                          double centerX, double centerY,
+                                                          double playerX, double playerZ,
+                                                          double pixelsPerBlock, double sin, double cos) {
+        TownData cachedTown = null;
+        int cachedColor = 0;
+        for (ChunkFill span : fillSpans) {
+            TownData town = span.town();
+            if (town != cachedTown) {
+                cachedTown = town;
+                cachedColor = TownyMapMod.isFavorite(town.name())
+                        ? FAVORITE_FILL : town.argbColor(minimapFillAlpha(config));
+            }
+            int fillColor = cachedColor;
+            if ((fillColor >>> 24) == 0) continue;
+            int x1 = span.blockX();
+            int z1 = span.blockZ();
+            int x2 = x1 + span.blockWidth();
+            int z2 = z1 + CHUNK_SIZE;
+            if (clip.worldRectFullyInside(x1, z1, x2, z2, centerX, centerY, playerX, playerZ,
+                    pixelsPerBlock, sin, cos)) {
+                ctx.fill(x1, z1, x2, z2, fillColor);
+            } else if (clip.worldRectIntersects(x1, z1, x2, z2, centerX, centerY, playerX, playerZ,
+                    pixelsPerBlock, sin, cos)) {
+                for (int cx = x1; cx < x2; cx += CHUNK_SIZE) {
+                    int cx2 = Math.min(x2, cx + CHUNK_SIZE);
+                    int cls = clip.worldRectCircleClass(cx, z1, cx2, z2, centerX, centerY,
+                            playerX, playerZ, pixelsPerBlock, sin, cos);
+                    if (cls > 0) {
+                        ctx.fill(cx, z1, cx2, z2, fillColor);
+                    } else if (cls == 0) {
+                        fillRectCircleClipped(ctx, cx, z1, cx2 - cx, z2 - z1, fillColor, clip,
+                                centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
+                    }
+                }
+            }
         }
     }
 
@@ -614,6 +719,58 @@ public final class TownyMinimapOverlay {
             boolean favorite = TownyMapMod.isFavorite(edge.town().name());
             int outlineColor = favorite ? FAVORITE_OUTLINE : edge.town().argbColor(config.borderAlpha);
             drawChunkEdge(ctx, edge.x1(), edge.z1(), edge.x2(), edge.z2(), outlineColor);
+        }
+    }
+
+    private static void drawVisibleTownEdgesCircleClipped(GuiGraphicsExtractor ctx, List<ChunkEdge> edges,
+                                                          TownyMapConfig config, MinimapClip clip,
+                                                          double centerX, double centerY,
+                                                          double playerX, double playerZ,
+                                                          double pixelsPerBlock, double sin, double cos) {
+        double rw = clip.radius() / pixelsPerBlock;
+        double rwSq = rw * rw;
+        Matrix3x2fStack matrices = ctx.pose();
+        matrices.pushMatrix();
+        try {
+            matrices.translate((float) centerX, (float) centerY);
+            matrices.rotate((float) Math.atan2(sin, cos));
+            matrices.scale((float) pixelsPerBlock, (float) pixelsPerBlock);
+            matrices.translate((float) -playerX, (float) -playerZ);
+            TownData cachedTown = null;
+            int cachedColor = 0;
+            for (ChunkEdge edge : edges) {
+                TownData town = edge.town();
+                if (town != cachedTown) {
+                    cachedTown = town;
+                    cachedColor = TownyMapMod.isFavorite(town.name())
+                            ? FAVORITE_OUTLINE : town.argbColor(config.borderAlpha);
+                }
+                drawEdgeClippedToCircle(ctx, edge.x1(), edge.z1(), edge.x2(), edge.z2(),
+                        cachedColor, playerX, playerZ, rwSq);
+            }
+        } finally {
+            matrices.popMatrix();
+        }
+    }
+
+    private static void drawEdgeClippedToCircle(GuiGraphicsExtractor ctx, int x1, int z1, int x2, int z2,
+                                                int color, double playerX, double playerZ, double rwSq) {
+        if (z1 == z2) {
+            double dz = z1 - playerZ;
+            double chordSq = rwSq - dz * dz;
+            if (chordSq <= 0.0) return;
+            double chord = Math.sqrt(chordSq);
+            double xa = Math.max(Math.min(x1, x2), playerX - chord);
+            double xb = Math.min(Math.max(x1, x2), playerX + chord);
+            if (xa < xb) drawChunkEdge(ctx, (int) Math.round(xa), z1, (int) Math.round(xb), z1, color);
+        } else {
+            double dx = x1 - playerX;
+            double chordSq = rwSq - dx * dx;
+            if (chordSq <= 0.0) return;
+            double chord = Math.sqrt(chordSq);
+            double za = Math.max(Math.min(z1, z2), playerZ - chord);
+            double zb = Math.min(Math.max(z1, z2), playerZ + chord);
+            if (za < zb) drawChunkEdge(ctx, x1, (int) Math.round(za), x1, (int) Math.round(zb), color);
         }
     }
 
@@ -627,6 +784,164 @@ public final class TownyMinimapOverlay {
             drawChunkEdge(ctx, blockX, blockZ + CHUNK_SIZE, blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE, chunk.outlineColor());
             drawChunkEdge(ctx, blockX, blockZ, blockX, blockZ + CHUNK_SIZE, chunk.outlineColor());
         }
+    }
+
+    private static void drawOptimisticClaimChunks(GuiGraphicsExtractor ctx, MinimapClip clip,
+                                                  double centerX, double centerY,
+                                                  double playerX, double playerZ,
+                                                  double pixelsPerBlock, double sin, double cos) {
+        Matrix3x2fStack matrices = ctx.pose();
+        for (OptimisticClaimChunk chunk : TownyMapMod.optimisticClaimChunks()) {
+            int blockX = chunk.blockX();
+            int blockZ = chunk.blockZ();
+            matrices.pushMatrix();
+            try {
+                matrices.translate((float) centerX, (float) centerY);
+                matrices.rotate((float) Math.atan2(sin, cos));
+                matrices.scale((float) pixelsPerBlock, (float) pixelsPerBlock);
+                matrices.translate((float) -playerX, (float) -playerZ);
+                int cls = clip.worldRectCircleClass(blockX, blockZ, blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE,
+                        centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
+                if (cls > 0) {
+                    ctx.fill(blockX, blockZ, blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE, chunk.fillColor());
+                } else if (cls == 0) {
+                    fillRectCircleClipped(ctx, blockX, blockZ, CHUNK_SIZE, CHUNK_SIZE, chunk.fillColor(), clip,
+                            centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
+                }
+            } finally {
+                matrices.popMatrix();
+            }
+            drawWorldLineCircleClipped(ctx, blockX, blockZ, blockX + CHUNK_SIZE, blockZ, chunk.outlineColor(), clip,
+                    centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
+            drawWorldLineCircleClipped(ctx, blockX + CHUNK_SIZE, blockZ,
+                    blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE, chunk.outlineColor(), clip,
+                    centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
+            drawWorldLineCircleClipped(ctx, blockX, blockZ + CHUNK_SIZE,
+                    blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE, chunk.outlineColor(), clip,
+                    centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
+            drawWorldLineCircleClipped(ctx, blockX, blockZ, blockX, blockZ + CHUNK_SIZE, chunk.outlineColor(), clip,
+                    centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
+        }
+    }
+
+    private static void fillRectCircleClipped(GuiGraphicsExtractor ctx, int blockX, int blockZ,
+                                              int blockWidth, int blockHeight, int color,
+                                              MinimapClip clip,
+                                              double centerX, double centerY,
+                                              double playerX, double playerZ,
+                                              double pixelsPerBlock, double sin, double cos) {
+        double rwSq = clip.radius() * clip.radius() / (pixelsPerBlock * pixelsPerBlock);
+        int maxX = blockX + blockWidth;
+        int maxZ = blockZ + blockHeight;
+        int step = Math.max(1, (int) Math.floor(1.0 / Math.max(0.0001, pixelsPerBlock)));
+        for (int z = blockZ; z < maxZ; z += step) {
+            int z2 = Math.min(maxZ, z + step);
+            double dz = Math.max(Math.abs(z - playerZ), Math.abs(z2 - playerZ));
+            double chordSq = rwSq - dz * dz;
+            if (chordSq <= 0.0) continue;
+            double chord = Math.sqrt(chordSq);
+            double xa = Math.max(blockX, playerX - chord);
+            double xb = Math.min(maxX, playerX + chord);
+            if (xa < xb) ctx.fill((int) Math.round(xa), z, (int) Math.round(xb), z2, color);
+        }
+    }
+
+    private static void drawWorldLineCircleClipped(GuiGraphicsExtractor ctx,
+                                                   double worldX1, double worldZ1,
+                                                   double worldX2, double worldZ2,
+                                                   int color,
+                                                   MinimapClip clip,
+                                                   double centerX, double centerY,
+                                                   double playerX, double playerZ,
+                                                   double pixelsPerBlock, double sin, double cos) {
+        double x1 = screenX(worldX1, worldZ1, centerX, playerX, playerZ, pixelsPerBlock, sin, cos);
+        double y1 = screenY(worldX1, worldZ1, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
+        double x2 = screenX(worldX2, worldZ2, centerX, playerX, playerZ, pixelsPerBlock, sin, cos);
+        double y2 = screenY(worldX2, worldZ2, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
+        drawScreenLineCircleClipped(ctx, x1, y1, x2, y2, color, clip);
+    }
+
+    private static void drawScreenLineCircleClipped(GuiGraphicsExtractor ctx,
+                                                    double x1, double y1,
+                                                    double x2, double y2,
+                                                    int color,
+                                                    MinimapClip clip) {
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        double lenSq = dx * dx + dy * dy;
+        if (lenSq < 0.0001) {
+            if (clip.containsPoint(x1, y1, 0.0)) {
+                int x = (int) Math.round(x1);
+                int y = (int) Math.round(y1);
+                ctx.fill(x, y, x + 1, y + 1, color);
+            }
+            return;
+        }
+
+        double fx = x1 - clip.centerX();
+        double fy = y1 - clip.centerY();
+        double a = lenSq;
+        double b = 2.0 * (fx * dx + fy * dy);
+        double c = fx * fx + fy * fy - clip.radiusSq();
+        double discriminant = b * b - 4.0 * a * c;
+        boolean startInside = clip.containsPoint(x1, y1, 0.5);
+        boolean endInside = clip.containsPoint(x2, y2, 0.5);
+        if (startInside && endInside) {
+            drawScreenLine(ctx, x1, y1, x2, y2, color);
+            return;
+        }
+        if (discriminant < 0.0) return;
+        double sqrt = Math.sqrt(discriminant);
+        double t1 = (-b - sqrt) / (2.0 * a);
+        double t2 = (-b + sqrt) / (2.0 * a);
+        double ta = Math.max(0.0, Math.min(t1, t2));
+        double tb = Math.min(1.0, Math.max(t1, t2));
+        if (ta > tb) return;
+        if (startInside) ta = 0.0;
+        if (endInside) tb = 1.0;
+        if (ta <= tb) {
+            drawScreenLine(ctx, x1 + dx * ta, y1 + dy * ta,
+                    x1 + dx * tb, y1 + dy * tb, color);
+        }
+    }
+
+    private static void drawScreenLine(GuiGraphicsExtractor ctx, double x1, double y1,
+                                       double x2, double y2, int color) {
+        int ix1 = (int) Math.round(x1);
+        int iy1 = (int) Math.round(y1);
+        int ix2 = (int) Math.round(x2);
+        int iy2 = (int) Math.round(y2);
+        if (Math.abs(ix2 - ix1) >= Math.abs(iy2 - iy1)) {
+            if (ix2 < ix1) {
+                int tx = ix1; ix1 = ix2; ix2 = tx;
+                int ty = iy1; iy1 = iy2; iy2 = ty;
+            }
+            ctx.fill(ix1, iy1, ix2 + 1, iy1 + 1, color);
+        } else {
+            if (iy2 < iy1) {
+                int tx = ix1; ix1 = ix2; ix2 = tx;
+                int ty = iy1; iy1 = iy2; iy2 = ty;
+            }
+            ctx.fill(ix1, iy1, ix1 + 1, iy2 + 1, color);
+        }
+    }
+
+    private static double screenX(double worldX, double worldZ,
+                                  double centerX,
+                                  double playerX, double playerZ,
+                                  double pixelsPerBlock, double sin, double cos) {
+        double dx = worldX - playerX;
+        double dz = worldZ - playerZ;
+        return centerX + (dx * cos - dz * sin) * pixelsPerBlock;
+    }
+
+    private static double screenY(double worldX, double worldZ,
+                                  double centerY,
+                                  double playerX, double playerZ,
+                                  double pixelsPerBlock, double sin, double cos) {
+        double dx = worldX - playerX;
+        double dz = worldZ - playerZ;
+        return centerY + (dx * sin + dz * cos) * pixelsPerBlock;
     }
 
     private static void drawChunkEdge(GuiGraphicsExtractor ctx, int x1, int z1, int x2, int z2, int color) {
@@ -651,8 +966,21 @@ public final class TownyMinimapOverlay {
         return Math.floorDiv((int) Math.floor(blockCoord), CHUNK_SIZE);
     }
 
+    private static int alignDown(int value, int step) {
+        return Math.floorDiv(value, step) * step;
+    }
+
+    private static int alignUp(int value, int step) {
+        return Math.floorDiv(value + step - 1, step) * step;
+    }
+
     private static boolean sameTown(TownData a, TownData b) {
         if (a == null || b == null) return false;
+        return a == b || a.name().equals(b.name());
+    }
+
+    private static boolean sameTownNullable(TownData a, TownData b) {
+        if (a == null || b == null) return a == b;
         return a == b || a.name().equals(b.name());
     }
 
@@ -687,7 +1015,7 @@ public final class TownyMinimapOverlay {
                                         int mapX, int mapY, int size,
                                         double playerX, double playerZ, double pixelsPerBlock,
                                         double sin, double cos, int mode,
-                                        int clipLeft, int clipTop, int clipRight, int clipBottom) {
+                                        MinimapClip clip) {
         double centerX = mapX + size / 2.0;
         double centerY = mapY + size / 2.0;
 
@@ -698,22 +1026,21 @@ public final class TownyMinimapOverlay {
             double dz = anchor.centerZ() - playerZ;
             int x = (int) Math.round(centerX + (dx * cos - dz * sin) * pixelsPerBlock);
             int y = (int) Math.round(centerY + (dx * sin + dz * cos) * pixelsPerBlock);
-            if (x < clipLeft || x > clipRight || y < clipTop || y > clipBottom) continue;
+            if (x < clip.left() || x > clip.right() || y < clip.top() || y > clip.bottom()) continue;
             int textWidth = client.font.width(anchor.name());
             if (textWidth > size * 0.55) continue;
+            if (!clip.containsText(x, y, textWidth, client.font.lineHeight)) continue;
             Label label = new Label(anchor.name(), x, y, textWidth);
             if (overlaps(labels, label)) continue;
             labels.add(label);
             if (labels.size() >= MAX_MINIMAP_LABELS) break;
         }
 
-        ctx.enableScissor(clipLeft, clipTop, clipRight + 1, clipBottom + 1);
+        ctx.enableScissor(clip.left(), clip.top(), clip.right() + 1, clip.bottom() + 1);
         try {
             for (Label label : labels) {
-                int x = label.x - label.width / 2;
-                int y = label.y - 4;
-                ctx.text(client.font, label.text, x + 1, y + 1, 0xAA000000, false);
-                ctx.text(client.font, label.text, x, y, 0xFFFFFFFF, false);
+                drawScaledLabelCentered(ctx, client.font, label.text, label.x, label.y,
+                        0xFFFFFFFF, 0xAA000000, false);
             }
         } finally {
             ctx.disableScissor();
@@ -834,33 +1161,62 @@ public final class TownyMinimapOverlay {
         double centerY = mapY + size / 2.0;
         // Match the user's chosen Xaero minimap frame colour (the ring around the minimap).
         int accent = 0xFF000000 | (TownyMapMod.minimapFrameColor() & 0x00FFFFFF);
+        boolean circular = isCircularMinimap(session);
 
-        drawCompassLetterOnBorder(ctx, client, "N", centerX, centerY, sin, -cos, size, accent);
-        drawCompassLetterOnBorder(ctx, client, "E", centerX, centerY, cos, sin, size, accent);
-        drawCompassLetterOnBorder(ctx, client, "S", centerX, centerY, -sin, cos, size, accent);
-        drawCompassLetterOnBorder(ctx, client, "W", centerX, centerY, -cos, -sin, size, accent);
+        drawCompassLetterOnBorder(ctx, client, "N", centerX, centerY, sin, -cos, size, accent, circular);
+        drawCompassLetterOnBorder(ctx, client, "E", centerX, centerY, cos, sin, size, accent, circular);
+        drawCompassLetterOnBorder(ctx, client, "S", centerX, centerY, -sin, cos, size, accent, circular);
+        drawCompassLetterOnBorder(ctx, client, "W", centerX, centerY, -cos, -sin, size, accent, circular);
         ctx.extractDeferredElements(0, 0, 0.0F);
     }
 
     private static void drawCompassLetterOnBorder(GuiGraphicsExtractor ctx, Minecraft client, String letter,
                                                   double centerX, double centerY,
-                                                  double dirX, double dirY, int size, int accent) {
-        double maxComponent = Math.max(Math.abs(dirX), Math.abs(dirY));
-        if (maxComponent < 0.0001) return;
-        double edgeDistance = size / 2.0 + 1.0;
-        double scale = edgeDistance / maxComponent;
+                                                  double dirX, double dirY, int size, int accent,
+                                                  boolean circular) {
+        double length = Math.hypot(dirX, dirY);
+        if (length < 0.0001) return;
+        // Inset the letter so the WHOLE glyph sits just inside the minimap edge. Previously the
+        // letter centre was at radius size/2 + 1 (just OUTSIDE the edge), so its outer half spilled
+        // past the circle/box and off-screen when the minimap was near a screen corner. Pull it in
+        // by half the (scaled) glyph height plus a small margin.
+        double inset = client.font.lineHeight * TownyMapMod.minimapTextScale() * 0.5 + 3.0;
+        double edgeDistance = Math.max(1.0, size / 2.0 - inset);
+        double scale = circular ? edgeDistance / length
+                : edgeDistance / Math.max(Math.abs(dirX), Math.abs(dirY));
         drawCompassLetter(ctx, client, letter, centerX + dirX * scale, centerY + dirY * scale, accent);
     }
 
     private static void drawCompassLetter(GuiGraphicsExtractor ctx, Minecraft client, String letter,
                                           double centerX, double centerY, int accent) {
-        int width = client.font.width(letter);
-        int height = client.font.lineHeight;
-        int x = (int) Math.round(centerX - width / 2.0);
-        int y = (int) Math.round(centerY - height / 2.0);
         // Coloured drop-shadow in the chosen frame colour, white letter on top for legibility.
-        ctx.text(client.font, letter, x + 1, y + 1, accent, false);
-        ctx.text(client.font, letter, x, y, 0xFFFFFFFF, false);
+        drawScaledLabelCentered(ctx, client.font, letter, centerX, centerY, 0xFFFFFFFF, accent, false);
+    }
+
+    /**
+     * Draws a single text label centred at (cx, cy), scaled by {@link TownyMapMod#minimapTextScale()}
+     * so our minimap labels match the size of Xaero's own info/coordinate text (Xaero renders that
+     * inside its 1/xaeroScale matrix). {@code manualShadow != 0} draws a 1px offset coloured shadow;
+     * otherwise {@code builtinShadow} uses the font's vanilla shadow. The pose is baked at draw time,
+     * so this composes with the deferred pipeline like our other scaled draws.
+     */
+    public static void drawScaledLabelCentered(GuiGraphicsExtractor ctx, net.minecraft.client.gui.Font font,
+                                        String text, double cx, double cy,
+                                        int color, int manualShadow, boolean builtinShadow) {
+        float s = TownyMapMod.minimapTextScale();
+        int w = font.width(text);
+        int h = font.lineHeight;
+        Matrix3x2fStack m = ctx.pose();
+        m.pushMatrix();
+        m.translate((float) cx, (float) cy);
+        if (s < 0.999f || s > 1.001f) {
+            m.scale(s, s);
+        }
+        if (manualShadow != 0) {
+            ctx.text(font, text, -w / 2 + 1, -h / 2 + 1, manualShadow, false);
+        }
+        ctx.text(font, text, -w / 2, -h / 2, color, builtinShadow);
+        m.popMatrix();
     }
 
     public static void renderSquaremapBackground(GuiGraphicsExtractor ctx, MinimapSession session,
@@ -882,22 +1238,22 @@ public final class TownyMinimapOverlay {
         int top = mapY;
         int right = mapX + size - 1;
         int bottom = mapY + size - 1;
-        renderSquaremapBackground(ctx, mapX, mapY, size, player.getX(), player.getZ(),
-                pixelsPerBlock, minimapAngle(session, client),
-                left + MINIMAP_CLIP_INSET,
+        MinimapClip clip = MinimapClip.of(left + MINIMAP_CLIP_INSET,
                 top + MINIMAP_CLIP_INSET,
                 right - MINIMAP_CLIP_INSET,
-                bottom - MINIMAP_CLIP_INSET);
+                bottom - MINIMAP_CLIP_INSET,
+                isCircularMinimap(session));
+        renderSquaremapBackground(ctx, mapX, mapY, size, player.getX(), player.getZ(),
+                pixelsPerBlock, minimapAngle(session, client), clip);
     }
 
     private static void renderSquaremapBackground(GuiGraphicsExtractor ctx,
                                                   int mapX, int mapY, int size,
                                                   double playerX, double playerZ,
                                                   double pixelsPerBlock, double angle,
-                                                  int clipLeft, int clipTop,
-                                                  int clipRight, int clipBottom) {
-        if (clipLeft > clipRight || clipTop > clipBottom) return;
-        ctx.enableScissor(clipLeft, clipTop, clipRight + 1, clipBottom + 1);
+                                                  MinimapClip clip) {
+        if (clip.left() > clip.right() || clip.top() > clip.bottom()) return;
+        ctx.enableScissor(clip.left(), clip.top(), clip.right() + 1, clip.bottom() + 1);
         Matrix3x2fStack matrices = ctx.pose();
         matrices.pushMatrix();
         try {
@@ -905,7 +1261,9 @@ public final class TownyMinimapOverlay {
             matrices.translate(mapX + center, mapY + center);
             matrices.rotate((float) angle);
             matrices.translate(-center, -center);
-            TownyMapMod.renderSquaremapMinimapViewport(ctx, playerX, playerZ, pixelsPerBlock, size, size);
+            TownyMapMod.renderSquaremapMinimapViewport(ctx, playerX, playerZ, pixelsPerBlock,
+                    size, size, clip.circular(), clip.radius());
+            ctx.extractDeferredElements(0, 0, 0.0F);
         } finally {
             matrices.popMatrix();
             ctx.disableScissor();
@@ -916,13 +1274,13 @@ public final class TownyMinimapOverlay {
                                          int mapX, int mapY, int size,
                                          double playerX, double playerZ, double pixelsPerBlock,
                                          double sin, double cos,
-                                         int clipLeft, int clipTop, int clipRight, int clipBottom) {
+                                         MinimapClip clip) {
         if (players.isEmpty()) return;
         double centerX = mapX + size / 2.0;
         double centerY = mapY + size / 2.0;
         int radius = 1;
 
-        ctx.enableScissor(clipLeft, clipTop, clipRight + 1, clipBottom + 1);
+        ctx.enableScissor(clip.left(), clip.top(), clip.right() + 1, clip.bottom() + 1);
         try {
             for (PlayerMarker marker : players) {
                 if (marker.name() == null || marker.name().equalsIgnoreCase(selfName)) continue;
@@ -930,8 +1288,9 @@ public final class TownyMinimapOverlay {
                 double dz = marker.z() - playerZ;
                 int x = (int) Math.round(centerX + (dx * cos - dz * sin) * pixelsPerBlock);
                 int y = (int) Math.round(centerY + (dx * sin + dz * cos) * pixelsPerBlock);
-                if (x < clipLeft + radius || x > clipRight - radius
-                        || y < clipTop + radius || y > clipBottom - radius) continue;
+                if (x < clip.left() + radius || x > clip.right() - radius
+                        || y < clip.top() + radius || y > clip.bottom() - radius) continue;
+                if (!clip.containsPoint(x, y, radius + 1.0)) continue;
 
                 int color = TownyMapMod.minimapPlayerDotColor(marker.name());
                 if ((color >>> 24) == 0) continue;
@@ -955,6 +1314,91 @@ public final class TownyMinimapOverlay {
                     session.getProcessor().getMinimapSize() / 2, 0);
         } catch (RuntimeException | LinkageError ignored) {
             return false;
+        }
+    }
+
+    public static boolean isCircularMinimap(MinimapSession session) {
+        return xaeroMinimapShape(session) == 1;
+    }
+
+    private static int xaeroMinimapShape(MinimapSession session) {
+        long now = System.currentTimeMillis();
+        if (now - lastMinimapShapeReadAtMs < MINIMAP_SHAPE_CACHE_MS) return cachedMinimapShape;
+        lastMinimapShapeReadAtMs = now;
+
+        try {
+            Class<?> hudModClass = Class.forName("xaero.common.HudMod");
+            Object hudMod = hudModClass.getField("INSTANCE").get(null);
+            Object hudConfigs = hudModClass.getMethod("getHudConfigs").invoke(hudMod);
+            Object manager = hudConfigs.getClass().getMethod("getClientConfigManager").invoke(hudConfigs);
+            Class<?> optionsClass = Class.forName("xaero.hud.minimap.common.config.option.MinimapProfiledConfigOptions");
+            Object shapeOption = optionsClass.getField("SHAPE").get(null);
+            Object value = getXaeroProfileOption(manager, shapeOption);
+            if (value instanceof Number number) {
+                cachedMinimapShape = number.intValue();
+                return cachedMinimapShape;
+            }
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+        }
+
+        cachedMinimapShape = readMinimapShapeFromConfig(cachedMinimapShape);
+        return cachedMinimapShape;
+    }
+
+    private static Object getXaeroProfileOption(Object manager, Object option)
+            throws ReflectiveOperationException {
+        for (var method : manager.getClass().getMethods()) {
+            if (!"getEffective".equals(method.getName()) || method.getParameterCount() != 1) continue;
+            return method.invoke(manager, option);
+        }
+        return null;
+    }
+
+    private static int readMinimapShapeFromConfig(int fallback) {
+        Path path = FabricLoader.getInstance().getConfigDir()
+                .resolve("xaero/minimap/profiles/default.cfg");
+        if (!Files.exists(path)) return fallback;
+        try {
+            for (String line : Files.readAllLines(path)) {
+                int equals = line.indexOf('=');
+                if (equals < 0) continue;
+                String key = line.substring(0, equals).trim();
+                if (!"minimap_shape".equals(key)) continue;
+                return parseInt(line.substring(equals + 1), fallback);
+            }
+        } catch (Exception ignored) {
+        }
+        return fallback;
+    }
+
+    public static void renderCircularOutline(GuiGraphicsExtractor ctx, int x, int y, int size,
+                                             int color, int shadowColor, int thickness) {
+        if (size <= 8 || thickness <= 0) return;
+        double centerX = x + size / 2.0;
+        double centerY = y + size / 2.0;
+        double radius = Math.max(1.0, size / 2.0);
+        // ~1 segment per pixel of circumference (2*pi*r) so the ring reads as a true circle, not a
+        // faceted polygon. Drawn once per frame, so a high count is cheap.
+        int segments = Math.max(96, Math.min(1600, (int) Math.round(radius * 6.30)));
+        if ((shadowColor >>> 24) != 0) {
+            drawCircleOutline(ctx, centerX, centerY, radius + 1.0, segments, shadowColor);
+        }
+        for (int i = 0; i < thickness; i++) {
+            drawCircleOutline(ctx, centerX, centerY, Math.max(1.0, radius - i), segments, color);
+        }
+    }
+
+    private static void drawCircleOutline(GuiGraphicsExtractor ctx, double centerX, double centerY,
+                                          double radius, int segments, int color) {
+        double previousX = centerX + radius;
+        double previousY = centerY;
+        for (int i = 1; i <= segments; i++) {
+            double angle = Math.PI * 2.0 * i / segments;
+            double x = centerX + Math.cos(angle) * radius;
+            double y = centerY + Math.sin(angle) * radius;
+            drawScreenLine(ctx, previousX, previousY, x, y, color);
+            previousX = x;
+            previousY = y;
         }
     }
 
@@ -998,10 +1442,129 @@ public final class TownyMinimapOverlay {
     }
 
     private record Label(String text, int x, int y, int width) {}
-    private record ChunkCell(int blockX, int blockZ, TownData town) {}
+    private record ChunkFill(int blockX, int blockZ, int blockWidth, TownData town) {}
     private record ChunkEdge(int x1, int z1, int x2, int z2, TownData town) {}
-    private record VisibleRenderData(TownData[] chunkTowns, List<ChunkCell> fillCells,
+    private record VisibleRenderData(TownData[] chunkTowns, List<ChunkFill> fillSpans,
                                      List<ChunkEdge> edges, List<LabelAnchor> labelAnchors) {}
+    private record MinimapClip(int left, int top, int right, int bottom,
+                               double centerX, double centerY,
+                               double radius, double radiusSq,
+                               boolean circular) {
+        private static MinimapClip of(int left, int top, int right, int bottom, boolean circular) {
+            double centerX = (left + right + 1) / 2.0;
+            double centerY = (top + bottom + 1) / 2.0;
+            double radius = Math.max(1.0, Math.min(right - left + 1, bottom - top + 1) / 2.0);
+            return new MinimapClip(left, top, right, bottom, centerX, centerY,
+                    radius, radius * radius, circular);
+        }
+
+        private boolean containsPoint(double x, double y, double inset) {
+            if (!circular) return true;
+            double effectiveRadius = Math.max(0.0, radius - Math.max(0.0, inset));
+            double dx = x - centerX;
+            double dy = y - centerY;
+            return dx * dx + dy * dy <= effectiveRadius * effectiveRadius;
+        }
+
+        private boolean containsText(int centerX, int centerY, int width, int height) {
+            if (!circular) return true;
+            int halfWidth = width / 2;
+            int top = centerY - 4;
+            int bottom = top + height;
+            return containsPoint(centerX - halfWidth, top, 0.5)
+                    && containsPoint(centerX + halfWidth, top, 0.5)
+                    && containsPoint(centerX - halfWidth, bottom, 0.5)
+                    && containsPoint(centerX + halfWidth, bottom, 0.5);
+        }
+
+        private static double distSqToPlayer(double x, double z, double playerX, double playerZ) {
+            double dx = x - playerX;
+            double dz = z - playerZ;
+            return dx * dx + dz * dz;
+        }
+
+        private int worldRectCircleClass(double x1, double z1, double x2, double z2,
+                                         double mapCenterX, double mapCenterY,
+                                         double playerX, double playerZ,
+                                         double pixelsPerBlock, double sin, double cos) {
+            if (!circular) return 1;
+            double rw = radius / pixelsPerBlock;
+            double cx = (x1 + x2) * 0.5 - playerX;
+            double cz = (z1 + z2) * 0.5 - playerZ;
+            double distanceSq = cx * cx + cz * cz;
+            double halfDiagonal = Math.hypot(x2 - x1, z2 - z1) * 0.5;
+            double insideLimit = rw - 0.5 / pixelsPerBlock - halfDiagonal;
+            if (insideLimit >= 0.0 && distanceSq <= insideLimit * insideLimit) return 1;
+            double outsideLimit = rw + 1.0 / pixelsPerBlock + halfDiagonal;
+            if (distanceSq > outsideLimit * outsideLimit) return -1;
+            return 0;
+        }
+
+        private boolean worldRectFullyInside(double x1, double z1, double x2, double z2,
+                                             double mapCenterX, double mapCenterY,
+                                             double playerX, double playerZ,
+                                             double pixelsPerBlock, double sin, double cos) {
+            if (!circular) return true;
+            double rw = (radius - 0.35) / pixelsPerBlock;
+            if (rw <= 0.0) return false;
+            double rwSq = rw * rw;
+            return distSqToPlayer(x1, z1, playerX, playerZ) <= rwSq
+                    && distSqToPlayer(x2, z1, playerX, playerZ) <= rwSq
+                    && distSqToPlayer(x2, z2, playerX, playerZ) <= rwSq
+                    && distSqToPlayer(x1, z2, playerX, playerZ) <= rwSq;
+        }
+
+        private boolean worldRectIntersects(double x1, double z1, double x2, double z2,
+                                            double mapCenterX, double mapCenterY,
+                                            double playerX, double playerZ,
+                                            double pixelsPerBlock, double sin, double cos) {
+            if (!circular) return true;
+            double rw = (radius + 1.0) / pixelsPerBlock;
+            double minX = Math.min(x1, x2);
+            double maxX = Math.max(x1, x2);
+            double minZ = Math.min(z1, z2);
+            double maxZ = Math.max(z1, z2);
+            double closestX = Math.max(minX, Math.min(playerX, maxX));
+            double closestZ = Math.max(minZ, Math.min(playerZ, maxZ));
+            double dx = closestX - playerX;
+            double dz = closestZ - playerZ;
+            return dx * dx + dz * dz <= rw * rw;
+        }
+
+        private boolean worldLineFullyInside(double x1, double z1, double x2, double z2,
+                                             double mapCenterX, double mapCenterY,
+                                             double playerX, double playerZ,
+                                             double pixelsPerBlock, double sin, double cos) {
+            if (!circular) return true;
+            double rw = (radius - 0.75) / pixelsPerBlock;
+            if (rw <= 0.0) return false;
+            double rwSq = rw * rw;
+            return distSqToPlayer(x1, z1, playerX, playerZ) <= rwSq
+                    && distSqToPlayer(x2, z2, playerX, playerZ) <= rwSq;
+        }
+
+        private boolean worldLineIntersects(double x1, double z1, double x2, double z2,
+                                            double mapCenterX, double mapCenterY,
+                                            double playerX, double playerZ,
+                                            double pixelsPerBlock, double sin, double cos) {
+            if (!circular) return true;
+            double sx1 = screenX(x1, z1, mapCenterX, playerX, playerZ, pixelsPerBlock, sin, cos);
+            double sy1 = screenY(x1, z1, mapCenterY, playerX, playerZ, pixelsPerBlock, sin, cos);
+            double sx2 = screenX(x2, z2, mapCenterX, playerX, playerZ, pixelsPerBlock, sin, cos);
+            double sy2 = screenY(x2, z2, mapCenterY, playerX, playerZ, pixelsPerBlock, sin, cos);
+            if (containsPoint(sx1, sy1, 0.0) || containsPoint(sx2, sy2, 0.0)) return true;
+
+            double dx = sx2 - sx1;
+            double dy = sy2 - sy1;
+            double lenSq = dx * dx + dy * dy;
+            if (lenSq < 0.0001) return false;
+            double t = ((centerX - sx1) * dx + (centerY - sy1) * dy) / lenSq;
+            t = Math.max(0.0, Math.min(1.0, t));
+            double px = sx1 + dx * t;
+            double py = sy1 + dy * t;
+            return containsPoint(px, py, 0.0);
+        }
+    }
     private record WaypointDrawConfig(boolean waypointsOnMinimap,
                                       int opacity,
                                       float iconScale,

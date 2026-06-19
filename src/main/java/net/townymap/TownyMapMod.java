@@ -556,9 +556,17 @@ public class TownyMapMod implements ClientModInitializer {
     public static void renderSquaremapMinimapViewport(GuiGraphicsExtractor ctx,
                                                       double cameraX, double cameraZ,
                                                       double scale, int width, int height) {
+        renderSquaremapMinimapViewport(ctx, cameraX, cameraZ, scale, width, height, false, 0.0);
+    }
+
+    public static void renderSquaremapMinimapViewport(GuiGraphicsExtractor ctx,
+                                                      double cameraX, double cameraZ,
+                                                      double scale, int width, int height,
+                                                      boolean circularClip, double circularClipRadius) {
         if (!isActiveOnCurrentServer()) return;
         if (renderer != null) {
-            renderer.renderSquaremapMinimapViewport(ctx, cameraX, cameraZ, scale, width, height, true);
+            renderer.renderSquaremapMinimapViewport(ctx, cameraX, cameraZ, scale, width, height,
+                    true, circularClip ? circularClipRadius : 0.0);
         }
     }
 
@@ -679,6 +687,19 @@ public class TownyMapMod implements ClientModInitializer {
     // Name → {lastX, lastZ, lastSeenMs} for players who were recently nearby (info-panel red tracking).
     private static final java.util.Map<String, double[]> nearbyLastKnown = new java.util.HashMap<>();
 
+    // Scale for our minimap text so it matches Xaero's own info/coordinate text. Xaero draws that
+    // text inside its 1/xaeroScale matrix, i.e. at minimapScale/screenScale of the base font; ours
+    // was at 1.0 (too big). The minimap mixin sets this each frame from the live scales.
+    private static volatile float minimapTextScale = 1.0f;
+
+    public static void setMinimapTextScale(float scale) {
+        minimapTextScale = (scale > 0.05f && scale <= 4.0f) ? scale : 1.0f;
+    }
+
+    public static float minimapTextScale() {
+        return minimapTextScale;
+    }
+
     /**
      * Renders our info lines centred under the minimap: current town + nation, nearby players
      * (within 100 blocks, with distance), and nearest town when in the wilderness. A player who was
@@ -766,11 +787,14 @@ public class TownyMapMod implements ClientModInitializer {
         }
 
         if (lines.isEmpty()) return 0;
-        int lineH = client.font.lineHeight + 1;
-        int totalH = lines.size() * lineH;
+        // Scale our text to match Xaero's own info/coordinate text; all layout below is in scaled
+        // (on-screen) units so the block stays correctly placed and centred under the minimap.
+        float s = minimapTextScale();
+        float lineH = (client.font.lineHeight + 1) * s;
+        float totalH = lines.size() * lineH;
 
-        int maxW = 0;
-        for (String line : lines) maxW = Math.max(maxW, client.font.width(line));
+        float maxW = 0;
+        for (String line : lines) maxW = Math.max(maxW, client.font.width(line) * s);
 
         int screenW = client.getWindow().getGuiScaledWidth();
         int screenH = client.getWindow().getGuiScaledHeight();
@@ -779,27 +803,26 @@ public class TownyMapMod implements ClientModInitializer {
         // Place the block just below the minimap (clearing Xaero's coordinate line); flip above near
         // the screen bottom. (The live Xaero-info-block measurement used on the 1.21.11 branch, which
         // prevents overlap with multi-line Xaero info, is not ported here yet.)
-        int top = mapBottom + lineH + 12;
+        float top = mapBottom + lineH + 12;
         if (top + totalH > screenH - pad) {
             top = mapTop - (lineH + 12) - totalH;
         }
         top = Math.max(pad, Math.min(top, screenH - pad - totalH));
 
         // Center the column on the minimap, then clamp the whole block onto the screen.
-        int blockLeft = mapCenterX - maxW / 2;
-        blockLeft = Math.max(pad, Math.min(blockLeft, screenW - pad - maxW));
-        int blockCenterX = blockLeft + maxW / 2;
+        float blockCenterX = Math.max(pad + maxW / 2f,
+                Math.min((float) mapCenterX, screenW - pad - maxW / 2f));
 
-        int yy = top;
+        float cy = top + lineH / 2f;
         for (String line : lines) {
-            int w = client.font.width(line);
-            ctx.text(client.font, line, blockCenterX - w / 2, yy, 0xFFFFFFFF, true);
-            yy += lineH;
+            TownyMinimapOverlay.drawScaledLabelCentered(ctx, client.font, line, blockCenterX, cy,
+                    0xFFFFFFFF, 0, true);
+            cy += lineH;
         }
-        return totalH;
+        return (int) Math.ceil(totalH);
     }
 
-    public static void renderMinimapNationAlert(GuiGraphicsExtractor ctx, int x, int y, int size) {
+    public static void renderMinimapNationAlert(GuiGraphicsExtractor ctx, Object session, int x, int y, int size) {
         if (!isActiveOnCurrentServer()) return;
         if (config == null || !config.minimapNationAlertEnabled) return;
         long remaining = minimapNationAlertFlashUntilMs - System.currentTimeMillis();
@@ -809,6 +832,15 @@ public class TownyMapMod implements ClientModInitializer {
         int alpha = 120 + (int) Math.round(110.0 * pulse);
         int color = ((alpha & 0xFF) << 24) | (minimapFrameColor() & 0x00FFFFFF);
         int thickness = 3;
+        try {
+            xaero.hud.minimap.module.MinimapSession minimapSession =
+                    (xaero.hud.minimap.module.MinimapSession) session;
+            if (TownyMinimapOverlay.isCircularMinimap(minimapSession)) {
+                TownyMinimapOverlay.renderCircularOutline(ctx, x, y, size, color, 0, thickness);
+                return;
+            }
+        } catch (Exception ignored) {
+        }
         ctx.fill(x, y, x + size, y + thickness, color);
         ctx.fill(x, y + size - thickness, x + size, y + size, color);
         ctx.fill(x, y, x + thickness, y + size, color);
@@ -837,6 +869,12 @@ public class TownyMapMod implements ClientModInitializer {
             int color = 0xFF000000 | (minimapFrameColor() & 0x00FFFFFF);
             int shadow = 0xAA000000;
             int thickness = 1;
+            if (TownyMinimapOverlay.isCircularMinimap(minimapSession)) {
+                // Thicker smooth ring on the circular minimap: it sits on top of the squaremap and
+                // covers its stepped clip edge, so the visible boundary is this clean circle.
+                TownyMinimapOverlay.renderCircularOutline(ctx, x, y, size, color, shadow, 2);
+                return;
+            }
             ctx.fill(x - 1, y - 1, x + size + 1, y, shadow);
             ctx.fill(x - 1, y + size, x + size + 1, y + size + 1, shadow);
             ctx.fill(x - 1, y, x, y + size, shadow);

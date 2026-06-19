@@ -66,11 +66,14 @@ public class MixinMinimapModuleRenderer {
                                                   float originalTickDelta) {
         MinimapBounds bounds = actualMinimapBounds(session, x, y, screenScale, minimapScale,
                 renderContext, configuredWidth);
+        // Match Xaero's info-text size: it renders inside a 1/xaeroScale matrix, i.e. at
+        // minimapScale/screenScale of the base font. Our text draws at 1.0, so scale it to match.
+        TownyMapMod.setMinimapTextScale((float) (minimapScale / Math.max(1.0e-4, screenScale)));
         TownyMapMod.renderOnMinimap(drawContext, session, bounds.x(), bounds.y(), bounds.size());
         renderer.renderOutsidePip(session, x, y, screenW, screenH, screenScale, minimapScale,
                 configuredWidth, tickDelta, drawContext);
         TownyMapMod.renderMinimapFrame(drawContext, session, bounds.x(), bounds.y(), bounds.size());
-        TownyMapMod.renderMinimapNationAlert(drawContext, bounds.x(), bounds.y(), bounds.size());
+        TownyMapMod.renderMinimapNationAlert(drawContext, session, bounds.x(), bounds.y(), bounds.size());
         TownyMapMod.renderMinimapWaypointsOnTop(drawContext, session, bounds.x(), bounds.y(), bounds.size());
         // Draw after renderOutsidePip so our indicator composites on top of Xaero's arrow
         TownyMapMod.renderMinimapPlayerIndicator(drawContext, session, bounds.x(), bounds.y(), bounds.size());
@@ -84,30 +87,26 @@ public class MixinMinimapModuleRenderer {
                                                      double screenScale, float minimapScale,
                                                      ModuleRenderContext renderContext,
                                                      int configuredWidth) {
-        double xaeroScale = screenScale / Math.max(0.0001F, minimapScale);
-        try {
-            int minimapSize = session.getProcessor().getMinimapSize();
-            int scaledX = (int) (x * xaeroScale);
-            int scaledY = (int) (y * xaeroScale);
-            int scaledLeft = scaledX + 6;
-            int scaledTop = scaledY + 6;
-            int scaledSize = minimapSize / 2 + 6;
-            int mapX = (int) Math.round(scaledLeft / xaeroScale);
-            int mapY = (int) Math.round(scaledTop / xaeroScale);
-            int size = Math.max(1, (int) Math.round(scaledSize / xaeroScale));
-            int maxSize = Math.min(renderContext.w - Math.max(0, mapX - x),
-                    renderContext.h - Math.max(0, mapY - y));
-            if (maxSize > 0) {
-                size = Math.min(size, maxSize);
-            }
-            return new MinimapBounds(mapX, mapY, size);
-        } catch (RuntimeException | LinkageError ignored) {
-            int moduleSize = Math.min(renderContext.w, renderContext.h);
-            int size = configuredWidth > 0 ? Math.min(configuredWidth, moduleSize) : moduleSize;
-            int mapX = x + Math.max(0, (renderContext.w - size) / 2);
-            int mapY = y + Math.max(0, (renderContext.h - size) / 2);
-            return new MinimapBounds(mapX, mapY, size);
+        int boxW = renderContext.w;
+        int boxH = renderContext.h;
+        int minimapSize = session.getProcessor().getMinimapSize();
+        // Xaero's VISIBLE circle is its frame's OUTER edge. Decoded from
+        // MinimapRenderer.renderMinimap + MinimapRendererHelper.drawTexturedElipseInsideRectangleFrame:
+        //   inner radius (local) = (minimapSize/2)/2 = minimapSize/4
+        //   outer radius (local) = inner + frame thickness (4) = minimapSize/4 + 4
+        // both drawn in the matrix scaled by 1/xaeroScale (xaeroScale = screenScale/minimapScale), so
+        //   GUI outer diameter = 2*(minimapSize/4 + 4)/xaeroScale = (minimapSize/2 + 8)/xaeroScale.
+        // (terrain alone is (minimapSize/2)/xaeroScale; the frame adds 8/xaeroScale of diameter.)
+        // The circle is concentric with the box's boxSize content square, so we centre it there.
+        double xaeroScale = screenScale / Math.max(1.0e-4, minimapScale);
+        int diameter = (int) Math.round((minimapSize / 2.0 + 8.0) / xaeroScale);
+        if (diameter <= 0) {
+            diameter = Math.min(boxW, boxH);
         }
+        diameter = Math.max(1, diameter);
+        int mapX = x + (boxW - diameter) / 2;
+        int mapY = y + (boxW - diameter) / 2;
+        return new MinimapBounds(mapX, mapY, diameter);
     }
 
     private record MinimapBounds(int x, int y, int size) {}
