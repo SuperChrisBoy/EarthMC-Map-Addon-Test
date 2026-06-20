@@ -1,8 +1,11 @@
 package net.townymap.render;
 
+import com.mojang.blaze3d.pipeline.RenderPipeline;
+import com.mojang.blaze3d.platform.NativeImage;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.resources.Identifier;
@@ -1371,35 +1374,125 @@ public final class TownyMinimapOverlay {
         return fallback;
     }
 
+    private static final RenderPipeline RING_PIPELINE = RenderPipelines.GUI_TEXTURED;
+    private static final int RING_PAD = 2;                          // px the shadow extends past the radius
+    // Cache for the ring texture (the outline is a static circle that only changes when its size or
+    // colour changes, so we rasterise it ONCE into a texture and blit it each frame instead of the
+    // ~480 per-row fills the scanline path needs (~0.85ms/frame)).
+    private static Identifier ringTextureId;
+    private static int ringCacheSize = -1, ringCacheColor, ringCacheShadow, ringCacheThickness;
+
     public static void renderCircularOutline(GuiGraphicsExtractor ctx, int x, int y, int size,
                                              int color, int shadowColor, int thickness) {
         if (size <= 8 || thickness <= 0) return;
-        double centerX = x + size / 2.0;
-        double centerY = y + size / 2.0;
-        double radius = Math.max(1.0, size / 2.0);
-        // ~1 segment per pixel of circumference (2*pi*r) so the ring reads as a true circle, not a
-        // faceted polygon. Drawn once per frame, so a high count is cheap.
-        int segments = Math.max(96, Math.min(1600, (int) Math.round(radius * 6.30)));
-        if ((shadowColor >>> 24) != 0) {
-            drawCircleOutline(ctx, centerX, centerY, radius + 1.0, segments, shadowColor);
+        Identifier tex = ringTexture(size, color, shadowColor, thickness);
+        if (tex != null) {
+            int dim = size + 2 * RING_PAD;
+            ctx.blit(RING_PIPELINE, tex, x - RING_PAD, y - RING_PAD, 0.0F, 0.0F,
+                    dim, dim, dim, dim, dim, dim);
+            return;
         }
-        for (int i = 0; i < thickness; i++) {
-            drawCircleOutline(ctx, centerX, centerY, Math.max(1.0, radius - i), segments, color);
+        scanlineRingOutline(ctx, x, y, size, color, shadowColor, thickness);
+    }
+
+    // Returns a cached ring texture, (re)generating it only when size/colour/thickness change.
+    private static Identifier ringTexture(int size, int color, int shadowColor, int thickness) {
+        if (ringTextureId != null && size == ringCacheSize && color == ringCacheColor
+                && shadowColor == ringCacheShadow && thickness == ringCacheThickness) {
+            return ringTextureId;
+        }
+        try {
+            int dim = size + 2 * RING_PAD;
+            double c = RING_PAD + size / 2.0;                        // ring centre in texture space
+            double rOuter = Math.max(1.0, size / 2.0);
+            double rInner = Math.max(0.0, rOuter - thickness);
+            boolean hasShadow = (shadowColor >>> 24) != 0;
+            double rShadow = hasShadow ? rOuter + 1.0 : rOuter;
+            int mainAbgr = argbToAbgr(color);
+            int shadowAbgr = argbToAbgr(shadowColor);
+
+            NativeImage img = new NativeImage(NativeImage.Format.RGBA, dim, dim, false);
+            for (int py = 0; py < dim; py++) {
+                double dy = (py + 0.5) - c;
+                for (int px = 0; px < dim; px++) {
+                    double dx = (px + 0.5) - c;
+                    double d = Math.sqrt(dx * dx + dy * dy);
+                    int abgr;
+                    if (d >= rInner && d <= rOuter) {
+                        abgr = mainAbgr;                              // coloured ring band
+                    } else if (hasShadow && d > rOuter && d <= rShadow) {
+                        abgr = shadowAbgr;                           // 1px shadow just outside
+                    } else {
+                        abgr = 0;                                    // transparent
+                    }
+                    img.setPixelABGR(px, py, abgr);
+                }
+            }
+
+            Minecraft client = Minecraft.getInstance();
+            Identifier id = Identifier.fromNamespaceAndPath("townymapaddon", "minimap_ring");
+            if (ringTextureId != null) {
+                client.getTextureManager().release(ringTextureId);
+            }
+            client.getTextureManager().register(id, new DynamicTexture(() -> "TownyMap minimap ring", img));
+            ringTextureId = id;
+            ringCacheSize = size;
+            ringCacheColor = color;
+            ringCacheShadow = shadowColor;
+            ringCacheThickness = thickness;
+            return id;
+        } catch (Exception | LinkageError e) {
+            ringTextureId = null;
+            ringCacheSize = -1;
+            return null;                                             // fall back to scanline
         }
     }
 
-    private static void drawCircleOutline(GuiGraphicsExtractor ctx, double centerX, double centerY,
-                                          double radius, int segments, int color) {
-        double previousX = centerX + radius;
-        double previousY = centerY;
-        for (int i = 1; i <= segments; i++) {
-            double angle = Math.PI * 2.0 * i / segments;
-            double x = centerX + Math.cos(angle) * radius;
-            double y = centerY + Math.sin(angle) * radius;
-            drawScreenLine(ctx, previousX, previousY, x, y, color);
-            previousX = x;
-            previousY = y;
+    // NativeImage stores pixels little-endian as ABGR (0xAABBGGRR); convert from ARGB (0xAARRGGBB).
+    private static int argbToAbgr(int argb) {
+        return (argb & 0xFF00FF00) | ((argb >> 16) & 0xFF) | ((argb & 0xFF) << 16);
+    }
+
+    private static void scanlineRingOutline(GuiGraphicsExtractor ctx, int x, int y, int size,
+                                            int color, int shadowColor, int thickness) {
+        double cx = x + size / 2.0;
+        double cy = y + size / 2.0;
+        double rOuter = Math.max(1.0, size / 2.0);                 // outer edge of the coloured ring
+        double rInner = Math.max(0.0, rOuter - thickness);          // inner edge of the coloured ring
+        boolean hasShadow = (shadowColor >>> 24) != 0;
+        double rShadow = hasShadow ? rOuter + 1.0 : rOuter;         // 1px shadow just outside
+
+        // Scanline annulus: for each pixel row, fill the horizontal span(s) where the ring band
+        // crosses that row. ~4*radius fills total vs the old ~3*(2*pi*r) tiny per-segment fills
+        // (each ctx.fill is ~2.5us in the deferred pipeline, so the old path cost ~2.8ms/frame).
+        // Result is a solid, gap-free, perfectly round ring.
+        double rOuterSq = rOuter * rOuter;
+        double rInnerSq = rInner * rInner;
+        double rShadowSq = rShadow * rShadow;
+        int yStart = (int) Math.floor(cy - rShadow);
+        int yEnd = (int) Math.ceil(cy + rShadow);
+        for (int py = yStart; py < yEnd; py++) {
+            double dy = (py + 0.5) - cy;
+            double dySq = dy * dy;
+            if (dySq > rShadowSq) continue;
+            double xOuter = Math.sqrt(Math.max(0.0, rOuterSq - dySq));
+            double xInner = dySq < rInnerSq ? Math.sqrt(rInnerSq - dySq) : 0.0;
+            if (hasShadow) {
+                double xShadow = Math.sqrt(Math.max(0.0, rShadowSq - dySq));
+                fillSpan(ctx, cx + xOuter, cx + xShadow, py, shadowColor);
+                fillSpan(ctx, cx - xShadow, cx - xOuter, py, shadowColor);
+            }
+            if (dySq <= rOuterSq) {
+                fillSpan(ctx, cx + xInner, cx + xOuter, py, color);
+                fillSpan(ctx, cx - xOuter, cx - xInner, py, color);
+            }
         }
+    }
+
+    private static void fillSpan(GuiGraphicsExtractor ctx, double xl, double xr, int py, int color) {
+        int l = (int) Math.round(xl);
+        int r = (int) Math.round(xr);
+        if (r > l) ctx.fill(l, py, r, py + 1, color);
     }
 
     private static void syncXaeroChunkGrid(MinimapSession session, TownyMapConfig config) {
