@@ -1308,7 +1308,7 @@ public final class TownyMinimapOverlay {
         if (isMinimapNorthLocked(session)) {
             return 0.0;
         }
-        return Math.toRadians(180.0 - client.gameRenderer.getMainCamera().yRot());
+        return Math.toRadians(180.0 - client.gameRenderer.mainCamera().yRot());
     }
 
     private static boolean isMinimapNorthLocked(MinimapSession session) {

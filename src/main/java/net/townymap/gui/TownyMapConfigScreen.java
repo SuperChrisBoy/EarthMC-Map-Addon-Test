@@ -306,16 +306,25 @@ public class TownyMapConfigScreen extends Screen {
     @Override
     public boolean mouseClicked(MouseButtonEvent click, boolean doubled) {
         // Right-click a cycling control to step it backward (mirrors the in-game map buttons).
-        if (click.buttonInfo().button() == 1) {
+        int btn = click.button();
+        System.out.println("[TownyMap CYCLE] mouseClicked btn=" + btn
+                + " infoBtn=" + click.buttonInfo().button() + " x=" + click.x() + " y=" + click.y());
+        if (btn == 1) {
             double mx = click.x();
             double my = click.y();
             for (Row r : rows) {
-                if (r.control instanceof CycleButton<?> cycling
-                        && r.control.visible && r.control.isMouseOver(mx, my)) {
-                    ((CycleButtonAccessor) cycling).townymap$cycle(-1);
+                boolean isCycle = r.control instanceof CycleButton<?>;
+                if (isCycle && r.control.visible && r.control.isMouseOver(mx, my)) {
+                    System.out.println("[TownyMap CYCLE] hit cycle button -> cycle(-1)");
+                    try {
+                        ((CycleButtonAccessor) (CycleButton<?>) r.control).townymap$cycle(-1);
+                    } catch (Throwable t) {
+                        System.out.println("[TownyMap CYCLE] invoker FAILED: " + t);
+                    }
                     return true;
                 }
             }
+            System.out.println("[TownyMap CYCLE] right-click matched no cycle button (rows=" + rows.size() + ")");
         }
         return super.mouseClicked(click, doubled);
     }
@@ -400,7 +409,7 @@ public class TownyMapConfigScreen extends Screen {
 
     @Override
     public void onClose() {
-        this.minecraft.setScreen(parent);
+        this.minecraft.gui.setScreen(parent);
     }
 
     private int bodyTop() {

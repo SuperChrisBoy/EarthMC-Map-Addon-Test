@@ -353,7 +353,7 @@ public abstract class MixinGuiMap {
 
     private static void clearDepthForXaeroArrowIfAvailable() {
         try {
-            Object framebuffer = Minecraft.getInstance().getMainRenderTarget();
+            Object framebuffer = Minecraft.getInstance().gameRenderer.mainRenderTarget();
             Class<?> textureUtils = Class.forName("xaero.lib.client.graphics.util.TextureUtils");
             for (Method method : textureUtils.getMethods()) {
                 if (!"clearRenderTargetDepth".equals(method.getName()) || method.getParameterCount() != 2) continue;

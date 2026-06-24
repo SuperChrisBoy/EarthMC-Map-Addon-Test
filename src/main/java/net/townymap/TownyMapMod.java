@@ -1064,7 +1064,7 @@ public class TownyMapMod implements ClientModInitializer {
         Minecraft client = Minecraft.getInstance();
         if (client == null) return;
         // Pass the current screen (GuiMap) as parent so closing config returns to the map.
-        client.setScreen(new net.townymap.gui.TownyMapConfigScreen(client.screen));
+        client.gui.setScreen(new net.townymap.gui.TownyMapConfigScreen(client.gui.screen()));
     }
 
     public static TownSearchOverlay.ClickResult onTownSearchClick(double mouseX, double mouseY,

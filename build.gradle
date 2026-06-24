@@ -1,5 +1,5 @@
 plugins {
-    id 'net.fabricmc.fabric-loom' version '1.16-SNAPSHOT'
+    id 'net.fabricmc.fabric-loom' version '1.17.9'
     id 'maven-publish'
 }
 
@@ -83,7 +83,7 @@ jar {
 }
 
 // Automatically deploy the remapped JAR to the Modrinth launcher profile after build.
-def modsDir = file(new File(System.getProperty("user.home"), "Library/Application Support/ModrinthApp/profiles/26.1.2/mods"))
+def modsDir = file(new File(System.getProperty("user.home"), "Library/Application Support/ModrinthApp/profiles/26.2/mods"))
 def oldModJarPrefixes = ['towny-map-addon', 'EarthMC Map Addon', 'EarthMC.Map.Addon', 'earthmc-map-addon']
 def modrinthLauncherDb = file(new File(System.getProperty("user.home"), "Library/Application Support/ModrinthApp/app.db"))
 
