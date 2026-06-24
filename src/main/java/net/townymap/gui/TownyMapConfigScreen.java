@@ -307,28 +307,36 @@ public class TownyMapConfigScreen extends Screen {
 
     // ── Input ───────────────────────────────────────────────────────────────────
 
+    // 26.2 emits a spurious left-click (button 0) immediately after a right-click (button 1) at the
+    // exact same spot; left alone it re-cycles a CycleButton forward and cancels our backward step.
+    // Remember the right-click we just handled and swallow the paired left-click that follows it.
+    private long lastRightCycleNs = 0L;
+    private double lastRightCycleX = Double.NaN;
+    private double lastRightCycleY = Double.NaN;
+
     @Override
     public boolean mouseClicked(MouseButtonEvent click, boolean doubled) {
-        // Right-click a cycling control to step it backward (mirrors the in-game map buttons).
+        double mx = click.x();
+        double my = click.y();
         int btn = click.button();
-        System.out.println("[TownyMap CYCLE] mouseClicked btn=" + btn
-                + " infoBtn=" + click.buttonInfo().button() + " x=" + click.x() + " y=" + click.y());
+        // Right-click a cycling control to step it backward (mirrors the in-game map buttons).
         if (btn == 1) {
-            double mx = click.x();
-            double my = click.y();
             for (Row r : rows) {
-                boolean isCycle = r.control instanceof CycleButton<?>;
-                if (isCycle && r.control.visible && r.control.isMouseOver(mx, my)) {
-                    System.out.println("[TownyMap CYCLE] hit cycle button -> cycle(-1)");
-                    try {
-                        ((CycleButtonAccessor) (CycleButton<?>) r.control).townymap$cycle(-1);
-                    } catch (Throwable t) {
-                        System.out.println("[TownyMap CYCLE] invoker FAILED: " + t);
-                    }
+                if (r.control instanceof CycleButton<?> cycling
+                        && r.control.visible && r.control.isMouseOver(mx, my)) {
+                    ((CycleButtonAccessor) cycling).townymap$cycle(-1);
+                    lastRightCycleNs = System.nanoTime();
+                    lastRightCycleX = mx;
+                    lastRightCycleY = my;
                     return true;
                 }
             }
-            System.out.println("[TownyMap CYCLE] right-click matched no cycle button (rows=" + rows.size() + ")");
+        } else if (btn == 0
+                && System.nanoTime() - lastRightCycleNs < 50_000_000L
+                && Math.abs(mx - lastRightCycleX) < 1.0
+                && Math.abs(my - lastRightCycleY) < 1.0) {
+            lastRightCycleNs = 0L;                 // drop the spurious left-click paired with the right-click
+            return true;
         }
         return super.mouseClicked(click, doubled);
     }
