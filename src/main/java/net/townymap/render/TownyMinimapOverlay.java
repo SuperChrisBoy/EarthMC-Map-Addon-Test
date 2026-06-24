@@ -110,6 +110,19 @@ public final class TownyMinimapOverlay {
         double centerY = mapY + size / 2.0;
         double playerX = player.getX();
         double playerZ = player.getZ();
+        // The EarthMC map is overworld-only. Outside the overworld (e.g. the Nether) the raw X/Z
+        // would place our overlay at the wrong spot, so apply the configured behaviour.
+        if (client.level.dimension() != net.minecraft.world.level.Level.OVERWORLD) {
+            if (config.netherMode == 1) {
+                return;                                              // hide our overlay
+            }
+            if (config.netherMode == 2) {                           // convert to overworld coords
+                double dimScale = client.level.dimensionType().coordinateScale();
+                playerX *= dimScale;
+                playerZ *= dimScale;
+            }
+            // netherMode == 0: show anyway, at the raw coords
+        }
         double angle = minimapAngle(session, client);
         double sin = Math.sin(angle);
         double cos = Math.cos(angle);

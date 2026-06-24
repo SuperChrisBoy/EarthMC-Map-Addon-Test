@@ -127,6 +127,10 @@ public class TownyMapConfigScreen extends Screen {
         option("Hide Minimap In Nether", onOff(cfg.hideMinimapInNether, v -> cfg.hideMinimapInNether = v),
                 () -> cfg.hideMinimapInNether == DEFAULTS.hideMinimapInNether,
                 () -> cfg.hideMinimapInNether = DEFAULTS.hideMinimapInNether);
+        option("EarthMC Overlay In Nether", cycle(cfg.netherMode, new int[]{0, 1, 2},
+                        TownyMapConfigScreen::netherModeText, v -> cfg.netherMode = v),
+                () -> cfg.netherMode == DEFAULTS.netherMode,
+                () -> cfg.netherMode = DEFAULTS.netherMode);
 
         section("World Map");
         option("Town Borders", onOff(cfg.townsEnabled, v -> cfg.townsEnabled = v),
@@ -440,6 +444,14 @@ public class TownyMapConfigScreen extends Screen {
             case 2 -> "Major";
             case 3 -> "All";
             default -> "Off";
+        });
+    }
+
+    private static Component netherModeText(Integer mode) {
+        return Component.literal(switch (mode) {
+            case 1 -> "Hidden";
+            case 2 -> "Overworld Coords";
+            default -> "Show Anyway";
         });
     }
 
