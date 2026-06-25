@@ -2,6 +2,7 @@ package net.townymap.render;
 
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.world.World;
 import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.network.ClientPlayerEntity;
@@ -109,8 +110,19 @@ public final class TownyMinimapOverlay {
 
         double centerX = mapX + size / 2.0;
         double centerY = mapY + size / 2.0;
-        double playerX = player.getX();
-        double playerZ = player.getZ();
+        // The EarthMC map is overworld-only. Outside the overworld (e.g. the Nether) the raw X/Z
+        // would place our overlay at the wrong spot, so apply the configured behaviour. Compute the
+        // scale before reading the coords so playerX/playerZ stay effectively final (captured below).
+        double dimScale = 1.0;
+        if (client.world.getRegistryKey() != World.OVERWORLD) {
+            if (config.netherMode == 2 && client.world.getRegistryKey() == World.NETHER) {
+                dimScale = 8.0;                                      // Overworld Coords (Nether x8)
+            } else {
+                return;                                              // Hidden
+            }
+        }
+        double playerX = player.getX() * dimScale;
+        double playerZ = player.getZ() * dimScale;
         double angle = minimapAngle(session, client);
         double sin = Math.sin(angle);
         double cos = Math.cos(angle);

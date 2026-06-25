@@ -25,6 +25,10 @@ public class TownyMapConfig {
     public boolean minimapExtensionsEnabled = true;
     public boolean minimapPlayersEnabled = true;
     public boolean hideMinimapInNether = false;
+    // What our EarthMC overlay does outside the overworld (the EarthMC map is overworld-only, so in
+    // the Nether the player's X/Z would otherwise place the overlay at the wrong spot):
+    // 0 = show anyway (at the raw coords), 1 = hide our overlay, 2 = convert to overworld coords.
+    public int netherMode = 1;
     public boolean minimapNationAlertEnabled = true;
     public boolean minimapTownNamesEnabled = true;
     // ── Info display (text lines under the minimap, stacked with Xaero's coords) ──
@@ -41,6 +45,9 @@ public class TownyMapConfig {
     public int activeChunkCounterGroup = 0;
     public int chunkCounterGroupCount = 1;
     public boolean squaremapBackgroundEnabled = false;
+    // TEST: zoom the world-map EarthMC overlay out further (the overlay's block-scale is divided by
+    // a factor, keeping it centred on the camera) so you can zoom out to see the whole EarthMC map.
+    public boolean worldMapOverview = false;
     public boolean nationStarsEnabled = true;
     public boolean chunkGridEnabled = false;
     public boolean customOverlaysEnabled = false;

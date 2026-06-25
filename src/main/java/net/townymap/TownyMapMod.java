@@ -983,6 +983,22 @@ public class TownyMapMod implements ClientModInitializer {
                 && client.world.getRegistryKey() == World.NETHER;
     }
 
+    /**
+     * Coordinate multiplier for our overlay on the world map, given the dimension and "EarthMC Map In
+     * Nether" setting: 1.0 = render normally, 8.0 = convert Nether coords to overworld (the caller
+     * also divides its block-scale by this so the overworld overlay lines up over the real tiles),
+     * 0.0 = hide (overworld-only data with nothing sensible to show here).
+     */
+    public static double worldMapOverlayScale() {
+        if (!isActiveOnCurrentServer() || config == null) return 1.0;
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.world == null) return 1.0;
+        var dim = client.world.getRegistryKey();
+        if (dim == World.OVERWORLD) return 1.0;
+        if (config.netherMode == 2 && dim == World.NETHER) return 8.0;   // Overworld Coords
+        return 0.0;                                                       // Hidden
+    }
+
     public static int playerDotColor(String playerName) {
         return playerDotColor(playerName, townKey(playerName));
     }

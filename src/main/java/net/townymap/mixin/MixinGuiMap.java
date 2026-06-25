@@ -19,7 +19,9 @@ import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Constant;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.slf4j.Logger;
@@ -49,11 +51,24 @@ public abstract class MixinGuiMap {
     private static final AtomicBoolean MAP_SURFACE_ERROR_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean RENDER_ERROR_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean CLICK_ERROR_LOGGED = new AtomicBoolean(false);
+    // TEST: how much further "World Map Overview" lets you zoom out (Xaero's min destScale / this).
+    private static final double WORLD_MAP_OVERVIEW_FACTOR = 8.0;
 
     @Shadow(remap = false) private double cameraX;
     @Shadow(remap = false) private double cameraZ;
     @Shadow(remap = false) private double scale;
     @Shadow(remap = false) private double screenScale;
+
+    // TEST: extend Xaero's zoom-out floor when "World Map Overview" is on. Xaero clamps the world-map
+    // zoom in changeZoom with `if (destScale < 0.0625) destScale = 0.0625`; we lower that floor so the
+    // user can zoom out far enough to see the whole EarthMC map. Because we only change Xaero's own
+    // zoom, the tiles, player arrow and our overlay all share one scale and stay aligned.
+    @ModifyConstant(method = "changeZoom", constant = @Constant(doubleValue = 0.0625), remap = false)
+    private double townymap$extendWorldMapZoomOut(double original) {
+        return (TownyMapMod.getConfig() != null && TownyMapMod.getConfig().worldMapOverview)
+                ? original / WORLD_MAP_OVERVIEW_FACTOR
+                : original;
+    }
 
     // ── All overlay rendering at HEAD (clean GL/matrix state) ─────────────────
 
@@ -69,18 +84,26 @@ public abstract class MixinGuiMap {
     )
     private void onBeforePlayerArrow(DrawContext ctx, int mouseX, int mouseY,
                                      float delta, CallbackInfo ci) {
+        // The EarthMC map is overworld-only. Outside the overworld our overlay is hidden, except in
+        // "Overworld Coords" mode in the Nether, where we scale the overlay's camera x8 and its
+        // block-scale /8 so the overworld map/towns line up exactly over Xaero's real Nether tiles.
+        double dimMul = TownyMapMod.worldMapOverlayScale();
+        if (dimMul <= 0.0) return;
         try {
             MinecraftClient mc = MinecraftClient.getInstance();
             int w = mc.getWindow().getScaledWidth();
             int h = mc.getWindow().getScaledHeight();
             double guiScale = (screenScale > 0) ? scale / screenScale : scale;
-            TownyMapMod.renderSquaremapBackground(ctx, cameraX, cameraZ, guiScale, w, h);
-            TownyMapMod.renderOnWorldMap(ctx, cameraX, cameraZ, guiScale, w, h);
-            if (guiScale > 0) {
-                double worldX = (mouseX - w / 2.0) / guiScale + cameraX;
-                double worldZ = (mouseY - h / 2.0) / guiScale + cameraZ;
-                TownyMapMod.renderHoveredWorldMapChunk(ctx, cameraX, cameraZ, guiScale, w, h, worldX, worldZ);
-                TownyMapMod.renderChunkCounter(ctx, cameraX, cameraZ, guiScale, w, h, worldX, worldZ);
+            double camX = cameraX * dimMul;
+            double camZ = cameraZ * dimMul;
+            double mapScale = guiScale / dimMul;
+            TownyMapMod.renderSquaremapBackground(ctx, camX, camZ, mapScale, w, h);
+            TownyMapMod.renderOnWorldMap(ctx, camX, camZ, mapScale, w, h);
+            if (mapScale > 0) {
+                double worldX = (mouseX - w / 2.0) / mapScale + camX;
+                double worldZ = (mouseY - h / 2.0) / mapScale + camZ;
+                TownyMapMod.renderHoveredWorldMapChunk(ctx, camX, camZ, mapScale, w, h, worldX, worldZ);
+                TownyMapMod.renderChunkCounter(ctx, camX, camZ, mapScale, w, h, worldX, worldZ);
             }
             ctx.drawDeferredElements();
             clearDepthForXaeroArrowIfAvailable();
