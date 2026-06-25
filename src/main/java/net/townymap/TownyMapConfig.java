@@ -41,6 +41,10 @@ public class TownyMapConfig {
     public int activeChunkCounterGroup = 0;
     public int chunkCounterGroupCount = 1;
     public boolean squaremapBackgroundEnabled = false;
+    // What our EarthMC overlay does outside the overworld: 1 = hide, 2 = convert to overworld coords.
+    public int netherMode = 1;
+    // TEST: extend the world-map zoom-out floor so you can zoom out to see the whole EarthMC map.
+    public boolean worldMapOverview = false;
     public boolean nationStarsEnabled = true;
     public boolean chunkGridEnabled = false;
     public boolean customOverlaysEnabled = false;

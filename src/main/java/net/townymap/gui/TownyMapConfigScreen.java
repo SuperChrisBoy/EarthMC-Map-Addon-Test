@@ -103,6 +103,10 @@ public class TownyMapConfigScreen extends Screen {
         option("EarthMC Only", onOff(cfg.earthmcOnly, v -> cfg.earthmcOnly = v),
                 () -> cfg.earthmcOnly == DEFAULTS.earthmcOnly,
                 () -> cfg.earthmcOnly = DEFAULTS.earthmcOnly);
+        option("EarthMC Map In Nether", cycle(cfg.netherMode == 2 ? 2 : 1, new int[]{1, 2},
+                        TownyMapConfigScreen::netherModeText, v -> cfg.netherMode = v),
+                () -> cfg.netherMode == DEFAULTS.netherMode,
+                () -> cfg.netherMode = DEFAULTS.netherMode);
 
         section("Minimap");
         option("Minimap Extensions", onOff(cfg.minimapExtensionsEnabled, v -> cfg.minimapExtensionsEnabled = v),
@@ -135,6 +139,9 @@ public class TownyMapConfigScreen extends Screen {
         option("Squaremap Background", onOff(cfg.squaremapBackgroundEnabled, v -> cfg.squaremapBackgroundEnabled = v),
                 () -> cfg.squaremapBackgroundEnabled == DEFAULTS.squaremapBackgroundEnabled,
                 () -> cfg.squaremapBackgroundEnabled = DEFAULTS.squaremapBackgroundEnabled);
+        option("World Map Overview (Test)", onOff(cfg.worldMapOverview, v -> cfg.worldMapOverview = v),
+                () -> cfg.worldMapOverview == DEFAULTS.worldMapOverview,
+                () -> cfg.worldMapOverview = DEFAULTS.worldMapOverview);
         option("Nation Capital Stars", onOff(cfg.nationStarsEnabled, v -> cfg.nationStarsEnabled = v),
                 () -> cfg.nationStarsEnabled == DEFAULTS.nationStarsEnabled,
                 () -> cfg.nationStarsEnabled = DEFAULTS.nationStarsEnabled);
@@ -432,6 +439,10 @@ public class TownyMapConfigScreen extends Screen {
             case 3 -> "All";
             default -> "Off";
         });
+    }
+
+    private static Component netherModeText(Integer mode) {
+        return Component.literal(mode == 2 ? "Overworld Coords" : "Hidden");
     }
 
     private static Component minimapChunkGridModeText(Integer mode) {
