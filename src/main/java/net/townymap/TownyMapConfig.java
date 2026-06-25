@@ -45,6 +45,9 @@ public class TownyMapConfig {
     public int activeChunkCounterGroup = 0;
     public int chunkCounterGroupCount = 1;
     public boolean squaremapBackgroundEnabled = false;
+    // TEST: zoom the world-map EarthMC overlay out further (extends Xaero's world-map zoom-out floor)
+    // so you can zoom out to see the whole EarthMC map.
+    public boolean worldMapOverview = false;
     public boolean nationStarsEnabled = true;
     public boolean chunkGridEnabled = false;
     public boolean customOverlaysEnabled = false;

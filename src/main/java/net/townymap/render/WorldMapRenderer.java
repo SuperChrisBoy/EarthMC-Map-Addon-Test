@@ -45,6 +45,12 @@ public class WorldMapRenderer {
     private static final int TOWN_INDEX_CELL_SIZE = 2048;
     private static final long STATUS_RGB_CYCLE_MS = 5000L;
     private static final int TINY_TOWN_SCREEN_PIXELS = 2;
+    // Overview LOD: above this many on-screen towns, draw each as one filled bbox rect (deduped per
+    // screen cell) instead of a polygon outline -> ~1 draw/town, keeps the zoomed-out map smooth.
+    private static final int TOWN_OVERVIEW_COUNT = 1000;
+    private static final int TOWN_OVERVIEW_FILL_ALPHA = 130;
+    private static final int TOWN_OVERVIEW_DEDUP_CELL = 3;
+    private boolean[] overviewCells;
 
     // ── Outline level-of-detail ───────────────────────────────────────────────
     // Each ring stores its outline at several resolutions, built by snapping the
@@ -289,6 +295,12 @@ public class WorldMapRenderer {
                              int sw, int sh,
                              List<RenderTown> visibleTowns,
                              Map<String, TownPopupData> townDetails) {
+        // Zoomed-out whole-map view: too many towns for polygon outlines. Fall back to one filled
+        // bbox rect per town -- cheap, reads as a colored patchwork.
+        if (visibleTowns.size() > TOWN_OVERVIEW_COUNT) {
+            renderTownsOverview(ctx, cameraX, cameraZ, blockScale, sw, sh, visibleTowns);
+            return;
+        }
         int statusRgb = statusHighlightRgb();
         int fillColor0 = blockScale >= TOWN_FILL_MIN_SCALE ? 0xFF : 0;  // fill enabled?
         for (RenderTown town : visibleTowns) {
@@ -321,6 +333,43 @@ public class WorldMapRenderer {
                     renderRing(ctx, ring, 0xFFFFE066, 0x22FFE066,
                                cameraX, cameraZ, blockScale, sw, sh);
                 }
+            }
+        }
+    }
+
+    // Overview LOD for the zoomed-out whole-map view: one filled bbox rect per town ring, deduped so
+    // many sub-cell towns stacked on the same pixels collapse to a single fill (~1 draw/town).
+    private void renderTownsOverview(GuiGraphicsExtractor ctx,
+                                     double cameraX, double cameraZ, double blockScale,
+                                     int sw, int sh, List<RenderTown> visibleTowns) {
+        int cell = TOWN_OVERVIEW_DEDUP_CELL;
+        int gw = sw / cell + 2;
+        int gh = sh / cell + 2;
+        if (overviewCells == null || overviewCells.length < gw * gh) {
+            overviewCells = new boolean[gw * gh];
+        } else {
+            java.util.Arrays.fill(overviewCells, 0, gw * gh, false);
+        }
+        for (RenderTown town : visibleTowns) {
+            int color = town.data().argbColor(TOWN_OVERVIEW_FILL_ALPHA);
+            for (RingGeometry ring : town.rings()) {
+                int x1 = toScreenX(ring.minX(), cameraX, blockScale, sw);
+                int x2 = toScreenX(ring.maxX(), cameraX, blockScale, sw);
+                int y1 = toScreenY(ring.minZ(), cameraZ, blockScale, sh);
+                int y2 = toScreenY(ring.maxZ(), cameraZ, blockScale, sh);
+                if (x2 < 0 || x1 > sw || y2 < 0 || y1 > sh) continue;
+                if (x2 - x1 <= cell && y2 - y1 <= cell) {
+                    int gx = Math.max(0, Math.min(gw - 1, ((x1 + x2) / 2) / cell));
+                    int gy = Math.max(0, Math.min(gh - 1, ((y1 + y2) / 2) / cell));
+                    int gi = gy * gw + gx;
+                    if (overviewCells[gi]) continue;
+                    overviewCells[gi] = true;
+                }
+                int cx1 = Math.max(0, x1);
+                int cy1 = Math.max(0, y1);
+                int cx2 = Math.min(sw, Math.max(x1 + 1, x2));
+                int cy2 = Math.min(sh, Math.max(y1 + 1, y2));
+                ctx.fill(cx1, cy1, cx2, cy2, color);
             }
         }
     }

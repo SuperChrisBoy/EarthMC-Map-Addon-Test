@@ -19,7 +19,9 @@ import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Constant;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.slf4j.Logger;
@@ -69,18 +71,25 @@ public abstract class MixinGuiMap {
     )
     private void onBeforePlayerArrow(GuiGraphicsExtractor ctx, int mouseX, int mouseY,
                                      float delta, CallbackInfo ci) {
+        // Overworld-only: hide outside the overworld, except in "Overworld Coords" mode in the Nether
+        // where camera x8 / block-scale /8 lines our overlay up over Xaero's real Nether tiles.
+        double dimMul = TownyMapMod.worldMapOverlayScale();
+        if (dimMul <= 0.0) return;
         try {
             Minecraft mc = Minecraft.getInstance();
             int w = mc.getWindow().getGuiScaledWidth();
             int h = mc.getWindow().getGuiScaledHeight();
             double guiScale = (screenScale > 0) ? scale / screenScale : scale;
-            TownyMapMod.renderSquaremapBackground(ctx, cameraX, cameraZ, guiScale, w, h);
-            TownyMapMod.renderOnWorldMap(ctx, cameraX, cameraZ, guiScale, w, h);
-            if (guiScale > 0) {
-                double worldX = (mouseX - w / 2.0) / guiScale + cameraX;
-                double worldZ = (mouseY - h / 2.0) / guiScale + cameraZ;
-                TownyMapMod.renderHoveredWorldMapChunk(ctx, cameraX, cameraZ, guiScale, w, h, worldX, worldZ);
-                TownyMapMod.renderChunkCounter(ctx, cameraX, cameraZ, guiScale, w, h, worldX, worldZ);
+            double camX = cameraX * dimMul;
+            double camZ = cameraZ * dimMul;
+            double mapScale = guiScale / dimMul;
+            TownyMapMod.renderSquaremapBackground(ctx, camX, camZ, mapScale, w, h);
+            TownyMapMod.renderOnWorldMap(ctx, camX, camZ, mapScale, w, h);
+            if (mapScale > 0) {
+                double worldX = (mouseX - w / 2.0) / mapScale + camX;
+                double worldZ = (mouseY - h / 2.0) / mapScale + camZ;
+                TownyMapMod.renderHoveredWorldMapChunk(ctx, camX, camZ, mapScale, w, h, worldX, worldZ);
+                TownyMapMod.renderChunkCounter(ctx, camX, camZ, mapScale, w, h, worldX, worldZ);
             }
             ctx.extractDeferredElements(mouseX, mouseY, delta);
             clearDepthForXaeroArrowIfAvailable();
@@ -88,6 +97,14 @@ public abstract class MixinGuiMap {
         } catch (Exception e) {
             logOnce(MAP_SURFACE_ERROR_LOGGED, "Failed to render world-map surface overlay", e);
         }
+    }
+
+    // TEST: extend Xaero's zoom-out floor when "World Map Overview" is on (see MixinGuiMap on 1.21.11).
+    @ModifyConstant(method = "changeZoom", constant = @Constant(doubleValue = 0.0625), remap = false)
+    private double townymap$extendWorldMapZoomOut(double original) {
+        return (TownyMapMod.getConfig() != null && TownyMapMod.getConfig().worldMapOverview)
+                ? original / 8.0
+                : original;
     }
 
     @Inject(method = "renderPreDropdown", at = @At("HEAD"), remap = false)
