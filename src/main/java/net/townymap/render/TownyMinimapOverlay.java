@@ -94,6 +94,7 @@ public final class TownyMinimapOverlay {
         syncXaeroChunkGrid(session, config);
 
         api.tickMinimapTownMarkers();
+        api.tickPlayers();   // keep player dots + the under-minimap list live even when the full map is closed
 
         MinecraftClient client = MinecraftClient.getInstance();
         ClientPlayerEntity player = client.player;

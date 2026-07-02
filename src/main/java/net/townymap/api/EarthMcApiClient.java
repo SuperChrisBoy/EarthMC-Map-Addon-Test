@@ -3,6 +3,8 @@ package net.townymap.api;
 import com.google.gson.*;
 import net.townymap.model.EarthMcNationData;
 import net.townymap.model.EarthMcPlayerData;
+import net.townymap.model.NationBonusProjection;
+import net.townymap.model.NationResidentStats;
 import net.townymap.model.TownPopupData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,6 +37,18 @@ public class EarthMcApiClient {
 
     private final HttpClient http;
     private final ExecutorService executor;
+    // Caps concurrent /players activity-batch POSTs. The API 429s past ~4 simultaneous requests, so we
+    // fire a big entity's 100-id batches in parallel but throttled to this many at once (the safe max).
+    // Base town/nation fetches are NOT gated (they have their own load cap), so the map stays responsive.
+    private final java.util.concurrent.Semaphore activeBatchGate = new java.util.concurrent.Semaphore(4);
+
+    // Per-resident activity cache (id → {removalDate, fetchedAt}), so a huge nation like France (1000+
+    // residents = ~11 /players calls) is fetched once, then repeat views and other nations that share
+    // residents resolve with zero API calls. removalDate is absolute (lastOnline + 42d), so it stays
+    // correct as time passes; a short TTL picks up players who log on/off.
+    private final java.util.concurrent.ConcurrentHashMap<String, long[]> residentActivityCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long RESIDENT_ACTIVITY_TTL_MS = 15L * 60 * 1000;
 
     public EarthMcApiClient() {
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -91,6 +105,68 @@ public class EarthMcApiClient {
                 return null;
             }
         }, executor);
+    }
+
+    /** /towns accepts up to 100 names per query. */
+    private static final int TOWN_QUERY_BATCH = 100;
+
+    /**
+     * Bulk town-detail lookup. Instead of one POST per visible town, this collapses a whole screen into
+     * ⌈N/100⌉ parallel (gated) requests. Returns a map keyed by lowercase town name; any name the API
+     * didn't return (deleted/renamed, or a failed batch) is simply absent from the map.
+     */
+    public CompletableFuture<java.util.Map<String, TownPopupData>> fetchTowns(List<String> names) {
+        return CompletableFuture.supplyAsync(() -> {
+            java.util.Map<String, TownPopupData> out = new ConcurrentHashMap<>();
+            if (names == null || names.isEmpty()) return out;
+            // Dedupe (preserve order) so repeated names don't waste query slots.
+            java.util.LinkedHashSet<String> unique = new java.util.LinkedHashSet<>();
+            for (String n : names) if (n != null && !n.isBlank()) unique.add(n);
+            List<String> list = new ArrayList<>(unique);
+
+            // Fire the 100-name batches in parallel; activeBatchGate throttles them to a rate the API
+            // tolerates, exactly like the resident-activity batches.
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
+            for (int i = 0; i < list.size(); i += TOWN_QUERY_BATCH) {
+                List<String> batch = new ArrayList<>(list.subList(i, Math.min(list.size(), i + TOWN_QUERY_BATCH)));
+                futures.add(CompletableFuture.runAsync(() -> fetchTownsBatch(batch, out), executor));
+            }
+            for (CompletableFuture<Void> f : futures) {
+                try { f.join(); } catch (RuntimeException ignored) { /* a failed batch just yields fewer entries */ }
+            }
+            return out;
+        }, executor);
+    }
+
+    /** Looks up one ≤100-name batch and drops each parsed town into {@code out}, keyed by lowercase name. */
+    private void fetchTownsBatch(List<String> batch, java.util.Map<String, TownPopupData> out) {
+        JsonObject body = new JsonObject();
+        JsonArray q = new JsonArray();
+        batch.forEach(q::add);
+        body.add("query", q);
+
+        String json = null;
+        for (int attempt = 0; attempt < 3 && json == null; attempt++) {
+            if (attempt > 0) {
+                try { Thread.sleep(120L * attempt); }   // backoff before retrying a transient failure
+                catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+            }
+            json = postGated(BASE + "/towns", body.toString());
+        }
+        if (json == null) return;
+        JsonArray arr;
+        try {
+            arr = JsonParser.parseString(json).getAsJsonArray();
+        } catch (RuntimeException e) {
+            return;
+        }
+        for (JsonElement el : arr) {
+            if (!el.isJsonObject()) continue;
+            TownPopupData data = parseTown(el.getAsJsonObject());
+            if (data != null && data.townName() != null && !data.townName().isBlank()) {
+                out.put(data.townName().toLowerCase(java.util.Locale.ROOT), data);
+            }
+        }
     }
 
     public CompletableFuture<List<EarthMcPlayerData>> fetchPlayerIndex() {
@@ -157,6 +233,61 @@ public class EarthMcApiClient {
         }, executor);
     }
 
+    /**
+     * Bulk player-detail lookup (≤100 names/query, parallel + gated), mirroring {@link #fetchTowns} /
+     * {@link #fetchNations}. Replaces the one-POST-per-player pattern for search rows and visible players.
+     * Returns a map keyed by lowercase player name; names the API didn't return (opted out) are absent.
+     */
+    public CompletableFuture<java.util.Map<String, EarthMcPlayerData>> fetchPlayers(List<String> names) {
+        return CompletableFuture.supplyAsync(() -> {
+            java.util.Map<String, EarthMcPlayerData> out = new ConcurrentHashMap<>();
+            if (names == null || names.isEmpty()) return out;
+            java.util.LinkedHashSet<String> unique = new java.util.LinkedHashSet<>();
+            for (String n : names) if (n != null && !n.isBlank()) unique.add(n);
+            List<String> list = new ArrayList<>(unique);
+
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
+            for (int i = 0; i < list.size(); i += TOWN_QUERY_BATCH) {
+                List<String> batch = new ArrayList<>(list.subList(i, Math.min(list.size(), i + TOWN_QUERY_BATCH)));
+                futures.add(CompletableFuture.runAsync(() -> fetchPlayersBatch(batch, out), executor));
+            }
+            for (CompletableFuture<Void> f : futures) {
+                try { f.join(); } catch (RuntimeException ignored) { /* a failed batch just yields fewer entries */ }
+            }
+            return out;
+        }, executor);
+    }
+
+    private void fetchPlayersBatch(List<String> batch, java.util.Map<String, EarthMcPlayerData> out) {
+        JsonObject body = new JsonObject();
+        JsonArray q = new JsonArray();
+        batch.forEach(q::add);
+        body.add("query", q);
+
+        String json = null;
+        for (int attempt = 0; attempt < 3 && json == null; attempt++) {
+            if (attempt > 0) {
+                try { Thread.sleep(120L * attempt); }
+                catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+            }
+            json = postGated(BASE + "/players", body.toString());
+        }
+        if (json == null) return;
+        JsonArray arr;
+        try {
+            arr = JsonParser.parseString(json).getAsJsonArray();
+        } catch (RuntimeException e) {
+            return;
+        }
+        for (JsonElement el : arr) {
+            if (!el.isJsonObject()) continue;
+            EarthMcPlayerData data = parsePlayer(el.getAsJsonObject());
+            if (data != null && data.name() != null && !data.name().isBlank()) {
+                out.put(data.name().toLowerCase(java.util.Locale.ROOT), data);
+            }
+        }
+    }
+
     public CompletableFuture<EarthMcNationData> fetchNation(String nationName) {
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -175,6 +306,61 @@ public class EarthMcApiClient {
                 return null;
             }
         }, executor);
+    }
+
+    /**
+     * Bulk nation-detail lookup (≤100 names/query, parallel + gated), mirroring {@link #fetchTowns}. Used
+     * to warm the capital stars and search rows in a couple of requests instead of one POST per nation.
+     * Returns a map keyed by lowercase nation name; names the API didn't return are absent.
+     */
+    public CompletableFuture<java.util.Map<String, EarthMcNationData>> fetchNations(List<String> names) {
+        return CompletableFuture.supplyAsync(() -> {
+            java.util.Map<String, EarthMcNationData> out = new ConcurrentHashMap<>();
+            if (names == null || names.isEmpty()) return out;
+            java.util.LinkedHashSet<String> unique = new java.util.LinkedHashSet<>();
+            for (String n : names) if (n != null && !n.isBlank()) unique.add(n);
+            List<String> list = new ArrayList<>(unique);
+
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
+            for (int i = 0; i < list.size(); i += TOWN_QUERY_BATCH) {
+                List<String> batch = new ArrayList<>(list.subList(i, Math.min(list.size(), i + TOWN_QUERY_BATCH)));
+                futures.add(CompletableFuture.runAsync(() -> fetchNationsBatch(batch, out), executor));
+            }
+            for (CompletableFuture<Void> f : futures) {
+                try { f.join(); } catch (RuntimeException ignored) { /* a failed batch just yields fewer entries */ }
+            }
+            return out;
+        }, executor);
+    }
+
+    private void fetchNationsBatch(List<String> batch, java.util.Map<String, EarthMcNationData> out) {
+        JsonObject body = new JsonObject();
+        JsonArray q = new JsonArray();
+        batch.forEach(q::add);
+        body.add("query", q);
+
+        String json = null;
+        for (int attempt = 0; attempt < 3 && json == null; attempt++) {
+            if (attempt > 0) {
+                try { Thread.sleep(120L * attempt); }
+                catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+            }
+            json = postGated(BASE + "/nations", body.toString());
+        }
+        if (json == null) return;
+        JsonArray arr;
+        try {
+            arr = JsonParser.parseString(json).getAsJsonArray();
+        } catch (RuntimeException e) {
+            return;
+        }
+        for (JsonElement el : arr) {
+            if (!el.isJsonObject()) continue;
+            EarthMcNationData data = parseNation(el.getAsJsonObject());
+            if (data != null && data.name() != null && !data.name().isBlank()) {
+                out.put(data.name().toLowerCase(java.util.Locale.ROOT), data);
+            }
+        }
     }
 
     private TownPopupData fetchTownNow(String townName) {
@@ -211,11 +397,13 @@ public class EarthMcApiClient {
 
         int    chunks    = 0;
         int    residents = 0;
+        int    maxChunks = -1;
         double balance   = 0;
         if (t.has("stats") && t.get("stats").isJsonObject()) {
             JsonObject stats = t.getAsJsonObject("stats");
             if (stats.has("numTownBlocks")) chunks    = stats.get("numTownBlocks").getAsInt();
             if (stats.has("numResidents"))  residents = stats.get("numResidents").getAsInt();
+            if (stats.has("maxTownBlocks")) maxChunks = stats.get("maxTownBlocks").getAsInt();
             if (stats.has("balance"))       balance   = stats.get("balance").getAsDouble();
         }
 
@@ -225,7 +413,7 @@ public class EarthMcApiClient {
             if (ts.has("registered")) {
                 long ms = ts.get("registered").getAsLong();
                 founded = Instant.ofEpochMilli(ms)
-                        .atZone(ZoneOffset.UTC)
+                        .atZone(ZoneId.systemDefault())
                         .toLocalDate()
                         .format(DATE_FMT);
             }
@@ -253,28 +441,101 @@ public class EarthMcApiClient {
             if (status.has("hasNation")) hasNation = status.get("hasNation").getAsBoolean();
         }
 
-        int activeResidents = countActiveResidents(t);
+        // NOTE: the active-resident lookup is intentionally NOT done here. parseTown runs for every
+        // visible town when a status overlay is active (requestVisibleTownDetails), so a per-resident
+        // bulk POST here would fire hundreds of extra calls, get rate-limited, and corrupt both the
+        // inactive count AND this town's own data. It's looked up on demand for the focused town only
+        // (fetchTownActiveResidents). -1 = "not looked up".
         return new TownPopupData(name, nation, discord, board, mayor, chunks, founded, pvp,
                 isPublic, canOutsidersSpawn, isOverClaimed, isOpen, isForSale, hasNation, residents, balance,
-                activeResidents);
+                -1, maxChunks);
     }
 
-    private static final long INACTIVE_THRESHOLD_MS = 42L * 24 * 3600 * 1000;
-    private static final int RESIDENT_QUERY_BATCH = 50;
-    /** Skip the per-resident active lookup above this many residents (too many API calls); the max
-     *  then falls back to the raw count (shown approximate). Interim until EarthMC exposes it. */
-    private static final int MAX_RESIDENT_LOOKUP = 100;
+    /** On-demand for ONE focused nation: BOTH the active-resident count and the bonus-drop projection from
+     *  a single /nations fetch + a single resident-timestamp pass (was two separate fetches). The /nations
+     *  request is gated to avoid the 429 storms that hid the inactive/bonus rows. */
+    public CompletableFuture<NationResidentStats> fetchNationResidentStats(String nationName) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (nationName == null || nationName.isBlank()) return NationResidentStats.NONE;
+            try {
+                JsonObject body = new JsonObject();
+                JsonArray q = new JsonArray();
+                q.add(nationName);
+                body.add("query", q);
+                String json = postGated(BASE + "/nations", body.toString());
+                if (json == null) return NationResidentStats.NONE;
+                JsonArray arr = JsonParser.parseString(json).getAsJsonArray();
+                if (arr.isEmpty()) return NationResidentStats.NONE;
+                return computeResidentStats(arr.get(0).getAsJsonObject());
+            } catch (RuntimeException e) {
+                return NationResidentStats.NONE;
+            }
+        }, executor);
+    }
 
-    /**
-     * Counts the town's residents active within 42 days. EarthMC's API reports all residents and
-     * does not apply the inactive rule, so we look up each resident's last-login ourselves.
-     * Returns -1 if it can't be determined (caller falls back to the raw resident count).
-     */
-    private int countActiveResidents(JsonObject town) {
-        if (!town.has("residents") || !town.get("residents").isJsonArray()) return -1;
-        JsonArray residents = town.getAsJsonArray("residents");
+    /** One resident-timestamp pass → both the active count and the bonus-drop projection.
+     *  active ⟺ removalDate &gt; now (removalDate = lastOnline + 42d, or now+42d if online). */
+    private NationResidentStats computeResidentStats(JsonObject obj) {
+        java.util.List<String> ids = extractResidentIds(obj);
+        int n = ids.size();
+        if (n == 0) return new NationResidentStats(0, NationBonusProjection.NONE);
+        if (n > MAX_NATION_RESIDENT_LOOKUP) return NationResidentStats.NONE;   // too many → skip both
+        long now = System.currentTimeMillis();
+        java.util.List<Long> dates = collectRemovalDates(ids, now);
+        if (dates == null) return NationResidentStats.NONE;                    // a batch failed → unreliable
+        int returned = dates.size();
+        int activeReturned = 0;
+        for (long d : dates) if (d > now) activeReturned++;
+        int active = activeReturned + (n - returned);   // opted-out residents are omitted → counted active
+        int authBonus = -1;
+        if (obj.has("stats") && obj.get("stats").isJsonObject()) {
+            JsonObject st = obj.getAsJsonObject("stats");
+            if (st.has("nationBonus")) authBonus = st.get("nationBonus").getAsInt();
+        }
+        NationBonusProjection proj = computeProjectionFrom(authBonus, active, dates, now);
+        return new NationResidentStats(active, proj);
+    }
+
+    /** On-demand active-resident count for ONE focused town: one /towns fetch + one resident-timestamp pass
+     *  (shared/cached with the nation lookups). Gated to avoid the 429 storms that would hide the Inactive row.
+     *  Returns -1 if it can't be determined (caller falls back to the raw resident count). */
+    public CompletableFuture<Integer> fetchTownActiveResidents(String townName) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (townName == null || townName.isBlank()) return -1;
+            try {
+                JsonObject body = new JsonObject();
+                JsonArray q = new JsonArray();
+                q.add(townName);
+                body.add("query", q);
+                String json = postGated(BASE + "/towns", body.toString());
+                if (json == null) return -1;
+                JsonArray arr = JsonParser.parseString(json).getAsJsonArray();
+                if (arr.isEmpty()) return -1;
+                return computeTownActive(arr.get(0).getAsJsonObject());
+            } catch (RuntimeException e) {
+                return -1;
+            }
+        }, executor);
+    }
+
+    private int computeTownActive(JsonObject t) {
+        java.util.List<String> ids = extractResidentIds(t);
+        int n = ids.size();
+        if (n == 0) return 0;
+        if (n > MAX_RESIDENT_LOOKUP) return -1;
+        long now = System.currentTimeMillis();
+        java.util.List<Long> dates = collectRemovalDates(ids, now);
+        if (dates == null) return -1;                    // a batch failed → unreliable
+        int returned = dates.size();
+        int activeReturned = 0;
+        for (long d : dates) if (d > now) activeReturned++;
+        return activeReturned + (n - returned);          // opted-out residents are omitted → counted active
+    }
+
+    private static java.util.List<String> extractResidentIds(JsonObject obj) {
         java.util.List<String> ids = new java.util.ArrayList<>();
-        for (com.google.gson.JsonElement el : residents) {
+        if (!obj.has("residents") || !obj.get("residents").isJsonArray()) return ids;
+        for (com.google.gson.JsonElement el : obj.getAsJsonArray("residents")) {
             if (el.isJsonObject()) {
                 JsonObject r = el.getAsJsonObject();
                 String id = str(r, "uuid", null);
@@ -284,42 +545,192 @@ public class EarthMcApiClient {
                 ids.add(el.getAsString());
             }
         }
-        if (ids.isEmpty()) return 0;
-        if (ids.size() > MAX_RESIDENT_LOOKUP) return -1;  // too many — fall back to raw (approximate)
+        return ids;
+    }
 
-        long now = System.currentTimeMillis();
-        int active = 0;
-        for (int i = 0; i < ids.size(); i += RESIDENT_QUERY_BATCH) {
-            java.util.List<String> batch = ids.subList(i, Math.min(ids.size(), i + RESIDENT_QUERY_BATCH));
-            JsonObject body = new JsonObject();
-            JsonArray q = new JsonArray();
-            batch.forEach(q::add);
-            body.add("query", q);
-            String json = post(BASE + "/players", body.toString());
-            if (json == null) return -1;
-            JsonArray arr;
-            try {
-                arr = JsonParser.parseString(json).getAsJsonArray();
-            } catch (RuntimeException e) {
-                return -1;
-            }
-            for (com.google.gson.JsonElement pe : arr) {
-                if (!pe.isJsonObject()) continue;
-                JsonObject p = pe.getAsJsonObject();
-                boolean online = false;
-                if (p.has("status") && p.get("status").isJsonObject()) {
-                    JsonObject st = p.getAsJsonObject("status");
-                    if (st.has("isOnline")) online = st.get("isOnline").getAsBoolean();
-                }
-                long lastOnline = 0;
-                if (p.has("timestamps") && p.get("timestamps").isJsonObject()) {
-                    JsonObject ts = p.getAsJsonObject("timestamps");
-                    if (ts.has("lastOnline")) lastOnline = ts.get("lastOnline").getAsLong();
-                }
-                if (online || (lastOnline > 0 && now - lastOnline < INACTIVE_THRESHOLD_MS)) active++;
-            }
+    private static final long INACTIVE_THRESHOLD_MS = 42L * 24 * 3600 * 1000;
+    /** /players returns at most 100 entries per query — batch at the max, then run the batches in
+     *  parallel (throttled by activeBatchGate) so even a big entity resolves in ~1-2s. */
+    private static final int RESIDENT_QUERY_BATCH = 100;
+    /** Cap the on-demand active lookup (per focused town). Parallel batching makes this cheap, so it can
+     *  cover essentially every real town; above it the inactive count is omitted. */
+    private static final int MAX_RESIDENT_LOOKUP = 2000;
+    /** Nations span many towns, so allow a much larger (still bounded) lookup before falling back. */
+    private static final int MAX_NATION_RESIDENT_LOOKUP = 3000;
+
+    // ── Nation bonus-drop projection ──────────────────────────────────────────
+    // EarthMC's nation chunk bonus is tiered by resident count. Residents are purged 42 days after they
+    // were last online, so as inactivity accrues the count falls and eventually crosses a tier threshold,
+    // dropping the bonus. We project the next drop from each resident's lastOnline.
+    private static final int[] BONUS_TIER_FLOOR = { 200, 120, 80, 60, 40, 20 };
+    private static final int[] BONUS_TIER_VALUE = { 100,  80, 60, 50, 30, 10 };
+
+    private static int nationBonusFor(int residents) {
+        for (int i = 0; i < BONUS_TIER_FLOOR.length; i++) {
+            if (residents >= BONUS_TIER_FLOOR[i]) return BONUS_TIER_VALUE[i];
         }
-        return active;
+        return 0;
+    }
+    private static int nationBonusFloor(int residents) {
+        for (int floor : BONUS_TIER_FLOOR) if (residents >= floor) return floor;
+        return 0;
+    }
+
+    /** Projects the next bonus drop. EarthMC bases the bonus on the ACTIVE resident count (inactive members
+     *  stay in the nation but don't earn bonus and aren't removed for a long time), so the bonus falls when
+     *  enough currently-active residents go inactive — NOT when residents are purged. We therefore count
+     *  down from the active count using only FUTURE go-inactive dates (lastOnline + 42d). {@code currentBonus}
+     *  is EarthMC's authoritative value (or -1 to derive the tier from the active count). */
+    private NationBonusProjection computeProjectionFrom(int currentBonus, int activeCount,
+                                                        java.util.List<Long> dates, long now) {
+        int bonus = currentBonus >= 0 ? currentBonus : nationBonusFor(activeCount);
+        if (bonus <= 0) return NationBonusProjection.NONE;       // already at the lowest tier
+        int tier = tierIndexForBonus(bonus);
+        if (tier < 0) return NationBonusProjection.NONE;         // unrecognised bonus value
+        int currentFloor = BONUS_TIER_FLOOR[tier];
+        int nextBonus = tier + 1 < BONUS_TIER_VALUE.length ? BONUS_TIER_VALUE[tier + 1] : 0;
+        int drops = Math.max(1, activeCount - currentFloor + 1); // active residents that must go inactive to drop
+
+        // Only currently-active residents (a FUTURE go-inactive date) can lower the active count from here;
+        // already-inactive residents are excluded from the bonus, opted-out ones are unknown (far future).
+        java.util.List<Long> future = new java.util.ArrayList<>();
+        for (long d : dates) if (d > now) future.add(d);
+        while (future.size() < activeCount) future.add(Long.MAX_VALUE);
+        future.sort(null);
+        if (drops > future.size()) return NationBonusProjection.NONE;
+        long rawDrop = future.get(drops - 1);
+        if (rawDrop == Long.MAX_VALUE) return NationBonusProjection.NONE;         // drop driven by unknown residents
+
+        Countdown c = countdownTo(rawDrop, now);
+        return new NationBonusProjection(nextBonus, c.days(), c.hours(), c.minutes(), c.date());
+    }
+
+    private record Countdown(int days, int hours, int minutes, String date) {}
+
+    /** Anchors a raw 42-day mark to EarthMC's ~12:00 Europe/Berlin daily purge and expresses the wait as
+     *  local calendar days plus absolute-instant hours/minutes — identical treatment to the nation bonus
+     *  projection, so every countdown in the mod agrees. Days come from the viewer's local calendar (so the
+     *  day count and shown date match); hours/minutes come from the absolute instant (already offset-correct
+     *  vs German time). */
+    private static Countdown countdownTo(long rawDrop, long now) {
+        ZoneId berlin = ZoneId.of("Europe/Berlin");
+        ZonedDateTime raw = Instant.ofEpochMilli(rawDrop).atZone(berlin);
+        ZonedDateTime purge = raw.toLocalDate().atTime(12, 0).atZone(berlin);
+        if (raw.isAfter(purge)) purge = purge.plusDays(1);
+        long dropMs = purge.toInstant().toEpochMilli();
+        ZoneId zone = ZoneId.systemDefault();
+        LocalDate today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate();
+        LocalDate dropDate = Instant.ofEpochMilli(dropMs).atZone(zone).toLocalDate();
+        int days = (int) Math.max(0, dropDate.toEpochDay() - today.toEpochDay());
+        int hours = (int) Math.max(0, Math.ceil((dropMs - now) / 3_600_000.0));
+        int minutes = (int) Math.max(0, Math.ceil((dropMs - now) / 60_000.0));
+        return new Countdown(days, hours, minutes, dropDate.format(DATE_FMT));
+    }
+
+    private static int tierIndexForBonus(int bonus) {
+        for (int i = 0; i < BONUS_TIER_VALUE.length; i++) if (BONUS_TIER_VALUE[i] == bonus) return i;
+        return -1;
+    }
+
+    /** Each resident's removal date = (lastOnline, or now if online) + 42 days. Returns the dates for the
+     *  residents the API returned (opted-out ones are absent), or null if any batch failed. Residents whose
+     *  activity is already cached (within TTL) skip the API entirely — so a re-viewed or overlapping nation
+     *  costs nothing. */
+    private java.util.List<Long> collectRemovalDates(java.util.List<String> ids, long now) {
+        java.util.List<Long> all = new java.util.ArrayList<>();
+        java.util.List<String> toFetch = new java.util.ArrayList<>();
+        for (String id : ids) {
+            long[] c = residentActivityCache.get(id);
+            if (c != null && now - c[1] < RESIDENT_ACTIVITY_TTL_MS) all.add(c[0]);
+            else toFetch.add(id);
+        }
+        if (toFetch.isEmpty()) return all;      // whole nation served from cache → zero API calls
+
+        java.util.List<CompletableFuture<java.util.List<Long>>> futures = new java.util.ArrayList<>();
+        for (int i = 0; i < toFetch.size(); i += RESIDENT_QUERY_BATCH) {
+            java.util.List<String> batch =
+                    new java.util.ArrayList<>(toFetch.subList(i, Math.min(toFetch.size(), i + RESIDENT_QUERY_BATCH)));
+            futures.add(CompletableFuture.supplyAsync(() -> removalDatesBatch(batch, now), executor));
+        }
+        for (CompletableFuture<java.util.List<Long>> f : futures) {
+            java.util.List<Long> part;
+            try { part = f.join(); } catch (RuntimeException e) { return null; }
+            if (part == null) return null;
+            all.addAll(part);
+        }
+        return all;
+    }
+
+    private java.util.List<Long> removalDatesBatch(java.util.List<String> batch, long now) {
+        JsonObject body = new JsonObject();
+        JsonArray q = new JsonArray();
+        batch.forEach(q::add);
+        body.add("query", q);
+        // Include name+uuid so each returned player's activity can be cached by id for reuse.
+        JsonObject template = new JsonObject();
+        template.addProperty("name", true);
+        template.addProperty("uuid", true);
+        template.addProperty("timestamps", true);
+        template.addProperty("status", true);
+        body.add("template", template);
+
+        String json = null;
+        for (int attempt = 0; attempt < 3 && json == null; attempt++) {
+            if (attempt > 0) {
+                try { Thread.sleep(120L * attempt); }
+                catch (InterruptedException ie) { Thread.currentThread().interrupt(); return null; }
+            }
+            json = postGated(BASE + "/players", body.toString());
+        }
+        if (json == null) return null;
+        JsonArray arr;
+        try {
+            arr = JsonParser.parseString(json).getAsJsonArray();
+        } catch (RuntimeException e) {
+            return null;
+        }
+        java.util.List<Long> out = new java.util.ArrayList<>();
+        for (com.google.gson.JsonElement pe : arr) {
+            if (!pe.isJsonObject()) continue;
+            JsonObject p = pe.getAsJsonObject();
+            boolean online = false;
+            if (p.has("status") && p.get("status").isJsonObject()) {
+                JsonObject st = p.getAsJsonObject("status");
+                if (st.has("isOnline")) online = st.get("isOnline").getAsBoolean();
+            }
+            long lastOnline = 0;
+            if (p.has("timestamps") && p.get("timestamps").isJsonObject()) {
+                JsonObject ts = p.getAsJsonObject("timestamps");
+                if (ts.has("lastOnline") && !ts.get("lastOnline").isJsonNull()) {
+                    lastOnline = ts.get("lastOnline").getAsLong();
+                }
+            }
+            long base = online ? now : (lastOnline > 0 ? lastOnline : now);
+            long removal = base + INACTIVE_THRESHOLD_MS;
+            out.add(removal);
+            // Cache by both uuid and name so a later lookup keyed by either form hits.
+            long[] entry = { removal, now };
+            String uuid = str(p, "uuid", null);
+            String pname = str(p, "name", null);
+            if (uuid != null && !uuid.isBlank()) residentActivityCache.put(uuid, entry);
+            if (pname != null && !pname.isBlank()) residentActivityCache.put(pname, entry);
+        }
+        return out;
+    }
+
+    /** post() throttled by activeBatchGate, for the parallel activity-batch lookups only. */
+    private String postGated(String url, String body) {
+        try {
+            activeBatchGate.acquire();
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+        try {
+            return post(url, body);
+        } finally {
+            activeBatchGate.release();
+        }
     }
 
     private String post(String url, String body) {
@@ -393,7 +804,7 @@ public class EarthMcApiClient {
             if (ts.has("lastOnline") && !ts.get("lastOnline").isJsonNull()) {
                 lastOnlineMs = ts.get("lastOnline").getAsLong();
                 lastOnline = Instant.ofEpochMilli(lastOnlineMs)
-                        .atZone(ZoneOffset.UTC)
+                        .atZone(ZoneId.systemDefault())
                         .toLocalDate()
                         .format(DATE_FMT);
             }
@@ -402,7 +813,7 @@ public class EarthMcApiClient {
                 if (regMs > 0) {
                     registeredMs = regMs;
                     registered = Instant.ofEpochMilli(regMs)
-                            .atZone(ZoneOffset.UTC)
+                            .atZone(ZoneId.systemDefault())
                             .toLocalDate()
                             .format(DATE_FMT);
                 }
@@ -426,7 +837,7 @@ public class EarthMcApiClient {
             if (ts.has("registered")) {
                 long ms = ts.get("registered").getAsLong();
                 founded = Instant.ofEpochMilli(ms)
-                        .atZone(ZoneOffset.UTC)
+                        .atZone(ZoneId.systemDefault())
                         .toLocalDate()
                         .format(DATE_FMT);
             }
@@ -477,9 +888,11 @@ public class EarthMcApiClient {
             }
         }
 
+        // Active count looked up on demand for the focused nation only (fetchNationResidentStats),
+        // not here — parseNation runs from the nation index/search en masse. -1 = "not looked up".
         return new EarthMcNationData(name, uuid, discord, board, king, capital, founded, towns, residents, chunks,
                 outlaws, allies, enemies, balance, isPublic, isOpen, isNeutral, hasSpawn, spawnX, spawnZ,
-                nationBonusVal);
+                nationBonusVal, -1);
     }
 
     private static String objectName(JsonObject obj, String key) {

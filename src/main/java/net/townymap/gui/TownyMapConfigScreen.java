@@ -141,7 +141,7 @@ public class TownyMapConfigScreen extends Screen {
         option("Squaremap Background", onOff(cfg.squaremapBackgroundEnabled, v -> cfg.squaremapBackgroundEnabled = v),
                 () -> cfg.squaremapBackgroundEnabled == DEFAULTS.squaremapBackgroundEnabled,
                 () -> cfg.squaremapBackgroundEnabled = DEFAULTS.squaremapBackgroundEnabled);
-        option("World Map Overview (Test)", onOff(cfg.worldMapOverview, v -> cfg.worldMapOverview = v),
+        option("World Map Overview", onOff(cfg.worldMapOverview, v -> cfg.worldMapOverview = v),
                 () -> cfg.worldMapOverview == DEFAULTS.worldMapOverview,
                 () -> cfg.worldMapOverview = DEFAULTS.worldMapOverview);
         option("Nation Capital Stars", onOff(cfg.nationStarsEnabled, v -> cfg.nationStarsEnabled = v),

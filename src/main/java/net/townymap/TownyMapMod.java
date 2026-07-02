@@ -28,6 +28,8 @@ import net.townymap.integration.XaeroWaypointBridge;
 import net.townymap.model.EarthMcNationData;
 import net.townymap.model.EarthMcPlayerData;
 import net.townymap.model.MapJumpTarget;
+import net.townymap.model.NationBonusProjection;
+import net.townymap.model.NationResidentStats;
 import net.townymap.model.OptimisticClaimChunk;
 import net.townymap.model.TownData;
 import net.townymap.model.TownPopupData;
@@ -64,8 +66,11 @@ public class TownyMapMod implements ClientModInitializer {
     private static final long DETAIL_REQUEST_DEFER_MS = 2_000L;
     private static final long OPTIMISTIC_CLAIM_TTL_MS = 20_000L;
     private static final long PENDING_CLAIM_TTL_MS = 12_000L;
-    private static final int MAX_TOWN_DETAIL_LOADS = 8;
-    private static final int MAX_PLAYER_DETAIL_LOADS = 8;
+    // Max visible-town details fetched per 500ms cycle. One bulk /towns request covers up to 100 names,
+    // so this is ~2 parallel requests — enough to fill a normal screen at once instead of dribbling.
+    private static final int MAX_TOWN_DETAIL_BATCH = 150;
+    // Max player details collected per bulk /players request (search rows / visible players) — one batch.
+    private static final int PLAYER_BULK_PER_CYCLE = 100;
     private static final ScheduledExecutorService CACHE_SAVE_EXECUTOR =
             Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "TownyMap-CacheSave");
@@ -86,6 +91,14 @@ public class TownyMapMod implements ClientModInitializer {
     private static final Map<String, Long> townDetailsFetchedAt = new ConcurrentHashMap<>();
     private static final Set<String> townDetailsLoading = ConcurrentHashMap.newKeySet();
     private static final Map<String, Long> townDetailsDeferredAt = new ConcurrentHashMap<>();
+    // On-demand active-resident counts (the bulk last-login lookup), kept OFF the mass town/nation
+    // fetch so the map's bulk fetches stay cheap. Only the focused/searched town & nation are looked
+    // up here. Value -1 = looked up but unavailable (e.g. over the resident cap) — cached to avoid re-firing.
+    private static final Map<String, Integer> townActiveCache = new ConcurrentHashMap<>();
+    private static final Set<String> townActiveLoading = ConcurrentHashMap.newKeySet();
+    private static final Map<String, Integer> nationActiveCache = new ConcurrentHashMap<>();
+    private static final Map<String, NationBonusProjection> nationBonusProjCache = new ConcurrentHashMap<>();
+    private static final Set<String> nationBonusProjLoading = ConcurrentHashMap.newKeySet();
     private static final AtomicBoolean townDetailsSaveScheduled = new AtomicBoolean(false);
     private static volatile MapJumpTarget townInfoRouteTarget;
     private static volatile List<EarthMcPlayerData> apiPlayers = List.of();
@@ -100,7 +113,7 @@ public class TownyMapMod implements ClientModInitializer {
     private static final Map<String, EarthMcNationData> nationDetailsCache = new ConcurrentHashMap<>();
     private static final Set<String> nationDetailsLoading = ConcurrentHashMap.newKeySet();
     private static final Map<String, Long> nationDetailsDeferredAt = new ConcurrentHashMap<>();
-    private static final int MAX_NATION_DETAIL_LOADS = 4;
+    private static final int NATION_BULK_PER_CYCLE = 100;   // nations warmed per bulk /nations cycle
     private static volatile long lastPlayerIndexAttemptMs = 0;
     private static volatile Set<String> cachedFavoriteTownKeys = Set.of();
     private static volatile int cachedFavoriteTownCount = -1;
@@ -348,7 +361,7 @@ public class TownyMapMod implements ClientModInitializer {
     // Selectable map modes. "Overclaim" (2) is omitted until EarthMC's API exposes active-resident
     // counts — its claim max is wrong without them, so over-claim detection misfires. The case is kept
     // (commented) in the highlight switch and labels so it can be re-enabled later.
-    private static final int[] STATUS_MODES = {0, 1, 3, 4, 5};
+    private static final int[] STATUS_MODES = {0, 1, 2, 3, 4, 5};
 
     /** Advance the map-mode value to the next/previous selectable mode, skipping disabled ones. */
     public static int nextStatusMode(int current, boolean backward) {
@@ -498,6 +511,40 @@ public class TownyMapMod implements ClientModInitializer {
         }
     }
 
+    // ── Search auto-clear ─────────────────────────────────────────────────────
+    // Drop the search bar when the world map is reopened (new GuiMap instance) or the user pans.
+    private static Object lastSearchMapInstance = null;
+    private static double lastSearchCamX = Double.NaN;
+    private static double lastSearchCamZ = Double.NaN;
+    private static boolean suppressNextPanClear = false;
+
+    /** Called once per frame by the GuiMap mixin with the raw camera. Resets the search bar on map
+     *  reopen or user pan; centring on a selected result suppresses the next pan-clear. */
+    public static void onWorldMapFrame(Object mapInstance, double cameraX, double cameraZ) {
+        if (mapInstance != lastSearchMapInstance) {       // map (re)opened → start with a fresh bar
+            lastSearchMapInstance = mapInstance;
+            lastSearchCamX = cameraX;
+            lastSearchCamZ = cameraZ;
+            suppressNextPanClear = false;
+            TownSearchOverlay.reset();
+            return;
+        }
+        boolean moved = Math.abs(cameraX - lastSearchCamX) > 0.5
+                || Math.abs(cameraZ - lastSearchCamZ) > 0.5;
+        boolean suppress = suppressNextPanClear;
+        suppressNextPanClear = false;
+        if (moved) {
+            lastSearchCamX = cameraX;
+            lastSearchCamZ = cameraZ;
+            if (!suppress) TownSearchOverlay.reset();     // a real user pan → clear; centre-on-select → keep
+        }
+    }
+
+    /** Marks the next camera move as programmatic (centre-on-select) so it doesn't clear the search bar. */
+    public static void suppressNextPanClear() {
+        suppressNextPanClear = true;
+    }
+
     public static void renderOnWorldMap(DrawContext ctx,
                                         double cameraX, double cameraZ,
                                         double scale, int screenW, int screenH) {
@@ -515,6 +562,15 @@ public class TownyMapMod implements ClientModInitializer {
                 net.townymap.integration.CustomOverlayManager.render(ctx, cameraX, cameraZ, scale, screenW, screenH);
             }
         }
+    }
+
+    /** Draws the world-map player dots in the renderPreDropdown pass (after the town-tile batch is flushed),
+     *  so they sit above the textured outline tiles instead of being painted over — the cause of the dots
+     *  "blinking" at zoom-out. Positions/details are the same live squaremap data used everywhere. */
+    public static void renderWorldMapPlayers(DrawContext ctx, double cameraX, double cameraZ,
+                                             double scale, int screenW, int screenH) {
+        if (!isActiveOnCurrentServer() || renderer == null || config == null || !config.playersEnabled) return;
+        renderer.renderPlayersLayer(ctx, cameraX, cameraZ, scale, screenW, screenH, playerDetailsCache);
     }
 
     public static boolean shouldRenderWorldMapIndicatorOverlay() {
@@ -797,6 +853,10 @@ public class TownyMapMod implements ClientModInitializer {
         }
 
         if (config.infoDisplayNearbyPlayersEnabled) {
+            // Keep the nearby list's squaremap positions fresh (~1s) whenever it's shown — independent of
+            // the minimap-extensions overlay or the full map being open. tickPlayers is interval-throttled
+            // and de-duped, so calling it here is cheap and won't double-fetch.
+            apiClient.tickPlayers();
             String self = client.getSession().getUsername();
             java.util.Map<String, Double> current = new java.util.HashMap<>();
             for (var m : apiClient.getPlayers()) {
@@ -1092,8 +1152,11 @@ public class TownyMapMod implements ClientModInitializer {
     public static void renderTownInfo(DrawContext ctx, int screenW, int screenH) {
         if (!isActiveOnCurrentServer()) return;
         TownPopupData data = TownInfoOverlay.currentData();
-        if (data != null && data != TownPopupData.WILDERNESS && data.nationName() != null && !data.nationName().isBlank()) {
-            requestNationDetails(data.nationName());
+        if (data != null && data != TownPopupData.WILDERNESS) {
+            requestTownActiveResidents(data.townName(), townKey(data.townName()));
+            if (data.nationName() != null && !data.nationName().isBlank()) {
+                requestNationDetails(data.nationName());
+            }
         }
         TownInfoOverlay.render(ctx, screenW, screenH,
                 data != null && isFavorite(data.townName()), nationDetailsCache);
@@ -1110,7 +1173,8 @@ public class TownyMapMod implements ClientModInitializer {
             String key = townKey(town.name());
             TownPopupData details = townDetailsCache.get(key);
             requestTownDetails(town.name(), key);
-            TownHoverOverlay.render(ctx, mouseX, mouseY, screenW, screenH, town, details);
+            TownHoverOverlay.render(ctx, mouseX, mouseY, screenW, screenH, town, details,
+                    apiClient.getTownMayor(key), apiClient.getTownNation(key));
         }
     }
 
@@ -1234,6 +1298,57 @@ public class TownyMapMod implements ClientModInitializer {
         });
     }
 
+    /**
+     * Opens the rich town popup (TownInfoOverlay, the one with the Route button) for a town chosen
+     * from the search bar or an in-panel town link, so the search bar and map right-click share one GUI.
+     * The popup is anchored at screen centre — a search selection recentres the camera on the town, so
+     * that's where it ends up — and the town's details are fetched exactly as a right-click would.
+     */
+    public static void openTownPopupFromSearch(String townName) {
+        if (!isActiveOnCurrentServer() || earthMcApi == null || apiClient == null) return;
+        if (townName == null || townName.isBlank()) return;
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null) return;
+        int sx = client.getWindow().getScaledWidth() / 2;
+        int sy = client.getWindow().getScaledHeight() / 2;
+
+        TownData clickedTown = null;
+        for (TownData town : apiClient.getTowns()) {
+            if (town.name().equalsIgnoreCase(townName)) { clickedTown = town; break; }
+        }
+        double worldX = 0, worldZ = 0;
+        MapJumpTarget fallbackTarget = null;
+        TownPopupData fallback = null;
+        String fallbackKey = "";
+        if (clickedTown != null) {
+            worldX = clickedTown.centerX();
+            worldZ = clickedTown.centerZ();
+            fallbackKey = townKey(clickedTown.name());
+            fallback = townDetailsCache.get(fallbackKey);
+            fallbackTarget = new MapJumpTarget(clickedTown.name(), clickedTown.centerX(), clickedTown.centerZ());
+        }
+
+        long lookupId = townLookupId.incrementAndGet();
+        if (fallback != null) {
+            showLookupResult(fallback, sx, sy, worldX, worldZ, fallbackTarget);
+            if (isTownDetailsFresh(fallbackKey)) return;
+        } else {
+            TownInfoOverlay.showLoading(sx, sy);
+        }
+        final TownPopupData cachedFallback = fallback;
+        final MapJumpTarget cachedFallbackTarget = fallbackTarget;
+        final double fWorldX = worldX, fWorldZ = worldZ;
+        earthMcApi.fetchTown(townName).thenAccept(data -> {
+            MinecraftClient c = MinecraftClient.getInstance();
+            if (c == null) return;
+            c.execute(() -> {
+                if (lookupId != townLookupId.get()) return;
+                showLookupResult(data != null ? data : cachedFallback, sx, sy,
+                        fWorldX, fWorldZ, cachedFallbackTarget);
+            });
+        });
+    }
+
     public static void dismissTownInfo() {
         townLookupId.incrementAndGet();
         townInfoRouteTarget = null;
@@ -1316,13 +1431,12 @@ public class TownyMapMod implements ClientModInitializer {
                 .append(Text.literal(message).formatted(color)), false);
     }
 
+    // Single-town fetch for the hovered/clicked town. Visible-map and search details go through the bulk
+    // path (requestTownDetailsBulk); this is only ever called for one town at a time, so it needs no
+    // concurrency cap of its own — the loading set just dedupes an in-flight request.
     private static void requestTownDetails(String townName, String key) {
         long now = System.currentTimeMillis();
         if (earthMcApi == null || isTownDetailsFresh(key) || requestDeferred(townDetailsDeferredAt, key, now)) return;
-        if (townDetailsLoading.size() >= MAX_TOWN_DETAIL_LOADS) {
-            deferRequest(townDetailsDeferredAt, key, now);
-            return;
-        }
         if (!townDetailsLoading.add(key)) return;
         earthMcApi.fetchTown(townName).whenComplete((data, error) -> {
             if (data != null && data != TownPopupData.WILDERNESS) {
@@ -1362,13 +1476,71 @@ public class TownyMapMod implements ClientModInitializer {
         long now = System.currentTimeMillis();
         String canonicalKey = townKey(data.townName());
         if (requestedKey != null && !requestedKey.isBlank()) {
-            townDetailsCache.put(requestedKey, data);
+            townDetailsCache.put(requestedKey, withCachedActive(requestedKey, data));
             townDetailsFetchedAt.put(requestedKey, now);
             townDetailsDeferredAt.remove(requestedKey);
         }
-        townDetailsCache.put(canonicalKey, data);
+        townDetailsCache.put(canonicalKey, withCachedActive(canonicalKey, data));
         townDetailsFetchedAt.put(canonicalKey, now);
         townDetailsDeferredAt.remove(canonicalKey);
+    }
+
+    /** Re-applies a previously looked-up active count when base town data is (re)cached, so the
+     *  inactive suffix survives a base refresh and the active-before-base ordering both work. */
+    private static TownPopupData withCachedActive(String key, TownPopupData data) {
+        Integer a = townActiveCache.get(key);
+        return (a != null && a >= 0) ? data.withActiveResidentCount(a) : data;
+    }
+
+    /** Looks up the active-resident count for ONE focused town (off the mass-fetch path) and folds
+     *  it into the cached detail + the open info panel. Cheap: at most one town's residents. */
+    /** Triggers the on-demand active-resident lookup for a focused town (search panel), so it's fetched
+     *  only for the town actually opened rather than every visible search row. */
+    public static void requestTownActive(String townName) {
+        requestTownActiveResidents(townName, townKey(townName));
+    }
+
+    private static void requestTownActiveResidents(String townName, String key) {
+        if (earthMcApi == null || townName == null || townName.isBlank() || key == null || key.isBlank()) return;
+        if (townActiveCache.containsKey(key) || !townActiveLoading.add(key)) return;
+        earthMcApi.fetchTownActiveResidents(townName).whenComplete((count, error) -> {
+            int c = count != null ? count : -1;
+            townActiveCache.put(key, c);   // cache even -1 so this doesn't re-fire every frame
+            if (c >= 0) {
+                townDetailsCache.computeIfPresent(key, (k, old) -> old.withActiveResidentCount(c));
+                TownInfoOverlay.setActiveResidentCount(townName, c);
+            }
+            townActiveLoading.remove(key);
+        });
+    }
+
+    /** Looks up the active-resident count for ONE focused nation (off the mass-fetch path). */
+    /** ONE fetch for the focused nation yields BOTH the active-resident count and the bonus-drop
+     *  projection (was two separate /nations + /players passes — the cause of the 429 storm that hid the
+     *  inactive/bonus rows). The projection cache doubles as the loaded-marker. */
+    private static void requestNationResidentStats(String nationName) {
+        if (earthMcApi == null || nationName == null || nationName.isBlank()) return;
+        String key = townKey(nationName);
+        if (nationBonusProjCache.containsKey(key) || !nationBonusProjLoading.add(key)) return;
+        earthMcApi.fetchNationResidentStats(nationName).whenComplete((stats, error) -> {
+            NationResidentStats s = stats != null ? stats : NationResidentStats.NONE;
+            nationBonusProjCache.put(key, s.projection());
+            if (s.activeCount() >= 0) {
+                nationActiveCache.put(key, s.activeCount());
+                nationDetailsCache.computeIfPresent(key, (k, old) -> old.withActiveResidentCount(s.activeCount()));
+            }
+            nationBonusProjLoading.remove(key);
+        });
+    }
+
+    /** Triggers the combined active+projection lookup on first view (a per-resident timestamp lookup, so
+     *  only nations actually opened are looked up) and returns the projection (null until loaded). The
+     *  active count lands in the cached nation details, driving the inactive row. */
+    public static NationBonusProjection nationBonusProjection(String nationName) {
+        if (nationName == null) return null;
+        NationBonusProjection cached = nationBonusProjCache.get(townKey(nationName));
+        if (cached == null) requestNationResidentStats(nationName);
+        return cached;
     }
 
     private static void refreshPlayerIndex() {
@@ -1425,14 +1597,51 @@ public class TownyMapMod implements ClientModInitializer {
         double worldTop = cameraZ - screenH / 2.0 / scale;
         double worldBottom = cameraZ + screenH / 2.0 / scale;
 
-        // Uses the renderer's spatial index (and precomputed town keys) so we no
-        // longer scan all ~4000 towns or allocate a lowercase key per candidate.
-        renderer.forEachVisibleTownDetail(worldLeft, worldRight, worldTop, worldBottom, 4,
+        // Collect every visible town still missing details (using the renderer's spatial index and
+        // precomputed keys), then fetch them in ONE bulk /towns request instead of dribbling out a POST
+        // per town. Bounded so a continental zoom-out can't queue thousands of names in a cycle.
+        List<String> names = new ArrayList<>();
+        List<String> keys = new ArrayList<>();
+        renderer.forEachVisibleTownDetail(worldLeft, worldRight, worldTop, worldBottom, MAX_TOWN_DETAIL_BATCH,
                 (name, key) -> {
-                    if (townDetailsCache.containsKey(key) || townDetailsLoading.contains(key)) return false;
-                    requestTownDetails(name, key);
+                    if (townDetailsCache.containsKey(key) || townDetailsLoading.contains(key)
+                            || requestDeferred(townDetailsDeferredAt, key, now)) return false;
+                    names.add(name);
+                    keys.add(key);
                     return true;
                 });
+        requestTownDetailsBulk(names, keys);
+    }
+
+    /**
+     * Fetches details for many towns in a single bulk /towns request (≤100 names per query) instead of
+     * one POST per town. {@code names} and {@code keys} are parallel lists (keys = townKey(name)). Caches
+     * each town the API returns; towns it didn't return are deferred so they don't re-fire every cycle.
+     */
+    private static void requestTownDetailsBulk(List<String> names, List<String> keys) {
+        if (earthMcApi == null || names.isEmpty()) return;
+        // Mark all in-flight up front so the next render cycle skips them.
+        townDetailsLoading.addAll(keys);
+        earthMcApi.fetchTowns(names).whenComplete((result, error) -> {
+            try {
+                long doneAt = System.currentTimeMillis();
+                boolean cachedAny = false;
+                for (String key : keys) {
+                    // fetchTowns keys results by lowercase town name, which is exactly townKey(name).
+                    TownPopupData data = result == null ? null : result.get(key);
+                    if (data != null) {
+                        cacheTownDetails(key, data);   // caches under the requested key AND the canonical name
+                        cachedAny = true;
+                    } else {
+                        // Not returned (deleted/renamed, or a failed batch) → defer so it doesn't re-fire every cycle.
+                        deferRequest(townDetailsDeferredAt, key, doneAt);
+                    }
+                }
+                if (cachedAny) scheduleTownDetailsCacheSave();
+            } finally {
+                townDetailsLoading.removeAll(keys);
+            }
+        });
     }
 
     private static void requestVisiblePlayerDetails(double cameraX, double cameraZ, double scale,
@@ -1448,21 +1657,27 @@ public class TownyMapMod implements ClientModInitializer {
         double worldTop = cameraZ - screenH / 2.0 / scale;
         double worldBottom = cameraZ + screenH / 2.0 / scale;
 
-        int requested = 0;
+        List<String> names = new ArrayList<>();
         for (var marker : apiClient.getPlayers()) {
             if (marker.x() < worldLeft || marker.x() > worldRight
                     || marker.z() < worldTop || marker.z() > worldBottom) continue;
-            if (requestPlayerDetails(marker.name()) && ++requested >= 4) return;
+            if (!playerDetailNeeded(townKey(marker.name()), now)) continue;
+            names.add(marker.name());
+            if (names.size() >= PLAYER_BULK_PER_CYCLE) break;
         }
+        requestPlayerDetailsBulk(names);
     }
 
     private static void requestPlayerDetailsForSearch() {
         if (earthMcApi == null) return;
+        long now = System.currentTimeMillis();
+        List<String> names = new ArrayList<>();
         for (String name : TownSearchOverlay.visibleApiPlayerMatches(apiPlayers)) {
-            requestPlayerDetails(name);
+            if (playerDetailNeeded(townKey(name), now)) names.add(name);
         }
         String exact = TownSearchOverlay.exactPlayerQuery();
-        if (!exact.isBlank()) requestPlayerDetails(exact);
+        if (!exact.isBlank() && playerDetailNeeded(townKey(exact), now)) names.add(exact);
+        requestPlayerDetailsBulk(names);
     }
 
     private static void requestSearchDetailsIfNeeded() {
@@ -1482,18 +1697,53 @@ public class TownyMapMod implements ClientModInitializer {
         requestNationDetailsForSearch();
     }
 
+    /** True if this player key still needs a detail fetch (not cached, in-flight, recently-failed, or deferred). */
+    private static boolean playerDetailNeeded(String key, long now) {
+        if (playerDetailsCache.containsKey(key) || playerDetailsLoading.contains(key)) return false;
+        Long failedAt = playerDetailsFailedAt.get(key);
+        if (failedAt != null && now - failedAt < 30_000) return false;
+        return !requestDeferred(playerDetailsDeferredAt, key, now);
+    }
+
+    /** Fetches details for many players in one bulk /players request (≤100 names/query) instead of a POST
+     *  per player — used by the search rows and visible-player loops. Players the API didn't return
+     *  (opted out) are backed off like the single path. */
+    private static void requestPlayerDetailsBulk(List<String> names) {
+        if (earthMcApi == null || names.isEmpty()) return;
+        List<String> keys = new ArrayList<>(names.size());
+        for (String name : names) {
+            String key = townKey(name);
+            keys.add(key);
+            playerDetailsLoading.add(key);
+        }
+        earthMcApi.fetchPlayers(names).whenComplete((result, error) -> {
+            try {
+                long doneAt = System.currentTimeMillis();
+                for (int i = 0; i < keys.size(); i++) {
+                    String key = keys.get(i);
+                    EarthMcPlayerData data = result == null ? null : result.get(key);
+                    if (data != null) {
+                        playerDetailsCache.put(key, data);
+                        playerDetailsCache.put(townKey(data.name()), data);
+                        playerDetailsFailedAt.remove(key);
+                        playerDetailsDeferredAt.remove(key);
+                    } else {
+                        playerDetailsFailedAt.put(key, doneAt);
+                    }
+                }
+            } finally {
+                for (String key : keys) playerDetailsLoading.remove(key);
+            }
+        });
+    }
+
+    // Single-player fetch for the minimap trickle (rate-limited to 4/sec) and self lookups. The search and
+    // visible-player paths use requestPlayerDetailsBulk, so this needs no concurrency cap of its own.
     private static boolean requestPlayerDetails(String name) {
         if (earthMcApi == null || name == null || name.isBlank()) return false;
         String key = townKey(name);
-        if (playerDetailsCache.containsKey(key) || playerDetailsLoading.contains(key)) return false;
-        Long failedAt = playerDetailsFailedAt.get(key);
         long now = System.currentTimeMillis();
-        if (failedAt != null && now - failedAt < 30_000) return false;
-        if (requestDeferred(playerDetailsDeferredAt, key, now)) return false;
-        if (playerDetailsLoading.size() >= MAX_PLAYER_DETAIL_LOADS) {
-            deferRequest(playerDetailsDeferredAt, key, now);
-            return false;
-        }
+        if (!playerDetailNeeded(key, now)) return false;
         if (!playerDetailsLoading.add(key)) return false;
         earthMcApi.fetchPlayer(name).whenComplete((data, error) -> {
             if (data != null) {
@@ -1511,16 +1761,35 @@ public class TownyMapMod implements ClientModInitializer {
 
     private static void requestTownDetailsForSearch() {
         if (earthMcApi == null || apiClient == null) return;
+        // Town details for the visible search rows go out as one bulk /towns request. The active-resident
+        // count is NOT fetched per row — it's on-demand for the selected town only (requestTownActive),
+        // matching nations, so a search with many rows doesn't fire a /players lookup for each.
+        long now = System.currentTimeMillis();
+        List<String> names = new ArrayList<>();
+        List<String> keys = new ArrayList<>();
         for (String name : TownSearchOverlay.visibleTownMatches(apiClient.getTowns())) {
-            requestTownDetails(name, townKey(name));
+            String key = townKey(name);
+            if (townDetailsCache.containsKey(key) || townDetailsLoading.contains(key)
+                    || requestDeferred(townDetailsDeferredAt, key, now)) continue;
+            names.add(name);
+            keys.add(key);
         }
+        requestTownDetailsBulk(names, keys);
     }
 
     private static void requestNationDetailsForSearch() {
         if (earthMcApi == null) return;
+        // Bulk-fetch details for the visible search nations in one /nations request. The active/projection
+        // lookup is NOT fired here — it's on-demand for the selected nation only (nationBonusProjection).
+        long now = System.currentTimeMillis();
+        List<String> names = new ArrayList<>();
         for (String name : TownSearchOverlay.visibleNationMatches(apiNations)) {
-            requestNationDetails(name);
+            String key = townKey(name);
+            if (nationDetailsCache.containsKey(key) || nationDetailsLoading.contains(key)
+                    || requestDeferred(nationDetailsDeferredAt, key, now)) continue;
+            names.add(name);
         }
+        requestNationDetailsBulk(names);
     }
 
     private static void requestNationCapitalDetails() {
@@ -1528,27 +1797,63 @@ public class TownyMapMod implements ClientModInitializer {
         long now = System.currentTimeMillis();
         if (now - lastNationCapitalDetailsRequestMs < 1_000L) return;
         lastNationCapitalDetailsRequestMs = now;
-        if (nationDetailsLoading.size() >= MAX_NATION_DETAIL_LOADS) return;
-        int requested = 0;
+        // Warm capital-star details a whole batch per cycle (one bulk /nations) instead of two singles.
+        List<String> names = new ArrayList<>();
         for (EarthMcNationData nation : apiNations) {
-            if (requestNationDetails(nation.name()) && ++requested >= 2) return;
+            String key = townKey(nation.name());
+            if (nationDetailsCache.containsKey(key) || nationDetailsLoading.contains(key)) continue;
+            names.add(nation.name());
+            if (names.size() >= NATION_BULK_PER_CYCLE) break;
         }
+        requestNationDetailsBulk(names);
     }
 
+    /** Fetches details for many nations in one bulk /nations request (≤100 names/query) instead of one
+     *  POST per nation. Applies any cached active count; nations the API didn't return are deferred. */
+    private static void requestNationDetailsBulk(List<String> names) {
+        if (earthMcApi == null || names.isEmpty()) return;
+        List<String> keys = new ArrayList<>(names.size());
+        for (String name : names) {
+            String key = townKey(name);
+            keys.add(key);
+            nationDetailsLoading.add(key);
+        }
+        earthMcApi.fetchNations(names).whenComplete((result, error) -> {
+            try {
+                long doneAt = System.currentTimeMillis();
+                for (int i = 0; i < keys.size(); i++) {
+                    String key = keys.get(i);
+                    EarthMcNationData data = result == null ? null : result.get(key);
+                    if (data != null) {
+                        Integer a = nationActiveCache.get(key);
+                        EarthMcNationData stored = (a != null && a >= 0) ? data.withActiveResidentCount(a) : data;
+                        nationDetailsCache.put(key, stored);
+                        nationDetailsCache.put(townKey(data.name()), stored);
+                        nationDetailsDeferredAt.remove(key);
+                    } else {
+                        deferRequest(nationDetailsDeferredAt, key, doneAt);
+                    }
+                }
+            } finally {
+                for (String key : keys) nationDetailsLoading.remove(key);
+            }
+        });
+    }
+
+    // Single-nation fetch for one town's nation (hover/selected town). The bulk path handles the stars and
+    // search rows, so this only ever runs for one nation at a time and needs no concurrency cap of its own.
     private static boolean requestNationDetails(String name) {
         if (earthMcApi == null || name == null || name.isBlank()) return false;
         String key = townKey(name);
         long now = System.currentTimeMillis();
         if (requestDeferred(nationDetailsDeferredAt, key, now)) return false;
-        if (nationDetailsLoading.size() >= MAX_NATION_DETAIL_LOADS) {
-            deferRequest(nationDetailsDeferredAt, key, now);
-            return false;
-        }
         if (nationDetailsCache.containsKey(key) || !nationDetailsLoading.add(key)) return false;
         earthMcApi.fetchNation(name).whenComplete((data, error) -> {
             if (data != null) {
-                nationDetailsCache.put(key, data);
-                nationDetailsCache.put(townKey(data.name()), data);
+                Integer a = nationActiveCache.get(key);
+                EarthMcNationData stored = (a != null && a >= 0) ? data.withActiveResidentCount(a) : data;
+                nationDetailsCache.put(key, stored);
+                nationDetailsCache.put(townKey(data.name()), stored);
                 nationDetailsDeferredAt.remove(key);
             } else if (error != null) {
                 deferRequest(nationDetailsDeferredAt, key, System.currentTimeMillis());
@@ -1602,7 +1907,8 @@ public class TownyMapMod implements ClientModInitializer {
                     || !json.contains("isOverClaimed")
                     || !json.contains("isOpen")
                     || !json.contains("isForSale")
-                    || !json.contains("hasNation")) {
+                    || !json.contains("hasNation")
+                    || !json.contains("maxChunks")) {
                 LOGGER.info("[TownyMap] Ignoring old town detail cache without status overlay fields");
                 return;
             }
