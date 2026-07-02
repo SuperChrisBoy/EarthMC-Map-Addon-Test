@@ -122,6 +122,14 @@ public abstract class MixinGuiMap {
             Minecraft mc = Minecraft.getInstance();
             int w = mc.getWindow().getGuiScaledWidth();
             int h = mc.getWindow().getGuiScaledHeight();
+            // Player dots here (not in the tile batch of onBeforePlayerArrow): the tiles are already flushed,
+            // so the dots render on top of them and stop "blinking" behind async tile rebuilds at zoom-out.
+            double dimMul = TownyMapMod.worldMapOverlayScale();
+            if (dimMul > 0.0) {
+                double guiScale = (screenScale > 0) ? scale / screenScale : scale;
+                double mapScale = guiScale / dimMul;
+                TownyMapMod.renderWorldMapPlayers(ctx, cameraX * dimMul, cameraZ * dimMul, mapScale, w, h);
+            }
             double[] world = overlayWorldFromScreen(mouseX, mouseY, w, h);
             if (world != null) {
                 TownyMapMod.renderTownHover(ctx, mouseX, mouseY, world[0], world[1], w, h);
