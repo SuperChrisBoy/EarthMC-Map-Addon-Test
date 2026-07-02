@@ -10,6 +10,7 @@ import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
+import org.lwjgl.glfw.GLFW;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.network.ServerInfo;
 import net.minecraft.text.Text;
@@ -511,36 +512,63 @@ public class TownyMapMod implements ClientModInitializer {
         }
     }
 
-    // ── Search auto-clear ─────────────────────────────────────────────────────
-    // Drop the search bar when the world map is reopened (new GuiMap instance) or the user pans.
+    // ── Search dismiss ─────────────────────────────────────────────────────────
+    // The search bar / result persists across panning; it clears on a fresh map (re)open or when the user
+    // clicks AWAY — a left-click on the map that isn't a pan-drag, or a right-click on a new town.
     private static Object lastSearchMapInstance = null;
-    private static double lastSearchCamX = Double.NaN;
-    private static double lastSearchCamZ = Double.NaN;
-    private static boolean suppressNextPanClear = false;
+    private static boolean suppressNextPanClear = false;   // retained: jumpTo() still calls it (now a no-op)
 
-    /** Called once per frame by the GuiMap mixin with the raw camera. Resets the search bar on map
-     *  reopen or user pan; centring on a selected result suppresses the next pan-clear. */
+    // A left-click on the map arms a pending dismiss; the next frames decide. If the camera PANS (drag) we
+    // keep the result up; otherwise (button released, or a short grace window elapses with no pan) it was a
+    // genuine click-away and we dismiss. Camera movement is the drag signal — reliable across MC versions;
+    // GLFW is only a fast release hint, with a time fallback so the dismiss always fires.
+    private static boolean armedMapDismiss = false;
+    private static double armCamX, armCamZ;
+    private static long armTimeMs = 0L;
+    private static final long DISMISS_DELAY_MS = 200L;   // fallback if the GLFW release read is unavailable
+
+    /** Called once per frame by the GuiMap mixin with the raw camera. Clears the search on a fresh map
+     *  (re)open, and resolves an armed click-away dismiss (pan = keep, click = dismiss). */
     public static void onWorldMapFrame(Object mapInstance, double cameraX, double cameraZ) {
         if (mapInstance != lastSearchMapInstance) {       // map (re)opened → start with a fresh bar
             lastSearchMapInstance = mapInstance;
-            lastSearchCamX = cameraX;
-            lastSearchCamZ = cameraZ;
-            suppressNextPanClear = false;
+            armedMapDismiss = false;
             TownSearchOverlay.reset();
             return;
         }
-        boolean moved = Math.abs(cameraX - lastSearchCamX) > 0.5
-                || Math.abs(cameraZ - lastSearchCamZ) > 0.5;
-        boolean suppress = suppressNextPanClear;
-        suppressNextPanClear = false;
-        if (moved) {
-            lastSearchCamX = cameraX;
-            lastSearchCamZ = cameraZ;
-            if (!suppress) TownSearchOverlay.reset();     // a real user pan → clear; centre-on-select → keep
+        if (armedMapDismiss) {
+            if (Math.abs(cameraX - armCamX) > 0.5 || Math.abs(cameraZ - armCamZ) > 0.5) {
+                armedMapDismiss = false;                  // camera moved → it was a pan-drag → keep the result
+            } else {
+                long win = GLFW.glfwGetCurrentContext();
+                boolean released = win != 0L
+                        && GLFW.glfwGetMouseButton(win, GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_RELEASE;
+                if (released || System.currentTimeMillis() - armTimeMs >= DISMISS_DELAY_MS) {
+                    armedMapDismiss = false;
+                    dismissOnMapClick();                  // released (or timed out) without panning → click-away
+                }
+            }
         }
     }
 
-    /** Marks the next camera move as programmatic (centre-on-select) so it doesn't clear the search bar. */
+    /** A left-click landed on the map (not on our UI). Arm a dismiss that fires unless the camera pans first,
+     *  so dragging to pan leaves the search result / town popup up. */
+    public static void armMapClickDismiss(double cameraX, double cameraZ) {
+        armCamX = cameraX;
+        armCamZ = cameraZ;
+        armTimeMs = System.currentTimeMillis();
+        armedMapDismiss = true;
+    }
+
+    /** The click-away dismiss: clears the search bar/result AND the town popup. */
+    public static void dismissOnMapClick() {
+        armedMapDismiss = false;
+        dismissTownInfo();
+        TownSearchOverlay.reset();
+    }
+
+    /** Retained no-op: jumpTo() still calls this, but panning no longer clears the search, so there's
+     *  nothing to suppress. */
     public static void suppressNextPanClear() {
         suppressNextPanClear = true;
     }
@@ -1253,6 +1281,8 @@ public class TownyMapMod implements ClientModInitializer {
     public static void onMapRightClick(double worldX, double worldZ, int screenX, int screenY) {
         if (!isActiveOnCurrentServer()) return;
         if (earthMcApi == null) return;
+        armedMapDismiss = false;
+        TownSearchOverlay.reset();   // right-clicking a new town clears any active search bar/result
         TownData clickedTown = null;
         TownPopupData fallback = null;
         MapJumpTarget fallbackTarget = null;

@@ -311,8 +311,8 @@ public abstract class MixinGuiMap {
             }
 
             if (button == 0) {
-                TownyMapMod.dismissTownInfo();
-                return;
+                TownyMapMod.armMapClickDismiss(cameraX, cameraZ);   // dismiss the search/popup unless this
+                return;                                             // click turns into a pan-drag (keeps it)
             }
             if (button != 1) return;
 

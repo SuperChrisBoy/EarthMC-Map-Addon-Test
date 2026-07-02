@@ -165,8 +165,9 @@ public final class TownSearchOverlay {
             }
         }
 
+        // Click landed outside the search UI: just close the dropdown. Do NOT clear the selected info here —
+        // that's deferred to the map click-away dismiss (armMapClickDismiss), so panning keeps the result up.
         focused = false;
-        clearSelection();
         return ClickResult.none();
     }
 
@@ -623,10 +624,15 @@ public final class TownSearchOverlay {
             infoDiscordH = ROW_HEIGHT;
             infoDiscordVisible = true;
             infoDiscordUrl = discordUrl;
-            ButtonWidget button = ButtonWidget.builder(coloredText("Discord", 0xFFFFFF), ignored -> {})
-                    .dimensions(infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH)
-                    .build();
-            button.render(ctx, scaledMouseX(), scaledMouseY(), 0.0F);
+            if (DarkButtons.enabled()) {
+                DarkButtons.draw(ctx, infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH, "Discord",
+                        true, 0xFFFFFFFF, scaledMouseX(), scaledMouseY());
+            } else {
+                ButtonWidget button = ButtonWidget.builder(coloredText("Discord", 0xFFFFFF), ignored -> {})
+                        .dimensions(infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH)
+                        .build();
+                button.render(ctx, scaledMouseX(), scaledMouseY(), 0.0F);
+            }
         }
     }
 
@@ -834,10 +840,15 @@ public final class TownSearchOverlay {
     private static void renderFavorites(DrawContext ctx, TextRenderer tr, int x, int y, int sw,
                                         List<TownData> towns, List<String> favoriteTowns) {
         String label = "Favorites";
-        ButtonWidget button = ButtonWidget.builder(coloredText(label, 0xFFFFFF), ignored -> {})
-                .dimensions(x, y, FAVORITES_WIDTH, ROW_HEIGHT)
-                .build();
-        button.render(ctx, scaledMouseX(), scaledMouseY(), 0.0F);
+        if (DarkButtons.enabled()) {
+            DarkButtons.draw(ctx, x, y, FAVORITES_WIDTH, ROW_HEIGHT, label, true, 0xFFFFFFFF,
+                    scaledMouseX(), scaledMouseY());
+        } else {
+            ButtonWidget button = ButtonWidget.builder(coloredText(label, 0xFFFFFF), ignored -> {})
+                    .dimensions(x, y, FAVORITES_WIDTH, ROW_HEIGHT)
+                    .build();
+            button.render(ctx, scaledMouseX(), scaledMouseY(), 0.0F);
+        }
         if (!favoritesOpen) return;
 
         List<TownData> favorites = favoriteTowns(towns, favoriteTowns);

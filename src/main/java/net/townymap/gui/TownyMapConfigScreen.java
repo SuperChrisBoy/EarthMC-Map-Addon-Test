@@ -102,6 +102,13 @@ public class TownyMapConfigScreen extends Screen {
         this.addDrawableChild(searchField);
 
         section("General");
+        option("Dark Buttons", onOff(cfg.darkButtons, v -> cfg.darkButtons = v),
+                () -> cfg.darkButtons == DEFAULTS.darkButtons,
+                () -> cfg.darkButtons = DEFAULTS.darkButtons);
+        option("Darken Map", cycle(cfg.squaremapDarken, new int[]{0, 1, 2, 3},
+                        TownyMapConfigScreen::darkenText, v -> cfg.squaremapDarken = v),
+                () -> cfg.squaremapDarken == DEFAULTS.squaremapDarken,
+                () -> cfg.squaremapDarken = DEFAULTS.squaremapDarken);
         option("EarthMC Only", onOff(cfg.earthmcOnly, v -> cfg.earthmcOnly = v),
                 () -> cfg.earthmcOnly == DEFAULTS.earthmcOnly,
                 () -> cfg.earthmcOnly = DEFAULTS.earthmcOnly);
@@ -349,10 +356,24 @@ public class TownyMapConfigScreen extends Screen {
         renderPanel(ctx);
         refreshResetStates();
         super.render(ctx, mouseX, mouseY, delta);
+        if (DarkButtons.enabled()) drawDarkWidgetOverlay(ctx, mouseX, mouseY);
         ctx.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, 14, 0xFFFFFFFF);
         drawSectionsAndLabels(ctx);
         drawScrollbar(ctx);
         drawScrollFades(ctx);
+    }
+
+    /** With "Dark Buttons" on, re-skin the vanilla button/cycle widgets (which self-render as the light
+     *  textured style) with the flat dark style, so the settings screen matches the on-map buttons. The real
+     *  widgets stay underneath and keep handling clicks; we just paint over their visible ones. */
+    private void drawDarkWidgetOverlay(DrawContext ctx, int mouseX, int mouseY) {
+        for (var child : this.children()) {
+            if (child instanceof ClickableWidget w && w.visible
+                    && (w instanceof ButtonWidget || w instanceof CyclingButtonWidget<?>)) {
+                DarkButtons.draw(ctx, w.getX(), w.getY(), w.getWidth(), w.getHeight(),
+                        w.getMessage().getString(), w.active, 0xFFFFFFFF, mouseX, mouseY);
+            }
+        }
     }
 
     private void renderPanel(DrawContext ctx) {
@@ -449,6 +470,15 @@ public class TownyMapConfigScreen extends Screen {
 
     private static Text netherModeText(Integer mode) {
         return Text.literal(mode == 2 ? "Overworld Coords" : "Hidden");
+    }
+
+    private static Text darkenText(Integer level) {
+        return Text.literal(switch (level) {
+            case 1 -> "Light";
+            case 2 -> "Medium";
+            case 3 -> "Dark";
+            default -> "Off";
+        });
     }
 
     private static Text minimapChunkGridModeText(Integer mode) {

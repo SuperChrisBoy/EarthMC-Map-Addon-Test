@@ -337,6 +337,11 @@ public final class TownInfoOverlay {
 
     private static void drawButton(DrawContext ctx, TextRenderer tr, int x1, int y1, int x2, int y2,
                                    String label, boolean active) {
+        if (DarkButtons.enabled()) {
+            DarkButtons.draw(ctx, x1, y1, x2 - x1, y2 - y1, label, active,
+                    0xFFFFFFFF, scaledMouseX(), scaledMouseY());
+            return;
+        }
         ButtonWidget button = ButtonWidget.builder(coloredText(label, active ? 0xFFFFFF : 0x777777), ignored -> {})
                 .dimensions(x1, y1, x2 - x1, y2 - y1)
                 .build();
