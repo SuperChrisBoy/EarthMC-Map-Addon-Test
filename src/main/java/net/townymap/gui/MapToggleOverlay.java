@@ -50,7 +50,7 @@ public final class MapToggleOverlay {
     }
 
     /** Returns true if a toggle was clicked (caller should NOT open settings). */
-    public static boolean handleClick(double mouseX, double mouseY, int sh, TownyMapConfig config) {
+    public static boolean handleClick(double mouseX, double mouseY, int sh, TownyMapConfig config, boolean backward) {
         if (ChunkCounterOverlay.isMultiMode(config)) {
             int group = counterGroupAt(mouseX, mouseY, config);
             if (group >= 0) {
@@ -72,8 +72,8 @@ public final class MapToggleOverlay {
         if (row >= 0) {
             switch (row) {
                 case 0 -> config.squaremapBackgroundEnabled = !config.squaremapBackgroundEnabled;
-                case 1 -> config.borderOverlayMode = (config.borderOverlayMode + 1) % 3;
-                case 2 -> config.townStatusOverlayMode = TownyMapMod.nextStatusMode(config.townStatusOverlayMode, false);
+                case 1 -> config.borderOverlayMode = (config.borderOverlayMode + (backward ? 2 : 1)) % 3;
+                case 2 -> config.townStatusOverlayMode = TownyMapMod.nextStatusMode(config.townStatusOverlayMode, backward);
                 case 3 -> config.chunkGridEnabled = !config.chunkGridEnabled;
                 case 4 -> {
                     if (config.chunkCounterEnabled) ChunkCounterOverlay.flushSelection();
@@ -205,6 +205,10 @@ public final class MapToggleOverlay {
 
     private static void drawTexturedButton(GuiGraphicsExtractor ctx, int x, int y, int w, int h,
                                            String label, boolean active, int textColor) {
+        if (DarkButtons.enabled()) {
+            DarkButtons.draw(ctx, x, y, w, h, label, active, textColor, scaledMouseX(), scaledMouseY());
+            return;
+        }
         Button button = Button.builder(coloredText(label, textColor), ignored -> {})
                 .bounds(x, y, w, h)
                 .build();

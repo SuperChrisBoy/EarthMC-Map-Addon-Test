@@ -1282,7 +1282,29 @@ public final class TownyMinimapOverlay {
             ctx.extractDeferredElements(0, 0, 0.0F);
         } finally {
             matrices.popMatrix();
+            int darken = TownyMapMod.getConfig() != null ? TownyMapMod.getConfig().squaremapDarken : 0;
+            if (darken > 0) fillDark(ctx, clip, (darken * 0x38) << 24);   // "Darken Map" 1-3 → alpha 56/112/168
             ctx.disableScissor();
+        }
+    }
+
+    /** Fills the minimap squaremap area with a translucent overlay, matching the minimap's shape (a circle
+     *  for round minimaps so the square corners aren't darkened). The active scissor clamps it to bounds. */
+    private static void fillDark(GuiGraphicsExtractor ctx, MinimapClip clip, int argb) {
+        if (clip.circular()) {
+            double cx = (clip.left() + clip.right() + 1) / 2.0;
+            double cy = (clip.top() + clip.bottom() + 1) / 2.0;
+            double r = clip.radius();
+            int top = (int) Math.floor(cy - r), bot = (int) Math.ceil(cy + r);
+            for (int y = top; y < bot; y++) {
+                double dy = y + 0.5 - cy;
+                double h2 = r * r - dy * dy;
+                if (h2 <= 0) continue;
+                double hw = Math.sqrt(h2);
+                ctx.fill((int) Math.round(cx - hw), y, (int) Math.round(cx + hw), y + 1, argb);
+            }
+        } else {
+            ctx.fill(clip.left(), clip.top(), clip.right() + 1, clip.bottom() + 1, argb);
         }
     }
 

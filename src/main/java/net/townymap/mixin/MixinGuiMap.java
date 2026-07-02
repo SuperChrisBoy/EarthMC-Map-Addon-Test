@@ -287,6 +287,17 @@ public abstract class MixinGuiMap {
                 return;
             }
 
+            // Right-click on our buttons: consume so it never falls through to the map (no town/wilderness
+            // selection behind the button), and cycle the mode toggles BACKWARD.
+            if (button == 1 && TownyMapMod.onSettingsButtonClick(click.x(), click.y(), sh)) {
+                cir.setReturnValue(true);
+                return;
+            }
+            if (button == 1 && TownyMapMod.onMapToggleClick(click.x(), click.y(), sh, true)) {
+                cir.setReturnValue(true);
+                return;
+            }
+
             if (button == 1 && TownyMapMod.isChunkCounterActive()) {
                 double[] world = overlayWorldFromScreen(click.x(), click.y(), sw, sh);
                 if (world != null) {
@@ -297,8 +308,8 @@ public abstract class MixinGuiMap {
             }
 
             if (button == 0) {
-                TownyMapMod.dismissTownInfo();
-                return;
+                TownyMapMod.armMapClickDismiss(cameraX, cameraZ);   // dismiss the search/popup unless this
+                return;                                             // click turns into a pan-drag (keeps it)
             }
             if (button != 1) return;
 

@@ -41,6 +41,10 @@ public class TownyMapConfig {
     public int activeChunkCounterGroup = 0;
     public int chunkCounterGroupCount = 1;
     public boolean squaremapBackgroundEnabled = false;
+    // Darken the squaremap imagery (world map + minimap): 0 = off, 1 = light, 2 = medium, 3 = dark.
+    public int squaremapDarken = 0;
+    // Render the on-map buttons/panels in a flat dark (near-black) style instead of vanilla textured buttons.
+    public boolean darkButtons = false;
     // What our EarthMC overlay does outside the overworld: 1 = hide, 2 = convert to overworld coords.
     public int netherMode = 1;
     // Zoom the world-map EarthMC overlay out further (the overlay's block-scale is divided by a factor,
@@ -121,6 +125,11 @@ public class TownyMapConfig {
         }
         if (refreshPlayersSecs < 1) {
             refreshPlayersSecs = 1;
+            changed = true;
+        }
+        int clampedDarken = Math.max(0, Math.min(3, squaremapDarken));
+        if (clampedDarken != squaremapDarken) {
+            squaremapDarken = clampedDarken;
             changed = true;
         }
         if (squaremapMaxZoom < 0) {
