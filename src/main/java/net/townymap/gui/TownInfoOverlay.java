@@ -81,6 +81,16 @@ public final class TownInfoOverlay {
         return loading ? null : currentData;
     }
 
+    /** Folds an on-demand active-resident count into the open panel's town (looked up off the base
+     *  fetch). No-op if the panel has since moved to a different town. */
+    public static void setActiveResidentCount(String townName, int count) {
+        TownPopupData d = currentData;
+        if (d != null && d != TownPopupData.WILDERNESS && townName != null
+                && townName.equalsIgnoreCase(d.townName())) {
+            currentData = d.withActiveResidentCount(count);
+        }
+    }
+
     public static void render(GuiGraphicsExtractor ctx, int sw, int sh, boolean favorite,
                               Map<String, EarthMcNationData> nationDetails) {
         infoLinks.clear();
@@ -215,20 +225,25 @@ public final class TownInfoOverlay {
 
         // Mayor name → clickable player search.
         lines.add(InfoRow.link("§7Mayor: §f§l", d.mayor(), "", "player"));
-        // Show only the town's actual claimed chunks. The "X / max" ("out of") display and the
-        // over-limit highlight depend on EarthMC's claim max, which is wrong until the API exposes
-        // active-resident counts (inactive residents still inflate it). Kept commented for reuse:
-        //   int possibleChunks = possibleTownChunks(d, nationDetails);
-        //   boolean overLimit = d.isOverClaimed() || d.numChunks() > possibleChunks;
-        //   String sizeColor = overLimit ? "§c§l" : "§f§l";
-        //   lines.add(InfoRow.text("§7Size: " + sizeColor + d.numChunks() + " / " + possibleChunks + " chunks"));
-        lines.add(InfoRow.text("§7Size: §f§l" + d.numChunks() + " chunks"));
+        // "claimed / max chunks" using EarthMC's own claim max (stats.maxTownBlocks), which already
+        // accounts for residents + bonus blocks + nation bonus. Over-limit is highlighted in red.
+        if (d.maxChunks() > 0) {
+            boolean overLimit = d.isOverClaimed() || d.numChunks() > d.maxChunks();
+            String sizeColor = overLimit ? "§c§l" : "§f§l";
+            lines.add(InfoRow.text("§7Size: " + sizeColor + d.numChunks() + " / " + d.maxChunks() + " chunks"));
+        } else {
+            lines.add(InfoRow.text("§7Size: §f§l" + d.numChunks() + " chunks"));
+        }
         if (!d.founded().isEmpty()) {
             lines.add(InfoRow.text("§7Founded: §f§l" + d.founded()));
         }
         lines.add(InfoRow.text("§7Open: §f§l"      + (d.isOpen()   ? "Yes" : "No")));
         lines.add(InfoRow.text("§7Public: §f§l"    + (d.isPublic() ? "Yes" : "No")));
-        lines.add(InfoRow.text("§7Residents: §f§l" + d.residentCount()));
+        String residentsLine = "§7Residents: §f§l" + d.residentCount();
+        if (d.activeResidentCount() >= 0 && d.activeResidentCount() < d.residentCount()) {
+            residentsLine += " §8(" + (d.residentCount() - d.activeResidentCount()) + " Inactive)";
+        }
+        lines.add(InfoRow.text(residentsLine));
         lines.add(InfoRow.text("§7Gold: §f§l"      + formatGold(d.balance())));
 
         return lines;

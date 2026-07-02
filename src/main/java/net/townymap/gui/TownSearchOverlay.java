@@ -6,9 +6,11 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.network.chat.Style;
 import net.minecraft.network.chat.Component;
+import net.townymap.TownyMapMod;
 import net.townymap.model.EarthMcNationData;
 import net.townymap.model.EarthMcPlayerData;
 import net.townymap.model.MapJumpTarget;
+import net.townymap.model.NationBonusProjection;
 import net.townymap.model.PlayerHistoryEntry;
 import net.townymap.model.PlayerMarker;
 import net.townymap.model.TownData;
@@ -108,6 +110,10 @@ public final class TownSearchOverlay {
                 ctx.text(tr, trimToWidth(tr, result.label(), WIDTH - 14), x + 7, rowY + 5, 0xFFFFFFFF, true);
             }
         }
+        // The selected info panel is tied to the search bar: an empty bar means no lingering right-clicked
+        // or searched selection. (A real selection always keeps the bar populated — openSearch/select set
+        // the query — so this only fires once the bar has actually been cleared.)
+        if (query.isEmpty()) clearSelection();
         renderSelectedInfo(ctx, tr, sw, sh,
                 towns, players, townDetails, playerDetails, playerHistory, nationDetails);
     }
@@ -492,6 +498,13 @@ public final class TownSearchOverlay {
     }
 
     private static void select(Result result) {
+        if ("town".equals(result.type())) {
+            // Towns use the same rich popup as right-clicking the map (Route button + full details),
+            // so the search bar and the map share one town GUI instead of a separate inline panel.
+            clearSelection();
+            TownyMapMod.openTownPopupFromSearch(result.name());
+            return;
+        }
         selectedType = result.type();
         selectedName = result.name();
         TownInfoOverlay.dismiss();
@@ -503,6 +516,17 @@ public final class TownSearchOverlay {
         infoDiscordVisible = false;
         infoDiscordUrl = "";
         infoLinks.clear();
+    }
+
+    /** Fully clears the search bar — query, focus, and any selected info panel. Called when the world
+     *  map is reopened or panned, so a stale search/selection doesn't linger. */
+    public static void reset() {
+        query = "";
+        focused = false;
+        selected = 0;
+        favoritesOpen = false;
+        cachedNeedle = null;
+        clearSelection();
     }
 
     /**
@@ -533,10 +557,16 @@ public final class TownSearchOverlay {
         query = name;
         selected = 0;
         focused = false;
+        invalidateResults();
+        if ("town".equals(type)) {
+            // Town links resolve to the shared rich popup, matching a search selection / right-click.
+            clearSelection();
+            TownyMapMod.openTownPopupFromSearch(name);
+            return;
+        }
         selectedType = type;
         selectedName = name;
         infoLinks.clear();
-        invalidateResults();
     }
 
     private static void renderSelectedInfo(GuiGraphicsExtractor ctx, Font tr, int sw, int sh,
@@ -641,8 +671,28 @@ public final class TownSearchOverlay {
             if (!details.founded().isBlank()) lines.add(InfoRow.text("§7Founded: §f" + details.founded()));
             if (details.townCount() > 0) lines.add(InfoRow.text("§7Towns: §f" + details.townCount()));
             if (details.residentCount() > 0) {
-                lines.add(InfoRow.text("§7Residents: §f" + details.residentCount()
-                        + " §7(Bonus: §f" + nationBonus(details.residentCount()) + "§7)"));
+                String inactive = details.activeResidentCount() >= 0
+                        && details.activeResidentCount() < details.residentCount()
+                        ? " §8(" + (details.residentCount() - details.activeResidentCount()) + " Inactive)" : "";
+                lines.add(InfoRow.text("§7Residents: §f" + details.residentCount() + inactive));
+                // Nation bonus on its own row, with a projection of the next level drop when known.
+                // EarthMC computes the bonus on ACTIVE residents (inactive members are still counted in
+                // residentCount but don't earn bonus), so use its authoritative stats.nationBonus — the
+                // local tier-of-total-residents is only a fallback when the API didn't send it.
+                int bonusValue = details.nationBonus() >= 0
+                        ? details.nationBonus() : nationBonus(details.residentCount());
+                String bonusLine = "§7Bonus: §f" + bonusValue;
+                NationBonusProjection proj = TownyMapMod.nationBonusProjection(selectedName);
+                if (proj != null && proj.daysUntilDrop() >= 0) {
+                    // Cascade the countdown: days → hours (<24h) → minutes (<1h). Sub-day units come from the
+                    // absolute instant, so they're already offset-correct vs the ~noon-Berlin purge.
+                    String when;
+                    if (proj.minutesUntilDrop() < 60) when = proj.minutesUntilDrop() + "m";
+                    else if (proj.minutesUntilDrop() < 1440) when = proj.hoursUntilDrop() + "h";
+                    else when = proj.daysUntilDrop() + "d";
+                    bonusLine += " §8(→" + proj.nextBonus() + " in " + when + ", " + proj.dropDate() + ")";
+                }
+                lines.add(InfoRow.text(bonusLine));
             }
             if (details.chunkCount() > 0) lines.add(InfoRow.text("§7Chunks: §f" + details.chunkCount()));
             lines.add(InfoRow.text("§7Gold: §f" + formatGold(details.balance())));
@@ -699,6 +749,7 @@ public final class TownSearchOverlay {
 
     private static List<InfoRow> townInfo(TownData town, TownPopupData details,
                                           Map<String, EarthMcNationData> nationDetails) {
+        TownyMapMod.requestTownActive(town.name());   // active count on-demand for the opened town only
         ArrayList<InfoRow> lines = new ArrayList<>();
         lines.add(InfoRow.text("§f§lTown: " + town.name()));
         if (details == null) {
@@ -712,11 +763,16 @@ public final class TownSearchOverlay {
             lines.add(InfoRow.link(label, details.nationName(), "nation"));
         }
         if (!details.mayor().isBlank()) lines.add(InfoRow.link("§7Mayor: §f", details.mayor(), "player"));
-        int possibleChunks = possibleTownChunks(details, nationDetails);
-        String sizeColor = details.isOverClaimed() ? "§c" : "§f";
-        lines.add(InfoRow.text("§7Chunks: " + sizeColor + details.numChunks() + " / " + possibleChunks));
+        boolean overLimit = details.isOverClaimed()
+                || (details.maxChunks() > 0 && details.numChunks() > details.maxChunks());
+        String sizeColor = overLimit ? "§c" : "§f";
+        String maxStr = details.maxChunks() > 0 ? " / " + details.maxChunks() : "";
+        lines.add(InfoRow.text("§7Chunks: " + sizeColor + details.numChunks() + maxStr));
         if (!details.founded().isBlank()) lines.add(InfoRow.text("§7Founded: §f" + details.founded()));
-        lines.add(InfoRow.text("§7Residents: §f" + details.residentCount()));
+        String townInactive = details.activeResidentCount() >= 0
+                && details.activeResidentCount() < details.residentCount()
+                ? " §8(" + (details.residentCount() - details.activeResidentCount()) + " Inactive)" : "";
+        lines.add(InfoRow.text("§7Residents: §f" + details.residentCount() + townInactive));
         lines.add(InfoRow.text("§7Gold: §f" + formatGold(details.balance())));
         lines.add(InfoRow.text("§7Open: §f" + yesNo(details.isOpen())));
         lines.add(InfoRow.text("§7Public: §f" + yesNo(details.isPublic())));

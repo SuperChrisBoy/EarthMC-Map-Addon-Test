@@ -43,8 +43,9 @@ public class TownyMapConfig {
     public boolean squaremapBackgroundEnabled = false;
     // What our EarthMC overlay does outside the overworld: 1 = hide, 2 = convert to overworld coords.
     public int netherMode = 1;
-    // TEST: extend the world-map zoom-out floor so you can zoom out to see the whole EarthMC map.
-    public boolean worldMapOverview = false;
+    // Zoom the world-map EarthMC overlay out further (the overlay's block-scale is divided by a factor,
+    // keeping it centred on the camera) so you can zoom out to see the whole EarthMC map. On by default.
+    public boolean worldMapOverview = true;
     public boolean nationStarsEnabled = true;
     public boolean chunkGridEnabled = false;
     public boolean customOverlaysEnabled = false;
@@ -73,7 +74,9 @@ public class TownyMapConfig {
 
     // ── Refresh intervals ────────────────────────────────────────────────────
     public int refreshTownsSecs   = 60;
-    public int refreshPlayersSecs = 5;
+    // Superseded: live player positions now refresh at a fixed ~1s (SquaremapApiClient.PLAYER_REFRESH_MS),
+    // matching squaremap's own update cadence. Kept only so old config files still deserialize.
+    public int refreshPlayersSecs = 2;
     public boolean refreshSettingsInitialized = true;
 
     // ── API endpoints ────────────────────────────────────────────────────────
@@ -131,8 +134,7 @@ public class TownyMapConfig {
             borderOverlayMode = 0;
             changed = true;
         }
-        // Mode 2 (overclaim) is disabled until the API exposes active-resident counts; coerce it off.
-        if (townStatusOverlayMode < 0 || townStatusOverlayMode > 5 || townStatusOverlayMode == 2) {
+        if (townStatusOverlayMode < 0 || townStatusOverlayMode > 5) {
             townStatusOverlayMode = 0;
             changed = true;
         }
