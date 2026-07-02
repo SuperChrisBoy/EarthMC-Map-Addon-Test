@@ -29,19 +29,24 @@ public final class TownHoverOverlay {
     private TownHoverOverlay() {}
 
     public static void render(GuiGraphicsExtractor ctx, int mouseX, int mouseY, int sw, int sh,
-                              TownData town, TownPopupData details) {
+                              TownData town, TownPopupData details, String mapMayor, String mapNation) {
         Minecraft mc = Minecraft.getInstance();
         Font tr = mc.font;
-        String name = "§f§l" + town.name();
-        String mayor = "§7Mayor: §f" + mayor(details);
-        String chunks = "§7Chunks: §f" + chunks(town, details);
-        String hint = "§8Right-click for more info";
 
-        int maxW = Math.max(
-                Math.max(tr.width(name), tr.width(mayor)),
-                Math.max(tr.width(chunks), tr.width(hint)));
+        List<String> lines = new ArrayList<>(4);
+        // Title mirrors the right-click popup: "Town (Nation)" / "Town (Capital of Nation)"; bare town if none.
+        String nation = nationLabel(details, mapNation);
+        String title = "§f§l" + town.name();
+        if (!nation.isBlank()) title += " §7§l(" + nation + ")";
+        lines.add(title);
+        lines.add("§7Mayor: §f" + mayor(details, mapMayor));
+        lines.add("§7Chunks: §f" + chunks(town, details));
+        lines.add("§8Right-click for more info");
+
+        int maxW = 0;
+        for (String line : lines) maxW = Math.max(maxW, tr.width(line));
         int boxW = maxW + PADDING * 2;
-        int boxH = LINE_HEIGHT * 4 + PADDING * 2;
+        int boxH = LINE_HEIGHT * lines.size() + PADDING * 2;
         int x = Math.min(mouseX + 12, sw - boxW - 4);
         int y = Math.min(mouseY + 12, sh - boxH - 4);
         if (x < 4) x = 4;
@@ -50,10 +55,9 @@ public final class TownHoverOverlay {
         ctx.fill(x - 1, y - 1, x + boxW + 1, y + boxH + 1, BORDER);
         ctx.fill(x, y, x + boxW, y + boxH, BG);
         int textY = y + PADDING;
-        ctx.text(tr, name, x + PADDING, textY, 0xFFFFFFFF, true);
-        ctx.text(tr, mayor, x + PADDING, textY + LINE_HEIGHT, 0xFFFFFFFF, true);
-        ctx.text(tr, chunks, x + PADDING, textY + LINE_HEIGHT * 2, 0xFFFFFFFF, true);
-        ctx.text(tr, hint, x + PADDING, textY + LINE_HEIGHT * 3, 0xFFFFFFFF, true);
+        for (int i = 0; i < lines.size(); i++) {
+            ctx.text(tr, lines.get(i), x + PADDING, textY + LINE_HEIGHT * i, 0xFFFFFFFF, true);
+        }
     }
 
     public static TownData townAt(double worldX, double worldZ, List<TownData> towns) {
@@ -141,10 +145,22 @@ public final class TownHoverOverlay {
         return inside;
     }
 
-    private static String mayor(TownPopupData details) {
-        if (details == null || details == TownPopupData.WILDERNESS) return "...";
-        String mayor = details.mayor();
-        return mayor == null || mayor.isBlank() ? "?" : mayor;
+    private static String mayor(TownPopupData details, String mapMayor) {
+        String apiMayor = (details == null || details == TownPopupData.WILDERNESS) ? null : details.mayor();
+        if (apiMayor != null && !apiMayor.isBlank()) return apiMayor;
+        // The squaremap markers already carry the mayor, so show it instantly while the API detail loads.
+        if (mapMayor != null && !mapMayor.isBlank()) return mapMayor;
+        return "...";
+    }
+
+    private static String nationLabel(TownPopupData details, String mapNation) {
+        // squaremap tooltip carries the nation (with the "Capital of" prefix) directly, so it's instant and
+        // capital-aware — prefer it, then fall back to the API detail's plain nation name while that loads.
+        if (mapNation != null && !mapNation.isBlank()) return mapNation;
+        if (details != null && details != TownPopupData.WILDERNESS && !details.nationName().isBlank()) {
+            return details.nationName();
+        }
+        return "";   // nationless town → caller omits the parenthetical
     }
 
     private static int chunks(TownData town, TownPopupData details) {

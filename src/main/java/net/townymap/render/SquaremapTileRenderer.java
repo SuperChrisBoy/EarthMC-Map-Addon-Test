@@ -38,6 +38,10 @@ final class SquaremapTileRenderer {
     private static final long TEXTURE_UPLOAD_BUDGET_NS = 1_500_000L;
     private static final long MOVING_TEXTURE_UPLOAD_BUDGET_NS = 750_000L;
     private static final int MAX_TEXTURES = 1024;
+    // The few low-zoom tiles that make up the far zoomed-out overview are pinned (never LRU-evicted), so
+    // once they load they stay cached and the overview never has to re-fetch them. They're tiny in number
+    // (the whole map is ~1-21 tiles at zoom 0-2), so this costs almost nothing.
+    private static final int OVERVIEW_PIN_ZOOM = 2;
     private static final long FAILED_RETRY_MS = 60_000;
     private static final long TILE_REFRESH_MS = 20 * 60_000L;
     private static final int QUALITY_ZOOM_BIAS = 2;
@@ -518,10 +522,17 @@ final class SquaremapTileRenderer {
 
     private void evictOldTextures(Minecraft client) {
         while (textures.size() > MAX_TEXTURES) {
-            Map.Entry<TileKey, Identifier> eldest = textures.entrySet().iterator().next();
-            client.getTextureManager().release(eldest.getValue());
-            textures.remove(eldest.getKey());
-            textureLoadedAt.remove(eldest.getKey());
+            // Evict the least-recently-used tile, but SKIP the pinned low-zoom overview tiles so zooming
+            // in (which floods the cache with high-zoom tiles) can't drop them and force a reload on the
+            // next zoom-out. entrySet() is access-order (eldest first); iterating doesn't re-order it.
+            Map.Entry<TileKey, Identifier> victim = null;
+            for (Map.Entry<TileKey, Identifier> e : textures.entrySet()) {
+                if (e.getKey().zoom() > OVERVIEW_PIN_ZOOM) { victim = e; break; }
+            }
+            if (victim == null) break;   // only pinned overview tiles remain — keep them all
+            client.getTextureManager().release(victim.getValue());
+            textures.remove(victim.getKey());
+            textureLoadedAt.remove(victim.getKey());
         }
     }
 

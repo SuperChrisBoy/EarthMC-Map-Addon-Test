@@ -71,8 +71,13 @@ public abstract class MixinGuiMap {
     )
     private void onBeforePlayerArrow(GuiGraphicsExtractor ctx, int mouseX, int mouseY,
                                      float delta, CallbackInfo ci) {
-        // Overworld-only: hide outside the overworld, except in "Overworld Coords" mode in the Nether
-        // where camera x8 / block-scale /8 lines our overlay up over Xaero's real Nether tiles.
+        // Clear the search bar when the map is reopened (new GuiMap instance) or panned. Tracked on the
+        // raw camera every frame, regardless of dimension. jumpTo() suppresses the next pan-clear so that
+        // centre-on-select doesn't wipe the bar.
+        TownyMapMod.onWorldMapFrame(this, cameraX, cameraZ);
+        // The EarthMC map is overworld-only. Outside the overworld our overlay is hidden, except in
+        // "Overworld Coords" mode in the Nether, where we scale the overlay's camera x8 and its
+        // block-scale /8 so the overworld map/towns line up exactly over Xaero's real Nether tiles.
         double dimMul = TownyMapMod.worldMapOverlayScale();
         if (dimMul <= 0.0) return;
         try {
@@ -117,11 +122,9 @@ public abstract class MixinGuiMap {
             Minecraft mc = Minecraft.getInstance();
             int w = mc.getWindow().getGuiScaledWidth();
             int h = mc.getWindow().getGuiScaledHeight();
-            double guiScale = (screenScale > 0) ? scale / screenScale : scale;
-            if (guiScale > 0) {
-                double worldX = (mouseX - w / 2.0) / guiScale + cameraX;
-                double worldZ = (mouseY - h / 2.0) / guiScale + cameraZ;
-                TownyMapMod.renderTownHover(ctx, mouseX, mouseY, worldX, worldZ, w, h);
+            double[] world = overlayWorldFromScreen(mouseX, mouseY, w, h);
+            if (world != null) {
+                TownyMapMod.renderTownHover(ctx, mouseX, mouseY, world[0], world[1], w, h);
             }
             TownyMapMod.renderTownInfo(ctx, w, h);
             TownyMapMod.renderMapToggles(ctx, h);
@@ -218,6 +221,22 @@ public abstract class MixinGuiMap {
                 color);
     }
 
+    /** Converts a screen position to the EarthMC overlay's WORLD coords, applying the same dimension scale
+     *  (dimMul) the overlay renders with. In the Nether's "Overworld Coords" mode the overlay is drawn at
+     *  overworld scale (dimMul=8), so without this a hover/click would look up towns at raw Nether
+     *  coordinates and always land on wilderness. Returns null when the overlay isn't shown. */
+    private double[] overlayWorldFromScreen(double screenX, double screenY, int sw, int sh) {
+        double dimMul = TownyMapMod.worldMapOverlayScale();
+        if (dimMul <= 0.0) return null;
+        double guiScale = (screenScale > 0) ? scale / screenScale : scale;
+        if (guiScale <= 0) return null;
+        double mapScale = guiScale / dimMul;
+        return new double[] {
+                (screenX - sw / 2.0) / mapScale + cameraX * dimMul,
+                (screenY - sh / 2.0) / mapScale + cameraZ * dimMul
+        };
+    }
+
     // ── Mouse click ───────────────────────────────────────────────────────────
 
     @Inject(method = "mouseClicked", at = @At("HEAD"), remap = false, cancellable = true)
@@ -259,11 +278,9 @@ public abstract class MixinGuiMap {
             }
 
             if (button == 1 && TownyMapMod.isChunkCounterActive()) {
-                double guiScale = (screenScale > 0) ? scale / screenScale : scale;
-                if (guiScale > 0) {
-                    double worldX = (click.x() - sw / 2.0) / guiScale + cameraX;
-                    double worldZ = (click.y() - sh / 2.0) / guiScale + cameraZ;
-                    TownyMapMod.onChunkCounterClick(worldX, worldZ);
+                double[] world = overlayWorldFromScreen(click.x(), click.y(), sw, sh);
+                if (world != null) {
+                    TownyMapMod.onChunkCounterClick(world[0], world[1]);
                 }
                 cir.setReturnValue(true);
                 return;
@@ -275,13 +292,10 @@ public abstract class MixinGuiMap {
             }
             if (button != 1) return;
 
-            double guiScale = (screenScale > 0) ? scale / screenScale : scale;
-            if (guiScale <= 0) return;
+            double[] world = overlayWorldFromScreen(click.x(), click.y(), sw, sh);
+            if (world == null) return;
 
-            double worldX = (click.x() - sw / 2.0) / guiScale + cameraX;
-            double worldZ = (click.y() - sh / 2.0) / guiScale + cameraZ;
-
-            TownyMapMod.onMapRightClick(worldX, worldZ, (int) click.x(), (int) click.y());
+            TownyMapMod.onMapRightClick(world[0], world[1], (int) click.x(), (int) click.y());
             cir.setReturnValue(true);
         } catch (Exception e) {
             logOnce(CLICK_ERROR_LOGGED, "Failed to handle Xaero world-map click", e);
@@ -321,12 +335,14 @@ public abstract class MixinGuiMap {
 
     private void jumpTo(TownData town) {
         if (town == null) return;
+        TownyMapMod.suppressNextPanClear();   // centring on a selected result isn't a user pan
         cameraX = town.centerX();
         cameraZ = town.centerZ();
     }
 
     private void jumpTo(MapJumpTarget target) {
         if (target == null) return;
+        TownyMapMod.suppressNextPanClear();   // centring on a selected result isn't a user pan
         cameraX = target.x();
         cameraZ = target.z();
     }

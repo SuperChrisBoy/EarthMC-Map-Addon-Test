@@ -46,11 +46,23 @@ public class SquaremapApiClient {
     private static final String PLAYER_HISTORY_FILE = "townymapaddon-player-history.json";
     private static final int MAX_PLAYER_HISTORY = 800;
     private static final long TOWN_MARKER_REFRESH_MS = 60_000L;
+    // squaremap regenerates players.json ~every 1.2s (measured: min 0.68s, max 2.07s), so fetching at ~1s
+    // captures essentially every update — faster just re-downloads identical data. This is the live player
+    // rate, independent of the (coarser, non-UI) refreshPlayersSecs config.
+    private static final long PLAYER_REFRESH_MS = 1_000L;
     private static final long PLAYER_HISTORY_SAVE_DELAY_MS = 2_000L;
     private static final Pattern BOLD_TEXT =
             Pattern.compile("(?is)<b[^>]*>(.*?)</b>");
     private static final Pattern HTML_TAG =
             Pattern.compile("(?is)<[^>]+>");
+    // squaremap town popups carry "Mayor: <b>Name</b>" — parse it so hover can show the mayor instantly
+    // (no per-town API call). See parseMarkers / getTownMayor.
+    private static final Pattern POPUP_MAYOR =
+            Pattern.compile("(?is)Mayor:\\s*<b[^>]*>(.*?)</b>");
+    // Nation from the tooltip: "<b>Town</b> (Member of X)" or "(Capital of X)". Absent for nationless towns.
+    // Group 1 = Member|Capital (kept so capitals can read "Capital of X" like the right-click title).
+    private static final Pattern POPUP_NATION =
+            Pattern.compile("(?is)\\(\\s*(Member|Capital) of\\s+(.*?)\\)");
 
     private final TownyMapConfig config;
     private final HttpClient http;
@@ -60,6 +72,8 @@ public class SquaremapApiClient {
     private volatile List<TownData>     towns        = List.of();
     private volatile List<PlayerMarker> players      = List.of();
     private volatile Map<String, PlayerHistoryEntry> playerHistory = Map.of();
+    private volatile Map<String, String> townMayors  = Map.of();   // townKey → mayor, parsed from popups
+    private volatile Map<String, String> townNations = Map.of();   // townKey → nation, parsed from tooltips
 
     private final AtomicBoolean markerFetchRunning = new AtomicBoolean(false);
     private final AtomicBoolean playerFetchRunning = new AtomicBoolean(false);
@@ -95,6 +109,9 @@ public class SquaremapApiClient {
     }
 
     public List<TownData>     getTowns()        { return towns;        }
+    /** Mayor parsed from the squaremap popup for this town key, or null if unknown. */
+    public String getTownMayor(String townKey) { return townKey == null ? null : townMayors.get(townKey); }
+    public String getTownNation(String townKey) { return townKey == null ? null : townNations.get(townKey); }
     public List<PlayerMarker> getPlayers()      { return players;      }
     public Map<String, PlayerHistoryEntry> getPlayerHistory() { return playerHistory; }
 
@@ -134,9 +151,13 @@ public class SquaremapApiClient {
         scheduler.schedule(this::forceTownMarkerRefresh, Math.max(0, delayMs), TimeUnit.MILLISECONDS);
     }
 
-    private void tickPlayers() {
+    /** Refreshes player positions from squaremap's players.json (NOT the EarthMC API). Driven by both the
+     *  world map and the minimap at the live PLAYER_REFRESH_MS rate (~1s, matching squaremap's own update
+     *  cadence) and de-duped via playerFetchRunning, so positions stay live during normal play (minimap)
+     *  and not just while the full map is open. */
+    public void tickPlayers() {
         long now = System.currentTimeMillis();
-        if ((players.isEmpty() || now - lastPlayerFetchMs >= config.refreshPlayersSecs * 1000L)
+        if ((players.isEmpty() || now - lastPlayerFetchMs >= PLAYER_REFRESH_MS)
                 && playerFetchRunning.compareAndSet(false, true)) {
             lastPlayerFetchMs = now;
             fetchExecutor.execute(this::fetchPlayers);
@@ -288,6 +309,8 @@ public class SquaremapApiClient {
      */
     private List<TownData> parseMarkers(String json) {
         List<TownData> towns = new ArrayList<>();
+        Map<String, String> mayors = new HashMap<>();
+        Map<String, String> nations = new HashMap<>();
         try {
             JsonElement root = JsonParser.parseString(json);
             if (!root.isJsonArray()) {
@@ -308,9 +331,20 @@ public class SquaremapApiClient {
 
                     if (!"polygon".equalsIgnoreCase(getString(m, "type"))) continue;
 
-                    String name = extractMarkerName(getString(m, "tooltip"));
+                    String tooltip = getString(m, "tooltip");
+                    String name = extractMarkerName(tooltip);
                     if (name == null) name = extractMarkerName(getString(m, "popup"));
                     if (name == null) name = "?";
+
+                    String mayor = extractPopupMayor(getString(m, "popup"));
+                    if (mayor != null && !name.equals("?")) {
+                        mayors.put(name.toLowerCase(Locale.ROOT), mayor);
+                    }
+
+                    String nation = extractNation(tooltip);
+                    if (nation != null && !name.equals("?")) {
+                        nations.put(name.toLowerCase(Locale.ROOT), nation);
+                    }
 
                     String colorStr = coalesce(getString(m, "color"), getString(m, "fillColor"));
                     int rgb = TownData.parseHexColor(colorStr, 0x3BFF3B);
@@ -336,6 +370,8 @@ public class SquaremapApiClient {
         } catch (Exception e) {
             LOGGER.error("[TownyMap] Failed to parse markers.json", e);
         }
+        townMayors = Map.copyOf(mayors);
+        townNations = Map.copyOf(nations);
         return towns;
     }
 
@@ -411,6 +447,26 @@ public class SquaremapApiClient {
         if (bold != null) return bold;
         String stripped = stripHtml(html);
         return stripped == null || stripped.isBlank() ? null : stripped;
+    }
+
+    private static String extractPopupMayor(String popupHtml) {
+        if (popupHtml == null) return null;
+        Matcher m = POPUP_MAYOR.matcher(popupHtml);
+        if (!m.find()) return null;
+        String mayor = stripHtml(m.group(1));
+        if (mayor == null || mayor.isBlank() || mayor.equalsIgnoreCase("None")) return null;
+        return mayor;
+    }
+
+    private static String extractNation(String tooltipHtml) {
+        if (tooltipHtml == null) return null;
+        Matcher m = POPUP_NATION.matcher(tooltipHtml);
+        if (!m.find()) return null;
+        String nation = stripHtml(m.group(2));
+        if (nation == null || nation.isBlank() || nation.equalsIgnoreCase("None")) return null;
+        nation = nation.trim();
+        // Match the right-click title: capitals read "Capital of X", members just "X".
+        return "Capital".equalsIgnoreCase(m.group(1)) ? "Capital of " + nation : nation;
     }
 
     private static String extractBoldText(String html) {
