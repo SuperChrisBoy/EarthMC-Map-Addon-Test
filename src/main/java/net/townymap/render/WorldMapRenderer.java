@@ -211,7 +211,10 @@ public class WorldMapRenderer {
 
         squaremapTiles.render(ctx, cameraX, cameraZ, blockScale, sw, sh,
                 worldLeft, worldRight, worldTop, worldBottom, moving);
-        ctx.fill(0, 0, sw, sh, 0x38000000);
+        // Baseline dim (0x38) plus the optional user "Darken Map" level (0-3), so the squaremap can be
+        // pushed darker to make the town overlay stand out.
+        int darkAlpha = Math.min(0xFF, 0x38 + config.squaremapDarken * 0x2A);
+        ctx.fill(0, 0, sw, sh, darkAlpha << 24);
     }
 
     public void renderSquaremapViewport(GuiGraphicsExtractor ctx,
@@ -615,10 +618,12 @@ public class WorldMapRenderer {
                 boolean favorite = favSnapshot.contains(town.key());
                 g.setColor(awtColor(favorite ? 0xFFFFE066 : town.data().argbColor(config.borderAlpha)));
 
-                // Sub-pixel town: a stroked outline becomes a fuzzy blob, so draw a crisp dot instead.
+                // Small town: a stroked outline of a tiny town reads as a chunky blob at full zoom-out, so
+                // collapse anything up to a few px into a single crisp 1px dot — a smaller, cleaner mark than
+                // the outline square. (Raised from 3px so more small towns show as the compact dot.)
                 double tw = (town.maxX() - town.minX()) * ppb;
                 double th = (town.maxZ() - town.minZ()) * ppb;
-                if (Math.max(tw, th) <= 3.0) {
+                if (Math.max(tw, th) <= 5.0) {
                     int cx = (int) Math.round(((town.minX() + town.maxX()) / 2.0 - tileWorldX) * ppb);
                     int cy = (int) Math.round(((town.minZ() + town.maxZ()) / 2.0 - tileWorldZ) * ppb);
                     g.fillRect(cx, cy, 1, 1);

@@ -52,6 +52,11 @@ public abstract class MixinGuiMap {
     private static final AtomicBoolean RENDER_ERROR_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean CLICK_ERROR_LOGGED = new AtomicBoolean(false);
 
+    // MC 26.2 fires a phantom left-click immediately after every right-click; we swallow one left-click
+    // within this window of a right-click so it can't dismiss the town popup the right-click just opened.
+    private static final long SPURIOUS_LEFT_CLICK_NANOS = 70_000_000L;   // 70ms
+    private long lastRightClickNanos = 0L;
+
     @Shadow(remap = false) private double cameraX;
     @Shadow(remap = false) private double cameraZ;
     @Shadow(remap = false) private double scale;
@@ -252,6 +257,14 @@ public abstract class MixinGuiMap {
                                 CallbackInfoReturnable<Boolean> cir) {
         try {
             int button = click.buttonInfo().button();
+            // Swallow 26.2's phantom left-click that trails every right-click (else it dismisses the popup).
+            if (button == 1) {
+                lastRightClickNanos = System.nanoTime();
+            } else if (button == 0 && System.nanoTime() - lastRightClickNanos < SPURIOUS_LEFT_CLICK_NANOS) {
+                lastRightClickNanos = 0L;   // consume exactly one phantom left-click per right-click
+                cir.setReturnValue(true);
+                return;
+            }
             Minecraft mc = Minecraft.getInstance();
             int sw = mc.getWindow().getGuiScaledWidth();
             int sh = mc.getWindow().getGuiScaledHeight();
@@ -285,6 +298,17 @@ public abstract class MixinGuiMap {
                 return;
             }
 
+            // Right-click on our buttons: consume so it never falls through to the map (no town/wilderness
+            // selection behind the button), and cycle the mode toggles BACKWARD.
+            if (button == 1 && TownyMapMod.onSettingsButtonClick(click.x(), click.y(), sh)) {
+                cir.setReturnValue(true);
+                return;
+            }
+            if (button == 1 && TownyMapMod.onMapToggleClick(click.x(), click.y(), sh, true)) {
+                cir.setReturnValue(true);
+                return;
+            }
+
             if (button == 1 && TownyMapMod.isChunkCounterActive()) {
                 double[] world = overlayWorldFromScreen(click.x(), click.y(), sw, sh);
                 if (world != null) {
@@ -295,8 +319,8 @@ public abstract class MixinGuiMap {
             }
 
             if (button == 0) {
-                TownyMapMod.dismissTownInfo();
-                return;
+                TownyMapMod.armMapClickDismiss(cameraX, cameraZ);   // dismiss the search/popup unless this
+                return;                                             // click turns into a pan-drag (keeps it)
             }
             if (button != 1) return;
 
