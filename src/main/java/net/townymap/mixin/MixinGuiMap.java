@@ -59,12 +59,22 @@ public abstract class MixinGuiMap {
     @Shadow(remap = false) private double scale;
     @Shadow(remap = false) private double screenScale;
 
-    // TEST: extend Xaero's zoom-out floor when "World Map Overview" is on. Xaero clamps the world-map
-    // zoom in changeZoom with `if (destScale < 0.0625) destScale = 0.0625`; we lower that floor so the
-    // user can zoom out far enough to see the whole EarthMC map. Because we only change Xaero's own
-    // zoom, the tiles, player arrow and our overlay all share one scale and stay aligned.
-    @ModifyConstant(method = "changeZoom", constant = @Constant(doubleValue = 0.0625), remap = false)
+    // Extend Xaero's zoom-out floor when "World Map Overview" is on: Xaero clamps the world-map zoom
+    // at 0.0625; we lower that floor so the user can zoom out far enough to see the whole EarthMC map.
+    // Because we only change Xaero's own zoom, the tiles, player arrow and our overlay all share one
+    // scale and stay aligned. Xaero <=1.41.x clamps inline in changeZoom; 1.42.0 moved the clamp into
+    // a new applyZoomLimits() (which silently broke the old single hook on 26.2). Patch the 0.0625
+    // floor in BOTH, each require = 0, so whichever method the installed Xaero has gets patched and
+    // the other no-ops instead of failing.
+    @ModifyConstant(method = "changeZoom", constant = @Constant(doubleValue = 0.0625), require = 0, remap = false)
     private double townymap$extendWorldMapZoomOut(double original) {
+        return (TownyMapMod.getConfig() != null && TownyMapMod.getConfig().worldMapOverview)
+                ? original / WORLD_MAP_OVERVIEW_FACTOR
+                : original;
+    }
+
+    @ModifyConstant(method = "applyZoomLimits", constant = @Constant(doubleValue = 0.0625), require = 0, remap = false)
+    private double townymap$extendWorldMapZoomOutModern(double original) {
         return (TownyMapMod.getConfig() != null && TownyMapMod.getConfig().worldMapOverview)
                 ? original / WORLD_MAP_OVERVIEW_FACTOR
                 : original;
