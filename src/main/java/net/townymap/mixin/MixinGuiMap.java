@@ -104,11 +104,20 @@ public abstract class MixinGuiMap {
         }
     }
 
-    // TEST: extend Xaero's zoom-out floor when "World Map Overview" is on so the (aligned) overlay can
-    // zoom out to the whole EarthMC map. Xaero clamps the world-map zoom in changeZoom with
-    // `if (destScale < 0.0625) destScale = 0.0625`; we lower that floor.
-    @ModifyConstant(method = "changeZoom", constant = @Constant(doubleValue = 0.0625), remap = false)
+    // Extend Xaero's zoom-out floor when "World Map Overview" is on so the (aligned) overlay can zoom
+    // out to the whole EarthMC map. Xaero <=1.41.x clamps the zoom at 0.0625 inline in changeZoom;
+    // 1.42.0 moved the clamp into a new applyZoomLimits() (which silently broke the old single hook on
+    // 26.2). Patch the floor in BOTH, each require = 0, so whichever method the installed Xaero has
+    // gets patched and the other no-ops instead of failing.
+    @ModifyConstant(method = "changeZoom", constant = @Constant(doubleValue = 0.0625), require = 0, remap = false)
     private double townymap$extendWorldMapZoomOut(double original) {
+        return (TownyMapMod.getConfig() != null && TownyMapMod.getConfig().worldMapOverview)
+                ? original / 8.0
+                : original;
+    }
+
+    @ModifyConstant(method = "applyZoomLimits", constant = @Constant(doubleValue = 0.0625), require = 0, remap = false)
+    private double townymap$extendWorldMapZoomOutModern(double original) {
         return (TownyMapMod.getConfig() != null && TownyMapMod.getConfig().worldMapOverview)
                 ? original / 8.0
                 : original;
