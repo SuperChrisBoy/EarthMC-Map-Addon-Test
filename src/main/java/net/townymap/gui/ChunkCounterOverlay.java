@@ -51,18 +51,126 @@ public final class ChunkCounterOverlay {
 
     public static int count() {
         TownyMapConfig config = TownyMapMod.getConfig();
-        return activeSelection(config).chunks.size();
+        return effectiveChunks(activeSelection(config)).size();
     }
 
     public static int totalCount() {
         Set<Long> unique = new HashSet<>();
-        for (SelectionState state : GROUPS) unique.addAll(state.chunks);
+        for (SelectionState state : GROUPS) unique.addAll(effectiveChunks(state));
         return unique.size();
     }
 
     public static String toolbarLabel(TownyMapConfig config) {
         if (config == null || !config.chunkCounterEnabled) return "OFF";
-        return activeGroupLabel(config) + " " + activeSelection(config).chunks.size();
+        return activeGroupLabel(config) + " " + effectiveChunks(activeSelection(config)).size();
+    }
+
+    /** True when the counter should treat enclosed interiors as selected. */
+    public static boolean isFillEnclosed(TownyMapConfig config) {
+        return config != null && config.chunkCounterFillEnclosed;
+    }
+
+    /**
+     * Toggles Fill. Turning it ON shows/counts enclosed interiors; turning it OFF **bakes** whatever was
+     * filled into the real selection, so the interior is kept (and saved) as ordinary painted chunks
+     * rather than disappearing. So Fill acts as "fill and keep", and the result survives a restart.
+     */
+    public static void toggleFillEnclosed(TownyMapConfig config) {
+        if (config == null) return;
+        if (config.chunkCounterFillEnclosed) commitFilledChunks();   // ON -> OFF: keep what was filled
+        config.chunkCounterFillEnclosed = !config.chunkCounterFillEnclosed;
+        config.save();
+        flushSelection();
+    }
+
+    /** Promotes every group's currently-filled interior into its painted chunk set. */
+    private static void commitFilledChunks() {
+        boolean changed = false;
+        for (SelectionState state : GROUPS) {
+            state.ensureBuilt();                       // effective = painted + enclosed interior
+            if (state.effective == state.chunks) continue;
+            if (state.chunks.addAll(state.effective)) {
+                state.hadChunks = !state.chunks.isEmpty();
+                state.dirty = true;
+                changed = true;
+            }
+        }
+        if (changed) persistDirty = true;
+    }
+
+    private static boolean fillEnclosedEnabled() {
+        return isFillEnclosed(TownyMapMod.getConfig());
+    }
+
+    /** The set actually drawn and counted for a group (painted chunks, + enclosed interior when Fill). */
+    private static Set<Long> effectiveChunks(SelectionState state) {
+        state.ensureBuilt();
+        return state.effective;
+    }
+
+    /** Guard so a couple of far-apart chunks can't make us scan a gigantic empty bounding box. */
+    private static final int FILL_MAX_CELLS = 400_000;
+
+    /**
+     * Returns the chunk set plus every empty chunk that is completely enclosed by it — so painting a ring
+     * (or any closed shape) counts its interior. Works by flood-filling "outside" inward from a one-chunk
+     * margin around the bounding box: any empty chunk the outside can't reach is enclosed. Diagonal gaps
+     * do NOT seal an area (4-way connectivity), matching how you'd actually walk between chunks.
+     */
+    private static Set<Long> withEnclosedHoles(Set<Long> chunks) {
+        if (chunks.size() < 4) return chunks;
+        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
+        int minZ = Integer.MAX_VALUE, maxZ = Integer.MIN_VALUE;
+        for (long k : chunks) {
+            int cx = chunkX(k), cz = chunkZ(k);
+            if (cx < minX) minX = cx;
+            if (cx > maxX) maxX = cx;
+            if (cz < minZ) minZ = cz;
+            if (cz > maxZ) maxZ = cz;
+        }
+        int x0 = minX - 1, z0 = minZ - 1;
+        int w = (maxX - minX) + 3, h = (maxZ - minZ) + 3;
+        if ((long) w * h > FILL_MAX_CELLS) return chunks;   // too sparse/huge to be worth filling
+
+        boolean[] outside = new boolean[w * h];
+        ArrayDeque<Integer> queue = new ArrayDeque<>();
+        // Seed from the margin ring, which is empty by construction.
+        for (int x = 0; x < w; x++) {
+            seedOutside(queue, outside, chunks, x0, z0, w, h, x, 0);
+            seedOutside(queue, outside, chunks, x0, z0, w, h, x, h - 1);
+        }
+        for (int z = 0; z < h; z++) {
+            seedOutside(queue, outside, chunks, x0, z0, w, h, 0, z);
+            seedOutside(queue, outside, chunks, x0, z0, w, h, w - 1, z);
+        }
+        while (!queue.isEmpty()) {
+            int idx = queue.poll();
+            int gx = idx % w, gz = idx / w;
+            seedOutside(queue, outside, chunks, x0, z0, w, h, gx + 1, gz);
+            seedOutside(queue, outside, chunks, x0, z0, w, h, gx - 1, gz);
+            seedOutside(queue, outside, chunks, x0, z0, w, h, gx, gz + 1);
+            seedOutside(queue, outside, chunks, x0, z0, w, h, gx, gz - 1);
+        }
+
+        Set<Long> filled = new LinkedHashSet<>(chunks);
+        for (int gz = 1; gz < h - 1; gz++) {
+            for (int gx = 1; gx < w - 1; gx++) {
+                if (outside[gz * w + gx]) continue;
+                long k = key(x0 + gx, z0 + gz);
+                if (!chunks.contains(k)) filled.add(k);   // empty and unreachable from outside → enclosed
+            }
+        }
+        return filled;
+    }
+
+    private static void seedOutside(ArrayDeque<Integer> queue, boolean[] outside, Set<Long> chunks,
+                                    int x0, int z0, int w, int h, int gx, int gz) {
+        if (gx < 0 || gz < 0 || gx >= w || gz >= h) return;
+        int idx = gz * w + gx;
+        if (outside[idx]) return;
+        if (chunks.contains(key(x0 + gx, z0 + gz))) return;   // a selected chunk blocks the flood
+        outside[idx] = true;
+        queue.add(idx);
     }
 
     public static String activeGroupLabel(TownyMapConfig config) {
@@ -306,11 +414,167 @@ public final class ChunkCounterOverlay {
             drawLowZoomSelection(ctx, selection, cameraX, cameraZ, blockScale, sw, sh, active);
             return;
         }
-        for (long key : selection.chunks) {
+        // Smooth (town-style) outline: trace the selection's outer boundary, simplify it exactly like the
+        // town outlines, then fill + stroke that ONE path. Falls back to the per-chunk boxes if the
+        // boundary can't be traced, so the counter is never left invisible.
+        if (drawSelectionSmooth(ctx, selection, cameraX, cameraZ, blockScale, sw, sh, fill, border)) return;
+        for (long key : selection.effective) {
             drawChunk(ctx, chunkX(key), chunkZ(key), cameraX, cameraZ, blockScale, sw, sh, fill, border, false);
         }
         for (Edge edge : selection.edges) {
             drawEdge(ctx, edge.chunkX, edge.chunkZ, edge.side, cameraX, cameraZ, blockScale, sw, sh, border);
+        }
+    }
+
+    // ── Merged selection outline (styled like the world-map town lines) ───────
+    private static boolean drawSelectionSmooth(GuiGraphicsExtractor ctx, SelectionState selection,
+                                               double cameraX, double cameraZ, double blockScale,
+                                               int sw, int sh, int fill, int border) {
+        List<int[][]> loops = boundaryLoops(selection.effective);
+        if (loops.isEmpty()) return false;
+        List<double[]> loopXs = new ArrayList<>(loops.size());
+        List<double[]> loopYs = new ArrayList<>(loops.size());
+        for (int[][] loop : loops) {
+            int n = loop.length;
+            double[] xs = new double[n];
+            double[] ys = new double[n];
+            for (int i = 0; i < n; i++) {
+                xs[i] = screenX(loop[i][0], cameraX, blockScale, sw);
+                ys[i] = screenY(loop[i][1], cameraZ, blockScale, sh);
+            }
+            // Tolerance 0: chunk-accurate. It only drops redundant collinear points along straight runs,
+            // which never moves the line — so the outline always traces exactly which chunks are
+            // selected. (Diagonal simplification like the towns use was tried and dropped: it's
+            // indistinguishable at the zooms you actually count at, and it would cut corners off the
+            // real selection, which a measuring tool shouldn't do.)
+            int m = net.townymap.render.WorldMapRenderer.simplifyRing(xs, ys, 0.0);
+            if (m < 3) continue;
+            loopXs.add(java.util.Arrays.copyOf(xs, m));
+            loopYs.add(java.util.Arrays.copyOf(ys, m));
+        }
+        if (loopXs.isEmpty()) return false;
+
+        // Fill ALL loops in ONE even-odd pass. Filling them one at a time re-filled the interior of a
+        // ring (its hole has its own boundary loop), which showed up as a doubled shade with a phantom
+        // outline. Even-odd makes inner loops subtract, so an unfilled hole stays genuinely unfilled.
+        fillPolygons(ctx, loopXs, loopYs, fill, sw, sh);
+        for (int li = 0; li < loopXs.size(); li++) {
+            double[] xs = loopXs.get(li), ys = loopYs.get(li);
+            for (int i = 0; i < xs.length; i++) {
+                int j = (i + 1) % xs.length;
+                drawThinSegment(ctx, xs[i], ys[i], xs[j], ys[j], border, sw, sh);
+            }
+        }
+        return true;
+    }
+
+    /** Traces closed loops around the outside of a chunk set (world coords). Each selected chunk
+     *  contributes the sides it doesn't share with a neighbour, wound consistently so they stitch into
+     *  rings — including inner rings around holes. */
+    private static List<int[][]> boundaryLoops(Set<Long> chunks) {
+        Map<Long, List<Long>> outgoing = new HashMap<>();
+        for (long k : chunks) {
+            int cx = chunkX(k), cz = chunkZ(k);
+            int x0 = cx * CHUNK_SIZE, z0 = cz * CHUNK_SIZE;
+            int x1 = x0 + CHUNK_SIZE, z1 = z0 + CHUNK_SIZE;
+            if (!chunks.contains(key(cx, cz - 1))) addBoundaryEdge(outgoing, point(x0, z0), point(x1, z0));
+            if (!chunks.contains(key(cx + 1, cz))) addBoundaryEdge(outgoing, point(x1, z0), point(x1, z1));
+            if (!chunks.contains(key(cx, cz + 1))) addBoundaryEdge(outgoing, point(x1, z1), point(x0, z1));
+            if (!chunks.contains(key(cx - 1, cz))) addBoundaryEdge(outgoing, point(x0, z1), point(x0, z0));
+        }
+        List<int[][]> loops = new ArrayList<>();
+        int guard = 0;
+        while (!outgoing.isEmpty() && guard++ < 4096) {
+            long start = outgoing.keySet().iterator().next();
+            List<int[]> pts = new ArrayList<>();
+            long cur = start;
+            while (true) {
+                List<Long> nexts = outgoing.get(cur);
+                if (nexts == null || nexts.isEmpty()) break;
+                long nxt = nexts.remove(nexts.size() - 1);
+                if (nexts.isEmpty()) outgoing.remove(cur);
+                pts.add(new int[]{pointX(cur), pointZ(cur)});
+                cur = nxt;
+                if (cur == start || pts.size() > 20000) break;
+            }
+            if (pts.size() >= 3) loops.add(pts.toArray(new int[0][]));
+        }
+        return loops;
+    }
+
+    private static void addBoundaryEdge(Map<Long, List<Long>> outgoing, long from, long to) {
+        outgoing.computeIfAbsent(from, ignored -> new ArrayList<>(2)).add(to);
+    }
+
+    private static long point(int x, int z) { return ((long) x << 32) | (z & 0xFFFFFFFFL); }
+    private static int pointX(long p) { return (int) (p >> 32); }
+    private static int pointZ(long p) { return (int) p; }
+
+    /** Even-odd scanline fill across ALL boundary loops at once, so inner loops (holes) subtract instead
+     *  of being filled a second time. */
+    private static void fillPolygons(GuiGraphicsExtractor ctx, List<double[]> loopXs, List<double[]> loopYs,
+                                     int argb, int sw, int sh) {
+        double minY = Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        int totalPoints = 0;
+        for (double[] ys : loopYs) {
+            totalPoints += ys.length;
+            for (double v : ys) {
+                minY = Math.min(minY, v);
+                maxY = Math.max(maxY, v);
+            }
+        }
+        if (totalPoints == 0) return;
+        int yStart = Math.max(0, (int) Math.floor(minY));
+        int yEnd = Math.min(sh - 1, (int) Math.ceil(maxY));
+        double[] hits = new double[totalPoints];
+        for (int y = yStart; y <= yEnd; y++) {
+            double sy = y + 0.5;
+            int c = 0;
+            for (int li = 0; li < loopXs.size(); li++) {
+                double[] xs = loopXs.get(li), ys = loopYs.get(li);
+                int n = xs.length;
+                for (int i = 0, j = n - 1; i < n; j = i++) {
+                    double yi = ys[i], yj = ys[j];
+                    if ((yi > sy) != (yj > sy)) {
+                        hits[c++] = xs[i] + (sy - yi) / (yj - yi) * (xs[j] - xs[i]);
+                    }
+                }
+            }
+            if (c < 2) continue;
+            java.util.Arrays.sort(hits, 0, c);
+            for (int k = 0; k + 1 < c; k += 2) {
+                int xa = (int) Math.round(hits[k]);
+                int xb = (int) Math.round(hits[k + 1]);
+                if (xb <= xa || xb < 0 || xa > sw) continue;
+                ctx.fill(Math.max(0, xa), y, Math.min(sw, xb), y + 1, argb);
+            }
+        }
+    }
+
+    /** 1px line, using a rotated fill for diagonals (axis-aligned ones take the cheap path). */
+    private static void drawThinSegment(GuiGraphicsExtractor ctx, double x1, double y1, double x2, double y2,
+                                        int argb, int sw, int sh) {
+        if ((x1 < 0 && x2 < 0) || (x1 > sw && x2 > sw) || (y1 < 0 && y2 < 0) || (y1 > sh && y2 > sh)) return;
+        int ix1 = (int) Math.round(x1), iy1 = (int) Math.round(y1);
+        int ix2 = (int) Math.round(x2), iy2 = (int) Math.round(y2);
+        if (iy1 == iy2) {
+            if (ix1 != ix2) ctx.fill(Math.min(ix1, ix2), iy1, Math.max(ix1, ix2), iy1 + 1, argb);
+            return;
+        }
+        if (ix1 == ix2) {
+            ctx.fill(ix1, Math.min(iy1, iy2), ix1 + 1, Math.max(iy1, iy2), argb);
+            return;
+        }
+        double dx = x2 - x1, dy = y2 - y1;
+        int len = (int) Math.ceil(Math.hypot(dx, dy));
+        org.joml.Matrix3x2fStack m = ctx.pose();
+        m.pushMatrix();
+        try {
+            m.translate((float) x1, (float) y1);
+            m.rotate((float) Math.atan2(dy, dx));
+            ctx.fill(0, 0, len, 1, argb);
+        } finally {
+            m.popMatrix();
         }
     }
 
@@ -403,7 +667,7 @@ public final class ChunkCounterOverlay {
         selection.ensureBuilt();
         int fill = argb(active ? 0x42 : 0x2B, selection.rgb);
         int border = argb(active ? 0xE8 : 0xA0, selection.rgb);
-        for (long key : selection.chunks) {
+        for (long key : selection.effective) {
             int blockX = chunkX(key) * CHUNK_SIZE;
             int blockZ = chunkZ(key) * CHUNK_SIZE;
             ctx.fill(blockX, blockZ, blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE, fill);
@@ -481,7 +745,7 @@ public final class ChunkCounterOverlay {
         int groupCount = visibleGroupCount(config);
         for (int i = 0; i < groupCount; i++) {
             SelectionState group = GROUPS.get(i);
-            for (long key : group.chunks) {
+            for (long key : effectiveChunks(group)) {
                 if (!seen.add(key)) continue;
                 int count = groupCount(key);
                 if (count <= 1) continue;
@@ -504,7 +768,7 @@ public final class ChunkCounterOverlay {
         TownyMapConfig config = TownyMapMod.getConfig();
         int groupCount = visibleGroupCount(config);
         for (int i = 0; i < groupCount; i++) {
-            if (GROUPS.get(i).chunks.contains(key)) count++;
+            if (effectiveChunks(GROUPS.get(i)).contains(key)) count++;
         }
         return count;
     }
@@ -727,6 +991,9 @@ public final class ChunkCounterOverlay {
     private static final class SelectionState {
         private final int rgb;
         private final Set<Long> chunks = new LinkedHashSet<>();
+        /** chunks, or chunks + enclosed interior when Fill is on (see ensureBuilt). */
+        private Set<Long> effective = chunks;
+        private boolean builtFilled;
         private List<Edge> edges = List.of();
         private List<Component> components = List.of();
         private List<LowZoomRect> lowZoomRects = List.of();
@@ -758,25 +1025,31 @@ public final class ChunkCounterOverlay {
         }
 
         private void ensureBuilt() {
-            if (!dirty) return;
+            boolean fill = fillEnclosedEnabled();
+            if (!dirty && builtFilled == fill) return;
+            // `effective` is what gets drawn and counted: the painted chunks, plus any fully enclosed
+            // interior when Fill is on. `chunks` itself is never modified, so toggling Fill off restores
+            // exactly what was painted and only the painted set is ever saved.
+            effective = fill ? withEnclosedHoles(chunks) : chunks;
             rebuildEdgesAndComponents(this);
             dirty = false;
+            builtFilled = fill;
         }
     }
 
     private static void rebuildEdgesAndComponents(SelectionState selection) {
-        ArrayList<Edge> edges = new ArrayList<>(selection.chunks.size() * 2);
-        for (long key : selection.chunks) {
+        ArrayList<Edge> edges = new ArrayList<>(selection.effective.size() * 2);
+        for (long key : selection.effective) {
             int chunkX = chunkX(key);
             int chunkZ = chunkZ(key);
-            if (!selection.chunks.contains(key(chunkX, chunkZ - 1))) edges.add(new Edge(chunkX, chunkZ, 0));
-            if (!selection.chunks.contains(key(chunkX + 1, chunkZ))) edges.add(new Edge(chunkX, chunkZ, 1));
-            if (!selection.chunks.contains(key(chunkX, chunkZ + 1))) edges.add(new Edge(chunkX, chunkZ, 2));
-            if (!selection.chunks.contains(key(chunkX - 1, chunkZ))) edges.add(new Edge(chunkX, chunkZ, 3));
+            if (!selection.effective.contains(key(chunkX, chunkZ - 1))) edges.add(new Edge(chunkX, chunkZ, 0));
+            if (!selection.effective.contains(key(chunkX + 1, chunkZ))) edges.add(new Edge(chunkX, chunkZ, 1));
+            if (!selection.effective.contains(key(chunkX, chunkZ + 1))) edges.add(new Edge(chunkX, chunkZ, 2));
+            if (!selection.effective.contains(key(chunkX - 1, chunkZ))) edges.add(new Edge(chunkX, chunkZ, 3));
         }
         selection.edges = List.copyOf(edges);
-        selection.components = buildComponents(selection.chunks);
-        selection.lowZoomRects = buildLowZoomRects(selection.chunks);
+        selection.components = buildComponents(selection.effective);
+        selection.lowZoomRects = buildLowZoomRects(selection.effective);
     }
 
     private static List<LowZoomRect> buildLowZoomRects(Set<Long> chunks) {

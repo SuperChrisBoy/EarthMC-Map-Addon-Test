@@ -346,8 +346,13 @@ public class SquaremapApiClient {
                         nations.put(name.toLowerCase(Locale.ROOT), nation);
                     }
 
+                    // squaremap ships the stroke colour ("color") and the interior colour ("fillColor")
+                    // separately — on EarthMC they're the nation's two-colour scheme and differ for most
+                    // towns — so keep both instead of collapsing them into one.
                     String colorStr = coalesce(getString(m, "color"), getString(m, "fillColor"));
+                    String fillStr  = coalesce(getString(m, "fillColor"), getString(m, "color"));
                     int rgb = TownData.parseHexColor(colorStr, 0x3BFF3B);
+                    int fillRgb = TownData.parseHexColor(fillStr, rgb);
 
                     JsonArray outerPoints = getArray(m, "points");
                     if (outerPoints == null) continue;
@@ -363,7 +368,7 @@ public class SquaremapApiClient {
                     }
 
                     if (!rings.isEmpty()) {
-                        towns.add(new TownData(name, rgb, List.copyOf(rings)));
+                        towns.add(new TownData(name, rgb, fillRgb, List.copyOf(rings)));
                     }
                 }
             }

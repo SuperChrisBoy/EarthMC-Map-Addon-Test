@@ -152,6 +152,10 @@ public class TownyMapConfigScreen extends Screen {
         option("Nation Capital Stars", onOff(cfg.nationStarsEnabled, v -> cfg.nationStarsEnabled = v),
                 () -> cfg.nationStarsEnabled == DEFAULTS.nationStarsEnabled,
                 () -> cfg.nationStarsEnabled = DEFAULTS.nationStarsEnabled);
+        // OFF = towns keep their outline at far zoom, ON = small towns collapse to a dot.
+        option("Far Zoom Town Dots", onOff(cfg.farZoomTownDots, v -> cfg.farZoomTownDots = v),
+                () -> cfg.farZoomTownDots == DEFAULTS.farZoomTownDots,
+                () -> cfg.farZoomTownDots = DEFAULTS.farZoomTownDots);
         option("Real Borders", cycle(cfg.borderOverlayMode, new int[]{0, 1, 2},
                         TownyMapConfigScreen::borderModeText, v -> cfg.borderOverlayMode = v),
                 () -> cfg.borderOverlayMode == DEFAULTS.borderOverlayMode,
