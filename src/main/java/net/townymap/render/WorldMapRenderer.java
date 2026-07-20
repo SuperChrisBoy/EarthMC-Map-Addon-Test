@@ -103,16 +103,50 @@ public class WorldMapRenderer {
     private int favoritesVersion = 0;   // bumped when the favourite set changes (tiles bake favourites in)
 
     // ── Cached town-outline tiles ─────────────────────────────────────────────
-    // Above OUTLINE_TILE_MIN_TOWNS we stop re-drawing every outline each frame and instead rasterise
-    // them once (off-thread) into world-anchored tile textures, then just blit — the same technique
-    // BorderOverlayRenderer uses. Outlines are rasterised at the display LOD, so accuracy is unchanged.
+    // Outlines rasterise once (off-thread) into world-anchored tile textures, then just blit — the same
+    // technique BorderOverlayRenderer uses.
     private static final int OUTLINE_TILE_PIXELS = 256;
-    private static final int OUTLINE_TILE_MIN_TOWNS = 400;
+    // The DP+AA tile path owns the outlines whenever one BLOCK is at most this many PHYSICAL pixels on
+    // screen (a chunk ≤ 32 phys px) — i.e. all of mid-zoom out to the full overview, with NO town-count
+    // gate. That matches Leaflet exactly: the website simplify+AA-renders every polygon at every zoom,
+    // and its shapes only look rectilinear close-in because the chunk steps exceed the simplify tolerance
+    // there. Zoomed in past this, the crisp 1:1 direct renderer takes over (the website is fully
+    // rectilinear at those zooms as well).
+    private static final double OUTLINE_TILE_MAX_PPB = 2.0;
     private static final int MAX_OUTLINE_TILES = 320;
-    private static final int MAX_OUTLINE_TILE_LOADS = 16;
-    private static final int MAX_OUTLINE_TILE_UPLOADS_PER_FRAME = 8;
-    private static final float OUTLINE_TILE_STROKE = 1.0f;   // ~1px lines now that tiles blit ~1:1
-    private static final int OUTLINE_TILE_SUPERSAMPLE = 2;   // rasterise at 2× then downscale → crisp at any blit scale
+    private static final int MAX_OUTLINE_TILE_LOADS = 48;              // bake more in parallel → sharp fast
+    private static final int MAX_OUTLINE_TILE_UPLOADS_PER_FRAME = 24;  // and upload them fast on settle
+    // The browser renders its canvas at devicePixelRatio (PHYSICAL pixels), so we rasterise at up to this
+    // multiple of the GUI scale (the window scale factor, capped — 2× already matches the site's sharpness
+    // at 4× the tile count; uncapped retina scales would explode tile counts for invisible gains).
+    private static final double OUTLINE_TILE_MAX_DENSITY = 2.0;
+    // Settle time before a new zoom bucket rasterises (Leaflet redraws its canvas on zoom END, scaling
+    // the old picture during the gesture).
+    private static final long OUTLINE_ZOOM_SETTLE_MS = 55;   // bake the new bucket almost immediately once
+                                                             // the zoom stops → sharp tiles appear near-instantly
+    // Whole-map overview level: coarse enough that a couple dozen tiles cover ALL of EarthMC (at this
+    // ppb one tile spans ~12.8k blocks), baked once and never evicted. It is drawn ONLY as a last-resort
+    // floor — when neither this zoom nor the previous one has a single cached tile for the view — so the
+    // outlines can never fully disappear mid-zoom, yet it never double-draws under the finer levels
+    // (which would thicken/halo the lines you just approved).
+    private static final double OUTLINE_OVERVIEW_PPB = 0.02;
+    private int pendingOutlineZoom = Integer.MIN_VALUE;
+    private long pendingOutlineZoomSinceMs;
+    // Leaflet's smoothFactor (1.0), in GUI px — scaled by density into tile px at use. Verified against
+    // Leaflet 1.9.4 source: simplify = radial vertex reduction THEN Douglas-Peucker, both with sqTolerance.
+    // The tolerance is the same world-space distance for every tile of a zoom level, so neighbouring tiles
+    // — and adjacent towns sharing a border edge — simplify identically and stay flush.
+    private static final double OUTLINE_SIMPLIFY_TOLERANCE_PX = 1.0;
+    // The site's exact town-polygon paint (read from map.earthmc.net markers.json — every one of its
+    // ~5100 polygons ships weight:2, opacity:0.3, and Leaflet's default fillOpacity 0.2): a WIDE
+    // translucent round-joined stroke over a soft fill. That style — not the geometry — is most of the
+    // "smooth, flowing, never-intersecting" look: the fat 30%-alpha stroke visually rounds the chunk
+    // staircase and adjacent towns' strokes overlap into one soft shared edge.
+    private static final double SITE_STROKE_WEIGHT_GUI = 2.0;   // CSS px on the site == GUI px here
+    private static final int SITE_STROKE_ALPHA = 165;          // ~0.65: crisper/more defined than the
+                                                               // site's faint 0.3, which read fuzzy in-game
+    private static final int SITE_FILL_ALPHA = 64;              // ~0.25 — a touch over the site's 0.2 so
+                                                                // the nation fill colour actually reads
     // Overview tiles are few but expensive (thousands of towns each), so parallelise their rasterisation
     // to shorten the load when zooming into a new coarse bucket — capped so it never starves the render
     // thread / game tick.
@@ -375,18 +409,22 @@ public class WorldMapRenderer {
 
         refreshStatusHighlightKeys(townDetails);
 
-        // Busy map: draw outlines from cached, world-anchored tiles (rasterised once, off-thread). Returns
-        // false until every visible tile is ready, in which case we fall through to direct rendering for
-        // this frame, so the map is never left blank.
-        //
-        // The tiles bake every town's own border colour EXCEPT the status-highlighted subset, which is
-        // excluded from the bake and drawn live just below in the animated status colour. That keeps the
-        // thousands of other towns on the fast tile path while the highlight stays a single flush line
-        // (it IS the border, with no baked line under it to drift against).
-        boolean busy = visibleTowns.size() > OUTLINE_TILE_MIN_TOWNS;
-        boolean tilesUsed = busy && renderTownOutlineTiles(ctx, cameraX, cameraZ, blockScale, sw, sh,
-                                          worldLeft, worldRight, worldTop, worldBottom);
-        if (tilesUsed) {
+        // ── Outline strategy: exactly squaremap's ────────────────────────────────
+        // The smooth (DP + anti-aliased) tile path owns the outlines at every zoom where a chunk is small
+        // on screen — gated by ZOOM, not town count, because Leaflet canvas-renders every polygon at every
+        // zoom. The tiles bake every town's own border colour EXCEPT the status-highlighted subset, which
+        // is excluded from the bake and drawn live in the animated status colour (it IS the border, with
+        // no baked line under it to drift against). renderTownOutlineTiles returns false until every
+        // visible tile is ready, in which case we fall through to direct rendering so the map is never
+        // left blank.
+        double density = tileRenderDensity();
+        boolean useTiles = blockScale * density <= OUTLINE_TILE_MAX_PPB;
+        boolean fillsEligible = visibleTowns.size() <= FILL_MAX_TOWNS && blockScale >= TOWN_FILL_MIN_SCALE;
+
+        // Tiles bake fill AND stroke on the same simplified path (Leaflet's _fillStroke), so nothing
+        // else needs to draw when they're ready.
+        if (useTiles && renderTownOutlineTiles(ctx, cameraX, cameraZ, blockScale, sw, sh,
+                                               worldLeft, worldRight, worldTop, worldBottom)) {
             if (config.townStatusOverlayMode > 0) {
                 renderStatusHighlightsLive(ctx, visibleTowns, cameraX, cameraZ, blockScale, sw, sh);
             }
@@ -394,7 +432,7 @@ public class WorldMapRenderer {
         }
 
         int statusRgb = statusHighlightRgb();
-        int fillColor0 = (visibleTowns.size() <= FILL_MAX_TOWNS && blockScale >= TOWN_FILL_MIN_SCALE) ? 0xFF : 0;
+        int fillColor0 = fillsEligible ? 0xFF : 0;
         boolean overlayOn = config.townStatusOverlayMode > 0;
         boolean haveFavorites = !favoriteTownKeys.isEmpty();
         for (RenderTown town : visibleTowns) {
@@ -402,10 +440,18 @@ public class WorldMapRenderer {
             boolean favorite = haveFavorites && favoriteTownKeys.contains(town.key());
             boolean statusHighlighted = overlayOn && isStatusHighlighted(town, townDetails);
             // One colour encodes everything → one outline pass (favourite > status > the town's own colour).
-            int outlineColor = favorite ? 0xFFFFE066
+            // Use the SAME opacities as the baked tiles (SITE_*), not borderAlpha/fillAlpha. They used to
+            // differ — stroke 220 vs 165, fill 35 vs 64 — so crossing the tile/direct zoom boundary made
+            // towns visibly change brightness, most obvious on the bright gold favourites.
+            // Favourites differ from other towns only in COLOUR, never in opacity.
+            int outlineColor = favorite ? ((SITE_STROKE_ALPHA << 24) | 0xFFE066)
                     : statusHighlighted ? (0xFF000000 | statusRgb)
-                    : town.data().argbColor(config.borderAlpha);
-            int fillColor = fillColor0 != 0 ? town.data().argbColor(config.fillAlpha) : 0;
+                    : ((SITE_STROKE_ALPHA << 24) | (town.data().rgbColor() & 0xFFFFFF));
+            // Interior uses the town's FILL colour (nation fill), not the outline colour — except
+            // favourites, which stay gold inside as well as out.
+            int fillColor = fillColor0 == 0 ? 0
+                    : favorite ? ((SITE_FILL_ALPHA << 24) | 0xFFE066)
+                    : ((SITE_FILL_ALPHA << 24) | (town.data().fillRgbColor() & 0xFFFFFF));
 
             for (RingGeometry ring : town.rings()) {
                 renderRing(ctx, ring, 0, outlineColor, fillColor, cameraX, cameraZ, blockScale, sw, sh);
@@ -483,31 +529,63 @@ public class WorldMapRenderer {
             outlineTilesFavVersion = favoritesVersion;
             outlineTilesStatusVersion = statusVersion;
         }
-        if (snapshot.allTowns().isEmpty()) return false;
+        if (snapshot.allTowns().isEmpty()) return true;   // nothing to draw, but still "handled" (no direct)
         processOutlineTileUploads();
         Set<String> favSnapshot = favoriteTownKeys.isEmpty() ? Set.of() : Set.copyOf(favoriteTownKeys);
         Set<String> statusSnapshot = statusHighlightKeys;   // already immutable (Set.of() / Set.copyOf)
 
-        int zoom = chooseOutlineTileZoom(blockScale);
+        // Rasterise at PHYSICAL pixel density (like the browser's devicePixelRatio canvas): the zoom
+        // bucket is chosen from blockScale × GUI scale, so ppb below is physical px per block and the
+        // blit lands 1:1 with the framebuffer instead of being magnified (the old fuzz).
+        double density = tileRenderDensity();
+        int zoom = chooseOutlineTileZoom(blockScale * density);
         double ppb = outlineTilePixelsPerBlock(zoom);
         double tileWorldSize = OUTLINE_TILE_PIXELS / ppb;
+
         int minTx = (int) Math.floor(worldLeft / tileWorldSize);
         int maxTx = (int) Math.floor(worldRight / tileWorldSize);
         int minTy = (int) Math.floor(worldTop / tileWorldSize);
         int maxTy = (int) Math.floor(worldBottom / tileWorldSize);
 
-        // First pass: request any missing visible tiles for this zoom.
-        boolean allReady = true;
-        for (int ty = minTy; ty <= maxTy; ty++) {
-            for (int tx = minTx; tx <= maxTx; tx++) {
-                long key = outlineTileKey(zoom, tx, ty);
-                if (outlineTiles.containsKey(key) || outlineTilesEmpty.contains(key)) continue;
-                requestOutlineTile(key, zoom, tx, ty, tileWorldSize, ppb, snapshot, favSnapshot, statusSnapshot);
-                allReady = false;
+        // Leaflet redraws its canvas on zoom END, scaling the old picture during the gesture. While the
+        // zoom bucket is still settling, show a coarser cached level and DON'T bake the new bucket yet
+        // (avoids the rebuild flood).
+        if (zoom != lastReadyOutlineZoom) {
+            long now = System.currentTimeMillis();
+            if (zoom != pendingOutlineZoom) {
+                pendingOutlineZoom = zoom;
+                pendingOutlineZoomSinceMs = now;
+            }
+            if (now - pendingOutlineZoomSinceMs < OUTLINE_ZOOM_SETTLE_MS) {
+                drawCoarserFallback(ctx, zoom, cameraX, cameraZ, blockScale, sw, sh,
+                                    worldLeft, worldRight, worldTop, worldBottom,
+                                    density, snapshot, favSnapshot, statusSnapshot);
+                return true;
             }
         }
 
-        if (allReady) {
+        // Pass 1 — take stock of THIS zoom without drawing yet, and request whatever's missing. Deciding
+        // first is what removes the flicker: a coarser fallback must never be painted *underneath* this
+        // zoom's tiles, or every line that exists in both layers double-draws (thicker + darker) and then
+        // visibly thins the moment the fallback stops.
+        boolean allReady = true;
+        int readyCount = 0;
+        for (int ty = minTy; ty <= maxTy; ty++) {
+            for (int tx = minTx; tx <= maxTx; tx++) {
+                long key = outlineTileKey(zoom, tx, ty);
+                if (outlineTiles.containsKey(key)) {
+                    readyCount++;
+                } else if (!outlineTilesEmpty.contains(key)) {
+                    requestOutlineTile(key, zoom, tx, ty, tileWorldSize, ppb, density,
+                                       snapshot, favSnapshot, statusSnapshot);
+                    allReady = false;
+                }
+            }
+        }
+
+        // Pass 2 — draw exactly ONE layer. Either this zoom's tiles (never mixed with a coarser level), or,
+        // if this zoom has nothing cached yet, the best coarser level so the outlines never vanish.
+        if (readyCount > 0) {
             for (int ty = minTy; ty <= maxTy; ty++) {
                 for (int tx = minTx; tx <= maxTx; tx++) {
                     Identifier tex = outlineTiles.get(outlineTileKey(zoom, tx, ty));
@@ -516,20 +594,36 @@ public class WorldMapRenderer {
                     }
                 }
             }
-            lastReadyOutlineZoom = zoom;
-            return true;
+        } else {
+            drawCoarserFallback(ctx, zoom, cameraX, cameraZ, blockScale, sw, sh,
+                                worldLeft, worldRight, worldTop, worldBottom,
+                                density, snapshot, favSnapshot, statusSnapshot);
         }
+        if (allReady) lastReadyOutlineZoom = zoom;
 
-        // This zoom's tiles are still rasterising. Rather than direct-render thousands of towns (the
-        // overview zoom stutter), keep the map populated by blitting the last fully-ready zoom's tiles,
-        // scaled to the current view — they're a touch off-scale for the moment but vastly cheaper, and
-        // the new bucket keeps loading in the background. Only direct-render when we have nothing cached.
+        // ALWAYS handled in the tile range — the caller must never fall to the old rectilinear renderer.
+        return true;
+    }
+
+    /** Single coarser layer for when this zoom has nothing cached: the last fully-ready level if it has
+     *  anything, else the pinned whole-map overview floor. Only ever drawn INSTEAD of the current zoom's
+     *  tiles, never under them. */
+    private void drawCoarserFallback(DrawContext ctx, int zoom, double cameraX, double cameraZ,
+                                     double blockScale, int sw, int sh, double worldLeft, double worldRight,
+                                     double worldTop, double worldBottom, double density,
+                                     TownRenderCache snapshot, Set<String> favSnapshot,
+                                     Set<String> statusSnapshot) {
+        // Stand in with the last fully-ready level. (Picking the "nearest cached" level instead was tried
+        // and reverted: which level is nearest changes as tiles bake and evict, so the stand-in hopped
+        // between levels frame to frame and made every town flicker.)
         if (lastReadyOutlineZoom != Integer.MIN_VALUE && lastReadyOutlineZoom != zoom
-                && blitOutlineTilesAtZoom(ctx, lastReadyOutlineZoom, cameraX, cameraZ, blockScale, sw, sh,
-                                          worldLeft, worldRight, worldTop, worldBottom)) {
-            return true;
+                && blitOutlineTilesAtZoom(ctx, lastReadyOutlineZoom, cameraX, cameraZ, blockScale,
+                                          sw, sh, worldLeft, worldRight, worldTop, worldBottom)) {
+            return;
         }
-        return false;
+        drewOverviewFloor(ctx, cameraX, cameraZ, blockScale, sw, sh,
+                          worldLeft, worldRight, worldTop, worldBottom,
+                          density, snapshot, favSnapshot, statusSnapshot);
     }
 
     /** Blits every visible tile at {@code zoom} (scaled to the current view) — but only if it has full
@@ -544,25 +638,65 @@ public class WorldMapRenderer {
         int maxTx = (int) Math.floor(worldRight / tileWorldSize);
         int minTy = (int) Math.floor(worldTop / tileWorldSize);
         int maxTy = (int) Math.floor(worldBottom / tileWorldSize);
-        for (int ty = minTy; ty <= maxTy; ty++) {
-            for (int tx = minTx; tx <= maxTx; tx++) {
-                long key = outlineTileKey(zoom, tx, ty);
-                if (!outlineTiles.containsKey(key) && !outlineTilesEmpty.contains(key)) return false;
-            }
-        }
+        // Draw whatever of this zoom IS cached — partial coverage beats nothing. (It used to bail unless
+        // every visible tile was present, which zooming OUT can never satisfy: the new view exposes world
+        // the old, more-zoomed-in level never covered — so the outlines vanished mid-zoom.)
+        boolean drewAny = false;
         for (int ty = minTy; ty <= maxTy; ty++) {
             for (int tx = minTx; tx <= maxTx; tx++) {
                 Identifier tex = outlineTiles.get(outlineTileKey(zoom, tx, ty));
                 if (tex != null) {
                     blitOutlineTile(ctx, tex, tx, ty, tileWorldSize, cameraX, cameraZ, blockScale, sw, sh);
+                    drewAny = true;
                 }
             }
         }
-        return true;
+        return drewAny;
+    }
+
+    /** Zoom bucket of the pinned whole-map overview level. */
+    private static int overviewOutlineZoom() {
+        return (int) Math.round(Math.log(OUTLINE_OVERVIEW_PPB) / Math.log(OUTLINE_ZOOM_STEP));
+    }
+
+    /** Requests (once) and blits the pinned overview level for the visible area. Used only as the floor
+     *  when no finer level had anything cached, so it never stacks under the fine tiles. */
+    private void drewOverviewFloor(DrawContext ctx, double cameraX, double cameraZ, double blockScale,
+                                   int sw, int sh, double worldLeft, double worldRight,
+                                   double worldTop, double worldBottom, double density,
+                                   TownRenderCache snapshot, Set<String> favSnapshot,
+                                   Set<String> statusSnapshot) {
+        int ovZoom = overviewOutlineZoom();
+        double ovPpb = outlineTilePixelsPerBlock(ovZoom);
+        double ovTileWorld = OUTLINE_TILE_PIXELS / ovPpb;
+        int minTx = (int) Math.floor(worldLeft / ovTileWorld);
+        int maxTx = (int) Math.floor(worldRight / ovTileWorld);
+        int minTy = (int) Math.floor(worldTop / ovTileWorld);
+        int maxTy = (int) Math.floor(worldBottom / ovTileWorld);
+        for (int ty = minTy; ty <= maxTy; ty++) {
+            for (int tx = minTx; tx <= maxTx; tx++) {
+                long key = outlineTileKey(ovZoom, tx, ty);
+                Identifier tex = outlineTiles.get(key);
+                if (tex != null) {
+                    blitOutlineTile(ctx, tex, tx, ty, ovTileWorld, cameraX, cameraZ, blockScale, sw, sh);
+                } else if (!outlineTilesEmpty.contains(key)) {
+                    requestOutlineTile(key, ovZoom, tx, ty, ovTileWorld, ovPpb, density,
+                                       snapshot, favSnapshot, statusSnapshot);
+                }
+            }
+        }
+    }
+
+    /** Physical-px-per-GUI-px multiple the tiles rasterise at (capped window scale factor). */
+    private static double tileRenderDensity() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.getWindow() == null) return 1.0;
+        return Math.min(OUTLINE_TILE_MAX_DENSITY, Math.max(1.0, client.getWindow().getScaleFactor()));
     }
 
     private void requestOutlineTile(long key, int zoom, int tx, int ty, double tileWorldSize, double ppb,
-                                    TownRenderCache snapshot, Set<String> favSnapshot, Set<String> statusSnapshot) {
+                                    double density, TownRenderCache snapshot, Set<String> favSnapshot,
+                                    Set<String> statusSnapshot) {
         if (outlineTilesLoading.size() >= MAX_OUTLINE_TILE_LOADS) return;
         if (!outlineTilesLoading.add(key)) return;
         // Stamp the versions this tile is being baked with, so a tile that finishes after the favourite or
@@ -571,7 +705,7 @@ public class WorldMapRenderer {
         int statVer = outlineTilesStatusVersion;
         outlineTileExecutor.execute(() -> {
             try {
-                NativeImage img = rasterizeOutlineTile(zoom, tx, ty, tileWorldSize, ppb, snapshot, favSnapshot, statusSnapshot);
+                NativeImage img = rasterizeOutlineTile(zoom, tx, ty, tileWorldSize, ppb, density, snapshot, favSnapshot, statusSnapshot);
                 if (img == null) outlineTilesEmpty.add(key);
                 else outlineTilesCompleted.add(new LoadedOutlineTile(key, snapshot, img, favVer, statVer));
             } catch (Exception e) {
@@ -583,7 +717,7 @@ public class WorldMapRenderer {
     }
 
     private NativeImage rasterizeOutlineTile(int zoom, int tx, int ty, double tileWorldSize, double ppb,
-                                             TownRenderCache snapshot, Set<String> favSnapshot,
+                                             double density, TownRenderCache snapshot, Set<String> favSnapshot,
                                              Set<String> statusSnapshot) {
         double tileWorldX = tx * tileWorldSize;
         double tileWorldZ = ty * tileWorldSize;
@@ -603,29 +737,56 @@ public class WorldMapRenderer {
         }
         if (towns.isEmpty()) return null;
 
-        int lod = selectLod(ppb);
-        // Hard single-pass render (no supersample, no AA): combined with NEAREST sampling on blit, this
-        // keeps the lines crisp instead of soft. A 2px stroke survives the nearest-neighbour downscale.
+        // Input geometry: ALWAYS the raw rings (lod 0), simplified in pixel space — Leaflet's way, at
+        // every zoom out to the full overview. Pre-snapped LOD grids change the character of the
+        // simplified output at each LOD band (and can collapse mid-size towns into degenerate rings that
+        // vanish), which is exactly the "looks different past this zoom" the raw path avoids. The
+        // settle-then-redraw debounce makes raw affordable: one off-thread bake per settled zoom, and the
+        // radial reduction stage eats most of the raw points in a single O(n) pass anyway.
+        double simplifyTol = OUTLINE_SIMPLIFY_TOLERANCE_PX * density;
+        int lod = 0;
+        // Anti-aliased strokes with round joins over DP-simplified rings — the squaremap/Leaflet look.
+        // The fine 1.1× zoom buckets keep the blit within ~5% of 1:1, and the LINEAR sampler smooths the
+        // residual resample uniformly (sub-half-pixel), the same way the browser composites its canvas.
         BufferedImage img = new BufferedImage(OUTLINE_TILE_PIXELS, OUTLINE_TILE_PIXELS, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
         boolean drew = false;
         try {
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
-            g.setStroke(new BasicStroke(OUTLINE_TILE_STROKE, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER));
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
+            // Zoom-adaptive on-screen stroke width: fine when zoomed in (a chunk spans many tile px),
+            // a touch bolder when zoomed out where the diagonal simplification reads best. Fixes the
+            // "too fat when zoomed in close" of the old constant weight. 16*ppb = a chunk's width in tile
+            // px; guiW is the resulting on-screen width in GUI px (tiles blit at ~1/density, so ×density
+            // to convert to the tile-space stroke).
+            // Upper clamp only bites when zoomed OUT. Keeping it under a pixel there is what stops the
+            // far-zoom mush: a ~2px stroke on a town that's only a few px wide swallows the shape.
+            double guiW = Math.max(0.65, Math.min(0.85, 20.0 / (16.0 * ppb)));
+            g.setStroke(new BasicStroke((float) (guiW * density),
+                    BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             for (RenderTown town : towns) {
                 if (!town.intersectsWorld(left, right, top, bottom)) continue;
                 if (statusSnapshot.contains(town.key())) continue;   // status-highlighted → drawn live, not baked
+                // Favourites are baked exactly like every other town — identical thin stroke, identical
+                // translucent fill — only the COLOUR differs (gold). Previously they also got a fully
+                // opaque line, which made them shout next to the ~65%-alpha neighbours.
                 boolean favorite = favSnapshot.contains(town.key());
-                g.setColor(awtColor(favorite ? 0xFFFFE066 : town.data().argbColor(config.borderAlpha)));
+                // Outline uses squaremap's stroke colour, interior uses its fillColor — on EarthMC those
+                // are the nation's two colours, so towns read as their nation instead of one flat tint.
+                int rgb = favorite ? 0xFFE066 : (town.data().rgbColor() & 0xFFFFFF);
+                int fillRgb = favorite ? 0xFFE066 : (town.data().fillRgbColor() & 0xFFFFFF);
 
-                // Small town: a stroked outline of a tiny town reads as a chunky blob at full zoom-out, so
-                // collapse anything up to a few px into a single crisp 1px dot — a smaller, cleaner mark than
-                // the outline square. (Raised from 3px so more small towns show as the compact dot.)
+                // With "Far Zoom Town Dots" ON, a town only a few px across collapses to a crisp dot
+                // (an anti-aliased outline that small can read as a blob). With it OFF we keep drawing
+                // the real outline right down to 1px — below that there is literally no shape left to
+                // resolve, so the dot is the only thing that can be drawn at all.
                 double tw = (town.maxX() - town.minX()) * ppb;
                 double th = (town.maxZ() - town.minZ()) * ppb;
-                if (Math.max(tw, th) <= 5.0) {
+                double dotBelow = config.farZoomTownDots ? 2.5 * density : 1.0;
+                if (Math.max(tw, th) <= dotBelow) {
                     int cx = (int) Math.round(((town.minX() + town.maxX()) / 2.0 - tileWorldX) * ppb);
                     int cy = (int) Math.round(((town.minZ() + town.maxZ()) / 2.0 - tileWorldZ) * ppb);
+                    g.setColor(awtColor(0xC8000000 | rgb));   // dot needs more alpha than a stroke to read
                     g.fillRect(cx, cy, 1, 1);
                     drew = true;
                     continue;
@@ -633,12 +794,25 @@ public class WorldMapRenderer {
                 for (RingGeometry ring : town.rings()) {
                     int[] xs = ring.lodX(lod), zs = ring.lodZ(lod);
                     if (xs.length < 2) continue;
+                    double[] px = new double[xs.length];
+                    double[] pz = new double[xs.length];
+                    for (int i = 0; i < xs.length; i++) {
+                        px[i] = (xs[i] - tileWorldX) * ppb;
+                        pz[i] = (zs[i] - tileWorldZ) * ppb;
+                    }
+                    int n = simplifyRing(px, pz, simplifyTol);
                     Path2D.Double path = new Path2D.Double();
-                    path.moveTo((xs[0] - tileWorldX) * ppb, (zs[0] - tileWorldZ) * ppb);
-                    for (int i = 1; i < xs.length; i++) {
-                        path.lineTo((xs[i] - tileWorldX) * ppb, (zs[i] - tileWorldZ) * ppb);
+                    path.moveTo(px[0], pz[0]);
+                    for (int i = 1; i < n; i++) {
+                        path.lineTo(px[i], pz[i]);
                     }
                     path.closePath();
+                    // Leaflet's _fillStroke on the SAME simplified path: soft fill first, wide translucent
+                    // stroke over it. Fill and stroke can never disagree about the shape — the reason the
+                    // site's borders always sit flush on their fills.
+                    g.setColor(awtColor((SITE_FILL_ALPHA << 24) | fillRgb));
+                    g.fill(path);
+                    g.setColor(awtColor((SITE_STROKE_ALPHA << 24) | rgb));
                     g.draw(path);
                     drew = true;
                 }
@@ -655,6 +829,86 @@ public class WorldMapRenderer {
             }
         }
         return ni;
+    }
+
+    /**
+     * Leaflet 1.9.4's LineUtil.simplify, in-place: STAGE 1 radial vertex reduction (drop every point
+     * within {@code tolerance} of the previously kept point — the aggressive pass that collapses chunk
+     * staircases the moment their steps shrink under the tolerance), then STAGE 2 Douglas-Peucker.
+     * Compacts survivors to the front of the arrays and returns their count. Endpoints always kept (the
+     * ring closes back to index 0 via closePath). Iterative DP so a huge ring can't overflow the stack.
+     */
+    public static int simplifyRing(double[] px, double[] pz, double tolerance) {
+        int n = px.length;
+        if (n < 8) return n;                       // tiny ring: nothing worth removing
+        double sqTol = tolerance * tolerance;
+
+        // Stage 1 — Leaflet _reducePoints: radial distance to the last KEPT point.
+        int m = 1;                                 // px[0]/pz[0] kept in place
+        int prev = 0;
+        for (int i = 1; i < n; i++) {
+            double dx = px[i] - px[prev], dz = pz[i] - pz[prev];
+            if (dx * dx + dz * dz > sqTol) {
+                px[m] = px[i];
+                pz[m] = pz[i];
+                prev = i;
+                m++;
+            }
+        }
+        if (prev < n - 1) {
+            px[m] = px[n - 1];
+            pz[m] = pz[n - 1];
+            m++;
+        }
+        n = m;
+        if (n < 3) return n;
+
+        // Stage 2 — Douglas-Peucker over the reduced points.
+        boolean[] keep = new boolean[n];
+        keep[0] = keep[n - 1] = true;
+        double tolSq = tolerance * tolerance;
+        java.util.ArrayDeque<int[]> stack = new java.util.ArrayDeque<>();
+        stack.push(new int[]{0, n - 1});
+        while (!stack.isEmpty()) {
+            int[] seg = stack.pop();
+            int a = seg[0], b = seg[1];
+            if (b - a < 2) continue;
+            double ax = px[a], az = pz[a];
+            double dx = px[b] - ax, dz = pz[b] - az;
+            double lenSq = dx * dx + dz * dz;
+            double maxDistSq = -1.0;
+            int maxIdx = -1;
+            for (int i = a + 1; i < b; i++) {
+                double distSq;
+                if (lenSq <= 1e-9) {               // degenerate segment → plain point distance
+                    double ex = px[i] - ax, ez = pz[i] - az;
+                    distSq = ex * ex + ez * ez;
+                } else {
+                    double t = ((px[i] - ax) * dx + (pz[i] - az) * dz) / lenSq;
+                    t = Math.max(0.0, Math.min(1.0, t));
+                    double ex = px[i] - (ax + t * dx), ez = pz[i] - (az + t * dz);
+                    distSq = ex * ex + ez * ez;
+                }
+                if (distSq > maxDistSq) {
+                    maxDistSq = distSq;
+                    maxIdx = i;
+                }
+            }
+            if (maxDistSq > tolSq) {
+                keep[maxIdx] = true;
+                stack.push(new int[]{a, maxIdx});
+                stack.push(new int[]{maxIdx, b});
+            }
+        }
+        int kept = 0;
+        for (int i = 0; i < n; i++) {
+            if (keep[i]) {
+                px[kept] = px[i];
+                pz[kept] = pz[i];
+                kept++;
+            }
+        }
+        return kept;
     }
 
     private void processOutlineTileUploads() {
@@ -695,10 +949,12 @@ public class WorldMapRenderer {
         if (x2 <= 0 || x1 >= sw || y2 <= 0 || y1 >= sh) return;
         int drawW = Math.max(1, x2 - x1);
         int drawH = Math.max(1, y2 - y1);
-        // 1px bleed hides seams between adjacent tiles. (Status modes no longer overlay these tiles — they
-        // render directly — so the bleed's slight border shift has nothing to misalign against.)
-        ctx.drawTexture(RenderPipelines.GUI_TEXTURED, texture, x1 - 1, y1 - 1, 0.0F, 0.0F,
-                drawW + 2, drawH + 2, OUTLINE_TILE_PIXELS, OUTLINE_TILE_PIXELS, OUTLINE_TILE_PIXELS, OUTLINE_TILE_PIXELS);
+        // Exact-rect blit, no bleed: the old ±1px bleed stretched every tile by +2px, so it was never 1:1
+        // and NEAREST duplicated random rows of the anti-aliased lines (visible as smudge). Adjacent tiles
+        // share their rounded screen edge by construction (x2 of one IS x1 of the next), so there are no
+        // gaps to hide, and overlapping translucent AA strokes would double-blend into dark seams anyway.
+        ctx.drawTexture(RenderPipelines.GUI_TEXTURED, texture, x1, y1, 0.0F, 0.0F,
+                drawW, drawH, OUTLINE_TILE_PIXELS, OUTLINE_TILE_PIXELS, OUTLINE_TILE_PIXELS, OUTLINE_TILE_PIXELS);
     }
 
     private void clearOutlineTiles() {
@@ -715,29 +971,49 @@ public class WorldMapRenderer {
     }
 
     private void evictOldOutlineTiles(MinecraftClient client) {
+        // The pinned overview level is never evicted — it's the floor that keeps outlines on screen, and
+        // it's only a couple dozen tiles.
+        int pinnedZoom = overviewOutlineZoom();
         while (outlineTiles.size() > MAX_OUTLINE_TILES) {
-            Map.Entry<Long, Identifier> eldest = outlineTiles.entrySet().iterator().next();
-            client.getTextureManager().destroyTexture(eldest.getValue());
-            outlineTiles.remove(eldest.getKey());
+            Long victim = null;
+            for (Long k : outlineTiles.keySet()) {
+                if (outlineTileKeyZoom(k) != pinnedZoom) { victim = k; break; }
+            }
+            if (victim == null) break;   // nothing left but pinned overview tiles
+            client.getTextureManager().destroyTexture(outlineTiles.get(victim));
+            outlineTiles.remove(victim);
         }
     }
 
+    // Zoom needs 16 bits, not 8: with the fine 1.03 step the bucket index spans roughly -141..+115, so an
+    // 8-bit field aliased the whole-map overview (-141) onto a very-close zoom (+115). A collision handed
+    // back a massively-coarse tile for a fine slot — it rendered hugely magnified (fat, blocky) until the
+    // correct tile baked and overwrote the key. 16+24+24 fills the long exactly.
     private static long outlineTileKey(int zoom, int tx, int ty) {
-        return ((long) (zoom & 0xFF) << 48) | ((long) (tx & 0xFFFFFF) << 24) | (long) (ty & 0xFFFFFF);
+        return ((long) (zoom & 0xFFFF) << 48) | ((long) (tx & 0xFFFFFF) << 24) | (long) (ty & 0xFFFFFF);
+    }
+
+    /** Zoom bucket packed into a tile key (sign-extended back from its 16-bit field). */
+    private static int outlineTileKeyZoom(long key) {
+        return (short) ((key >>> 48) & 0xFFFF);
     }
 
     // Fine zoom buckets (10% steps) instead of power-of-2. With power-of-2, a tile was drawn anywhere
     // from 1:1 down to 0.5× within a bucket — the GPU then filters that scaling, which is the blur AND
     // the "sharp→soft→sharp as you zoom" oscillation. With 10% buckets the tile is always blitted within
     // ~5% of 1:1, so there's essentially nothing to filter and the lines stay crisp at every zoom.
-    private static final double OUTLINE_ZOOM_STEP = 1.1;
-    // Only at the EXTREME whole-map overview (towns are 1px dots, so crispness is moot) do we SNAP to
-    // coarse power-of-2-spaced buckets that stay cached while panning/zooming. Above this we keep the fine
-    // 1.1× buckets so outlines stay crisp. NOTE: the overview zooms everything out 8×, so "zoomed in to
-    // see a town" still sits at a small block-scale — this threshold must stay well below that (towns are
-    // only truly sub-pixel near ~0.005), or the regular viewing zoom gets snapped coarse and looks ugly.
-    private static final double OUTLINE_FINE_MIN_SCALE = 0.008;
-    private static final int OUTLINE_COARSE_SNAP = 7;   // ~one power-of-2 step (log2/log1.1 ≈ 7.27)
+    // Fine 3% zoom buckets: the tile then always blits within ~1.5% of exactly 1:1 with the framebuffer,
+    // so NEAREST sampling passes the baked pixels through pixel-perfect. The old 10% buckets left up to a
+    // 5% scale mismatch → resample blur (the "fuzzy lines"). Panning holds one bucket (reuse); only a
+    // settled zoom change rebakes.
+    private static final double OUTLINE_ZOOM_STEP = 1.03;
+    // Coarse power-of-2-ish snap fallback for scales below anything actually reachable. This USED to be
+    // 0.008 — but the full overview floor is 0.0625/8 ≈ 0.0078, so the LAST zoom-out notch fell into the
+    // coarse snap and blitted a tile from a bucket up to ~2× away: blocky right when the map should look
+    // its smoothest. DP-simplified tiles are cheap to re-rasterise, so fine 1.1× buckets now cover the
+    // entire reachable range; the coarse path remains only as a safety net for absurd scales.
+    private static final double OUTLINE_FINE_MIN_SCALE = 0.004;
+    private static final int OUTLINE_COARSE_SNAP = 23;  // ~one power-of-2 step (log2/log1.03 ≈ 23.4)
 
     private static int chooseOutlineTileZoom(double blockScale) {
         int z = (int) Math.round(Math.log(blockScale) / Math.log(OUTLINE_ZOOM_STEP));
@@ -761,9 +1037,10 @@ public class WorldMapRenderer {
     private static final class OutlineTileTexture extends NativeImageBackedTexture {
         private OutlineTileTexture(java.util.function.Supplier<String> name, NativeImage image) {
             super(name, image);
-            // NEAREST, not LINEAR: the tile is drawn at a non-1:1 scale every frame, and linear filtering
-            // re-blurs it on the GPU no matter how crisp we rasterised it. Nearest keeps the edges hard.
-            // (The 2× supersample above gives the tile enough line width to survive the nearest downscale.)
+            // NEAREST, not LINEAR: with the fine 1.03x zoom buckets the tile blits within ~1.5% of 1:1,
+            // and at that scale LINEAR just re-blurs on the GPU whatever crispness we rasterised in.
+            // Nearest keeps the edges hard. (Rasterising at physical density is what gives the lines
+            // enough width to survive it.)
             this.sampler = RenderSystem.getSamplerCache().get(
                     AddressMode.CLAMP_TO_EDGE, AddressMode.CLAMP_TO_EDGE,
                     FilterMode.NEAREST, FilterMode.NEAREST, false);

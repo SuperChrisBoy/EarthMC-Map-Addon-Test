@@ -22,6 +22,7 @@ public final class MapToggleOverlay {
     private static final int GROUP_LEFT = 40;
     private static final int GROUP_TOP = 8;
     private static final int ADD_WIDTH = 20;
+    private static final int FILL_WIDTH = 34;
     private static final int SETTINGS_GAP = 7;   // extra gap above the settings button
     private static final int TOGGLE_ROWS = 5;    // EMC | Borders | Map mode | Chunks | Counter
 
@@ -59,6 +60,10 @@ public final class MapToggleOverlay {
             }
             if (insideCounterAdd(mouseX, mouseY, config)) {
                 ChunkCounterOverlay.addGroup(config);
+                return true;
+            }
+            if (insideCounterFill(mouseX, mouseY, config)) {
+                ChunkCounterOverlay.toggleFillEnclosed(config);
                 return true;
             }
         }
@@ -169,6 +174,26 @@ public final class MapToggleOverlay {
         if (ChunkCounterOverlay.canAddGroup(config)) {
             drawTexturedButton(ctx, x, y, ADD_WIDTH, HEIGHT, "+", true, 0xFFFFFFFF);
         }
+        // Fill: count/shade any area fully enclosed by the selection (draw an outline, get the inside).
+        boolean fillOn = ChunkCounterOverlay.isFillEnclosed(config);
+        int fx = counterFillX(config);
+        drawTexturedButton(ctx, fx, y, FILL_WIDTH, HEIGHT, "Fill", true,
+                fillOn ? 0xFFFFFFFF : 0xFFBDBDBD);
+        ctx.fill(fx + 2, y + HEIGHT - 4, fx + FILL_WIDTH - 2, y + HEIGHT - 2,
+                fillOn ? 0xFF67D76B : 0xFF606060);
+    }
+
+    private static int counterFillX(TownyMapConfig config) {
+        int x = counterGroupsX()
+                + ChunkCounterOverlay.visibleGroupCount(config) * (GROUP_WIDTH + GROUP_GAP);
+        if (ChunkCounterOverlay.canAddGroup(config)) x += ADD_WIDTH + GROUP_GAP;
+        return x;
+    }
+
+    private static boolean insideCounterFill(double mouseX, double mouseY, TownyMapConfig config) {
+        if (mouseY < GROUP_TOP || mouseY > GROUP_TOP + HEIGHT) return false;
+        int x = counterFillX(config);
+        return mouseX >= x && mouseX <= x + FILL_WIDTH;
     }
 
     private static boolean insideCounterReset(double mouseX, double mouseY, int sh) {

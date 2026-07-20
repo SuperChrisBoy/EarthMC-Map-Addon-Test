@@ -40,6 +40,9 @@ public class TownyMapConfig {
     /** 0 off, 1 always, 2 enlarged minimap only. */
     public int minimapChunkGridMode = 0;
     public boolean chunkCounterEnabled = false;
+    /** Chunk-counter "Fill": treat any area fully enclosed by selected chunks as selected too, so drawing
+     *  an outline counts the interior. Non-destructive — the painted chunks are what's saved. */
+    public boolean chunkCounterFillEnclosed = false;
     /** Legacy field kept for migration; the counter now always uses multi-selection groups. */
     public int chunkCounterMode = 2;
     public int activeChunkCounterGroup = 0;
@@ -53,6 +56,9 @@ public class TownyMapConfig {
     // keeping it centred on the camera) so you can zoom out to see the whole EarthMC map. On by default.
     public boolean worldMapOverview = true;
     public boolean nationStarsEnabled = true;
+    /** At far zoom, collapse small towns to a single crisp dot instead of drawing their outline. Off =
+     *  always draw the real outline (towns keep their shape until they're literally sub-pixel). */
+    public boolean farZoomTownDots = false;
     public boolean chunkGridEnabled = false;
     public boolean customOverlaysEnabled = false;
     /** 0 off, 1 public outsider-spawn, 2 overclaimed, 3 open, 4 for sale, 5 no nation. */

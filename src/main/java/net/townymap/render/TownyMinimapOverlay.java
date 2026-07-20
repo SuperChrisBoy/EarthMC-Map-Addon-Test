@@ -782,7 +782,7 @@ public final class TownyMinimapOverlay {
         for (ChunkFill cell : fillSpans) {
             TownData town = cell.town();
             boolean favorite = TownyMapMod.isFavorite(town.name());
-            int fillColor = favorite ? FAVORITE_FILL : town.argbColor(config.fillAlpha);
+            int fillColor = favorite ? FAVORITE_FILL : town.argbFillColor(config.fillAlpha);
             if ((fillColor >>> 24) == 0) continue;
             ctx.fill(cell.blockX(), cell.blockZ(),
                     cell.blockX() + cell.blockWidth(), cell.blockZ() + CHUNK_SIZE, fillColor);
@@ -808,7 +808,7 @@ public final class TownyMinimapOverlay {
             if (town != cachedTown) {
                 cachedTown = town;
                 cachedColor = TownyMapMod.isFavorite(town.name())
-                        ? FAVORITE_FILL : town.argbColor(config.fillAlpha);
+                        ? FAVORITE_FILL : town.argbFillColor(config.fillAlpha);
             }
             int fillColor = cachedColor;
             if ((fillColor >>> 24) == 0) continue;
