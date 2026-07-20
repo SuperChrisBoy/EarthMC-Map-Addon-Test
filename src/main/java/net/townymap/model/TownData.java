@@ -8,20 +8,32 @@ import java.util.Locale;
  * polygonRings follows GeoJSON ring convention: first ring = outer boundary,
  * additional rings = holes. Each point is [worldX, worldZ].
  */
-public record TownData(String name, int rgbColor, List<int[][]> polygonRings,
+public record TownData(String name, int rgbColor, int fillRgbColor, List<int[][]> polygonRings,
                        int minX, int maxX, int minZ, int maxZ) {
 
+    /** Single-colour form: the fill reuses the outline colour. */
     public TownData(String name, int rgbColor, List<int[][]> polygonRings) {
-        this(name, rgbColor, List.copyOf(polygonRings), bounds(polygonRings));
+        this(name, rgbColor, rgbColor, polygonRings);
     }
 
-    private TownData(String name, int rgbColor, List<int[][]> polygonRings, Bounds bounds) {
-        this(name, rgbColor, polygonRings, bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ);
+    /** squaremap ships BOTH a stroke {@code color} and a {@code fillColor} per town — on EarthMC they're
+     *  the nation's two-colour scheme and differ for ~62% of towns, so keep them apart. */
+    public TownData(String name, int rgbColor, int fillRgbColor, List<int[][]> polygonRings) {
+        this(name, rgbColor, fillRgbColor, List.copyOf(polygonRings), bounds(polygonRings));
     }
 
-    /** ARGB colour with the given opacity applied on top of the stored RGB. */
+    private TownData(String name, int rgbColor, int fillRgbColor, List<int[][]> polygonRings, Bounds bounds) {
+        this(name, rgbColor, fillRgbColor, polygonRings, bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ);
+    }
+
+    /** ARGB OUTLINE colour with the given opacity applied on top of the stored RGB. */
     public int argbColor(int alpha) {
         return ((alpha & 0xFF) << 24) | (rgbColor & 0x00FFFFFF);
+    }
+
+    /** ARGB INTERIOR colour (squaremap's {@code fillColor} — the nation's fill on EarthMC). */
+    public int argbFillColor(int alpha) {
+        return ((alpha & 0xFF) << 24) | (fillRgbColor & 0x00FFFFFF);
     }
 
     public String key() {
@@ -32,6 +44,7 @@ public record TownData(String name, int rgbColor, List<int[][]> polygonRings,
         long hash = 1125899906842597L;
         hash = 31L * hash + key().hashCode();
         hash = 31L * hash + rgbColor;
+        hash = 31L * hash + fillRgbColor;   // a nation recolour must re-bake the tiles
         hash = 31L * hash + minX;
         hash = 31L * hash + maxX;
         hash = 31L * hash + minZ;

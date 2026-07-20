@@ -309,7 +309,7 @@ public class TownyMapMod implements ClientModInitializer {
             fillColor = 0x44FFE066;
             outlineColor = 0xFFFFE066;
         } else if (town != null) {
-            fillColor = town.argbColor(Math.max(config.fillAlpha, 90));
+            fillColor = town.argbFillColor(Math.max(config.fillAlpha, 90));
             outlineColor = town.argbColor(config.borderAlpha);
         } else {
             int rgb = config.statusHighlightColor & 0x00FFFFFF;
