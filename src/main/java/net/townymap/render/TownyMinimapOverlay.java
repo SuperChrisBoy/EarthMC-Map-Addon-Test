@@ -119,9 +119,11 @@ public final class TownyMinimapOverlay {
                 double dimScale = client.level.dimensionType().coordinateScale();   // Overworld Coords
                 playerX *= dimScale;
                 playerZ *= dimScale;
-            } else {
+            } else if (TownyMapMod.isOnEarthMcServer()) {
                 return;                                              // Hidden
             }
+            // Off EarthMC, leave the coords unscaled and draw: the overworld-only restriction
+            // protects alignment with EarthMC's own world, which does not apply on another server.
         }
         double angle = minimapAngle(session, client);
         double sin = Math.sin(angle);
