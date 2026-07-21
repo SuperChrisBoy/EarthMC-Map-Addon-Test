@@ -153,6 +153,10 @@ public class TownyMapConfigScreen extends Screen {
                 () -> cfg.nationStarsEnabled == DEFAULTS.nationStarsEnabled,
                 () -> cfg.nationStarsEnabled = DEFAULTS.nationStarsEnabled);
         // OFF = towns keep their outline at far zoom, ON = small towns collapse to a dot.
+        // ON = smooth squaremap-style diagonals, OFF = the original blocky chunk-aligned borders.
+        option("Smooth Town Outlines", onOff(cfg.smoothTownOutlines, v -> cfg.smoothTownOutlines = v),
+                () -> cfg.smoothTownOutlines == DEFAULTS.smoothTownOutlines,
+                () -> cfg.smoothTownOutlines = DEFAULTS.smoothTownOutlines);
         option("Far Zoom Town Dots", onOff(cfg.farZoomTownDots, v -> cfg.farZoomTownDots = v),
                 () -> cfg.farZoomTownDots == DEFAULTS.farZoomTownDots,
                 () -> cfg.farZoomTownDots = DEFAULTS.farZoomTownDots);
