@@ -59,6 +59,9 @@ public class TownyMapConfig {
     /** At far zoom, collapse small towns to a single crisp dot instead of drawing their outline. Off =
      *  always draw the real outline (towns keep their shape until they're literally sub-pixel). */
     public boolean farZoomTownDots = false;
+    /** Town border style. On = smooth squaremap-style outlines (simplified into diagonals, baked into
+     *  tiles). Off = the original blocky chunk-aligned outlines drawn directly. */
+    public boolean smoothTownOutlines = true;
     public boolean chunkGridEnabled = false;
     public boolean customOverlaysEnabled = false;
     /** 0 off, 1 public outsider-spawn, 2 overclaimed, 3 open, 4 for sale, 5 no nation. */
