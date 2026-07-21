@@ -1027,6 +1027,12 @@ public class TownyMapMod implements ClientModInitializer {
         var dim = client.level.dimension();
         if (dim == Level.OVERWORLD) return 1.0;
         if (config.netherMode == 2 && dim == Level.NETHER) return 8.0;   // Overworld Coords
+        // The overworld-only hide exists because EarthMC's map covers only its overworld, so raw X/Z
+        // from another dimension would put the overlay in the wrong place relative to the player.
+        // Off EarthMC there is no such correspondence to protect, and hiding would blank the whole
+        // overlay on every server whose world isn't registered as minecraft:overworld (hubs,
+        // skyblock, minigames) - leaving only the buttons. Render anyway there.
+        if (!isOnEarthMcServer()) return 1.0;
         return 0.0;                                                       // Hidden
     }
 
@@ -1331,6 +1337,15 @@ public class TownyMapMod implements ClientModInitializer {
     public static boolean isActiveOnCurrentServer() {
         if (config == null) return false;
         if (!config.earthmcOnly) return true;
+        return isOnEarthMcServer();
+    }
+
+    /**
+     * Whether the current server actually is EarthMC, independent of the "EarthMC Only" toggle.
+     * Used for behaviour that only makes sense against EarthMC's own world (see
+     * {@link #worldMapOverlayScale()}), as opposed to whether the mod is switched on at all.
+     */
+    public static boolean isOnEarthMcServer() {
         Minecraft client = Minecraft.getInstance();
         if (client == null) return false;
         ServerData server = client.getCurrentServer();
