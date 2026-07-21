@@ -35,6 +35,9 @@ jobs:
     env:
       GAME_VERSION: ${{ inputs.game_version || '1.21.11' }}
       LOADER: "Fabric"
+      # CurseForge rejects an upload that has no entry from its "environment" version group
+      # (errorCode 1021). This mod is client-side only.
+      ENVIRONMENT: "Client"
       CURSEFORGE_PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
       CF_API: "https://minecraft.curseforge.com/api"
@@ -99,12 +102,22 @@ jobs:
             -H "User-Agent: ${USER_AGENT}" \
             "${CF_API}/game/versions")"
 
-          loader_id="$(jq -r --arg loader "${LOADER}" \
-            'map(select(.name == $loader)) | .[0].id // empty' <<< "${versions_json}")"
-          if [[ -z "${loader_id}" ]]; then
-            echo "Could not find loader '${LOADER}' in the CurseForge game version catalogue." >&2
-            exit 1
-          fi
+          # Loader and environment live in the same catalogue as the Minecraft versions, just under
+          # different version-type groups, and both must be present in gameVersions or the upload
+          # is rejected (missing environment gives errorCode 1021).
+          for want in LOADER ENVIRONMENT; do
+            want_name="${!want}"
+            want_id="$(jq -r --arg n "${want_name}" \
+              'map(select(.name == $n)) | .[0].id // empty' <<< "${versions_json}")"
+            if [[ -z "${want_id}" ]]; then
+              echo "Could not find ${want} '${want_name}' in the CurseForge catalogue." >&2
+              echo "Non-version entries available:" >&2
+              jq -r 'map(select(.name | test("^[0-9]") | not) | .name) | unique | join(", ")' \
+                <<< "${versions_json}" >&2
+              exit 1
+            fi
+            declare "${want}_ID=${want_id}"
+          done
 
           : > mc_ids.txt
           missing=""
@@ -134,11 +147,12 @@ jobs:
             exit 1
           fi
 
-          # gameVersions = the resolved Minecraft version IDs plus the Fabric loader ID.
+          # gameVersions = resolved Minecraft version IDs + the loader ID + the environment ID.
           game_versions_json="$(jq -cn \
-            --argjson loader "${loader_id}" \
+            --argjson loader "${LOADER_ID}" \
+            --argjson env "${ENVIRONMENT_ID}" \
             --rawfile ids mc_ids.txt \
-            '($ids | split("\n") | map(select(length > 0) | tonumber)) + [$loader]')"
+            '($ids | split("\n") | map(select(length > 0) | tonumber)) + [$loader, $env]')"
 
           echo "game_versions_json=${game_versions_json}" >> "${GITHUB_OUTPUT}"
           echo "Resolved CurseForge gameVersions: ${game_versions_json}"
