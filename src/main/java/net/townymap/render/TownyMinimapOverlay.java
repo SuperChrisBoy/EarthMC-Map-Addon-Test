@@ -118,9 +118,11 @@ public final class TownyMinimapOverlay {
         if (client.world.getRegistryKey() != World.OVERWORLD) {
             if (config.netherMode == 2 && client.world.getRegistryKey() == World.NETHER) {
                 dimScale = 8.0;                                      // Overworld Coords (Nether x8)
-            } else {
+            } else if (TownyMapMod.isOnEarthMcServer()) {
                 return;                                              // Hidden
             }
+            // Off EarthMC, keep dimScale 1.0 and draw: the overworld-only restriction protects the
+            // overlay's alignment with EarthMC's own world, which does not apply on another server.
         }
         double playerX = player.getX() * dimScale;
         double playerZ = player.getZ() * dimScale;
