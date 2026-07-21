@@ -143,7 +143,7 @@ public abstract class MixinGuiMap {
             if (dimMul > 0.0) {
                 double guiScale = (screenScale > 0) ? scale / screenScale : scale;
                 double mapScale = guiScale / dimMul;
-                TownyMapMod.renderWorldMapPlayers(ctx, cameraX * dimMul, cameraZ * dimMul, mapScale, w, h);
+                TownyMapMod.renderWorldMapLatePass(ctx, cameraX * dimMul, cameraZ * dimMul, mapScale, w, h);
             }
             double[] world = overlayWorldFromScreen(mouseX, mouseY, w, h);
             if (world != null) {

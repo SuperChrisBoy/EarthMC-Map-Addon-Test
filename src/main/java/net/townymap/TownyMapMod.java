@@ -595,9 +595,15 @@ public class TownyMapMod implements ClientModInitializer {
     /** Draws the world-map player dots in the renderPreDropdown pass (after the town-tile batch is flushed),
      *  so they sit above the textured outline tiles instead of being painted over — the cause of the dots
      *  "blinking" at zoom-out. Positions/details are the same live squaremap data used everywhere. */
-    public static void renderWorldMapPlayers(DrawContext ctx, double cameraX, double cameraZ,
-                                             double scale, int screenW, int screenH) {
-        if (!isActiveOnCurrentServer() || renderer == null || config == null || !config.playersEnabled) return;
+    /**
+     * The late world-map pass, drawn after the town-outline tile batch is flushed: player dots AND
+     * freshly claimed chunks, both of which are ctx.fill quads that the textured tiles would otherwise
+     * paint over. Deliberately NOT gated on playersEnabled — that would also hide the claim chunks,
+     * which are a separate feature; each layer checks its own toggle inside.
+     */
+    public static void renderWorldMapLatePass(DrawContext ctx, double cameraX, double cameraZ,
+                                              double scale, int screenW, int screenH) {
+        if (!isActiveOnCurrentServer() || renderer == null || config == null) return;
         renderer.renderPlayersLayer(ctx, cameraX, cameraZ, scale, screenW, screenH, playerDetailsCache);
     }
 

@@ -163,6 +163,7 @@ public class WorldMapRenderer {
     private final Set<Long> outlineTilesEmpty = ConcurrentHashMap.newKeySet();
     private final Queue<LoadedOutlineTile> outlineTilesCompleted = new ConcurrentLinkedQueue<>();
     private TownRenderCache outlineTilesSnapshot;   // which snapshot the current tiles were built for
+    private boolean outlineTilesSmooth = true;     // outline STYLE baked into the current tiles
     private int outlineTilesFavVersion = -1;        // favourites baked into the current tiles
     private int outlineTilesStatusVersion = -1;     // status-highlight exclusion baked into the current tiles
 
@@ -212,23 +213,34 @@ public class WorldMapRenderer {
         if (config.townsEnabled) {
             renderTowns(ctx, cameraX, cameraZ, blockScale, sw, sh, visibleTowns, townDetails);
         }
-        if (config.townsEnabled) {
-            renderOptimisticClaimChunks(ctx, cameraX, cameraZ, blockScale, sw, sh,
-                    worldLeft, worldRight, worldTop, worldBottom);
-        }
+        // Optimistic claim chunks are NOT drawn here — see renderPlayersLayer. They are ctx.fill quads,
+        // which the textured outline tiles paint over inside one batch, so drawing them in this pass made
+        // freshly claimed chunks invisible behind the tiles.
         renderNationCapitalStars(ctx, cameraX, cameraZ, blockScale, sw, sh,
                 worldLeft, worldRight, worldTop, worldBottom, nationDetails);
         // Player dots are NOT drawn here: the town outline tiles are textured quads and, within a single
         // DrawContext batch, textured draws paint over the colored ctx.fill dots — so tiles would hide (and,
         // as they async-rebuild, "blink") the dots at zoom-out. They're drawn in renderPreDropdown instead
-        // (see MixinGuiMap#renderWorldMapPlayers), after the tile batch is flushed, so they always sit on top.
+        // (see TownyMapMod#renderWorldMapLatePass), after the tile batch is flushed, so they sit on top.
     }
 
     /** Player dots, drawn in the renderPreDropdown pass (after the tile batch is flushed) so they render
      *  above the textured town-outline tiles instead of being covered by them. */
     public void renderPlayersLayer(DrawContext ctx, double cameraX, double cameraZ, double blockScale,
                                    int sw, int sh, Map<String, EarthMcPlayerData> playerDetails) {
-        if (config == null || !config.playersEnabled || blockScale <= 0) return;
+        if (config == null || blockScale <= 0) return;
+
+        // Freshly claimed chunks are drawn in THIS pass, not in render(), for the same reason as the
+        // player dots: they are ctx.fill quads and the town outline tiles are textured draws, which paint
+        // over ctx.fill within a single DrawContext batch. Drawn in render() they ended up hidden behind
+        // the tiles. By here the tile batch has been flushed, so they sit on top as they used to.
+        if (config.townsEnabled) {
+            renderOptimisticClaimChunks(ctx, cameraX, cameraZ, blockScale, sw, sh,
+                    cameraX - sw / 2.0 / blockScale, cameraX + sw / 2.0 / blockScale,
+                    cameraZ - sh / 2.0 / blockScale, cameraZ + sh / 2.0 / blockScale);
+        }
+
+        if (!config.playersEnabled) return;
         renderPlayers(ctx, cameraX, cameraZ, blockScale, sw, sh, playerDetails);
     }
 
@@ -418,6 +430,10 @@ public class WorldMapRenderer {
         // visible tile is ready, in which case we fall through to direct rendering so the map is never
         // left blank.
         double density = tileRenderDensity();
+        // BOTH styles go through the tiles: measured on live EarthMC data the direct path peaks at
+        // ~13.9k draw calls per frame around blockScale 0.05, while a tiled screen is ~20 blits whatever
+        // the zoom. The tile bake rasterises rectilinear rings instead of simplified ones when the blocky
+        // style is selected, so the look is preserved and the per-frame cost is not.
         boolean useTiles = blockScale * density <= OUTLINE_TILE_MAX_PPB;
         boolean fillsEligible = visibleTowns.size() <= FILL_MAX_TOWNS && blockScale >= TOWN_FILL_MIN_SCALE;
 
@@ -435,23 +451,30 @@ public class WorldMapRenderer {
         int fillColor0 = fillsEligible ? 0xFF : 0;
         boolean overlayOn = config.townStatusOverlayMode > 0;
         boolean haveFavorites = !favoriteTownKeys.isEmpty();
+
+        // Opacity depends on which outline style is active, because the two modes have different
+        // constraints:
+        //  - Smooth: this path draws only at close zoom and the baked tiles take over further out, so it
+        //    must use the tiles' own alphas or towns visibly change brightness across that boundary.
+        //  - Blocky: there are no tiles at all, so nothing to match. Use the user's Border/Fill Opacity
+        //    settings, which is what 1.3.1 did — forcing the tile alphas here (stroke 220 -> 165,
+        //    fill 35 -> 64) is what made "blocky" look washed out rather than like the old style.
+        int strokeAlpha = config.smoothTownOutlines ? SITE_STROKE_ALPHA : (config.borderAlpha & 0xFF);
+        int interiorAlpha = config.smoothTownOutlines ? SITE_FILL_ALPHA : (config.fillAlpha & 0xFF);
         for (RenderTown town : visibleTowns) {
             // town.key() is already lower-cased, so no per-town String allocation here.
             boolean favorite = haveFavorites && favoriteTownKeys.contains(town.key());
             boolean statusHighlighted = overlayOn && isStatusHighlighted(town, townDetails);
             // One colour encodes everything → one outline pass (favourite > status > the town's own colour).
-            // Use the SAME opacities as the baked tiles (SITE_*), not borderAlpha/fillAlpha. They used to
-            // differ — stroke 220 vs 165, fill 35 vs 64 — so crossing the tile/direct zoom boundary made
-            // towns visibly change brightness, most obvious on the bright gold favourites.
             // Favourites differ from other towns only in COLOUR, never in opacity.
-            int outlineColor = favorite ? ((SITE_STROKE_ALPHA << 24) | 0xFFE066)
+            int outlineColor = favorite ? ((strokeAlpha << 24) | 0xFFE066)
                     : statusHighlighted ? (0xFF000000 | statusRgb)
-                    : ((SITE_STROKE_ALPHA << 24) | (town.data().rgbColor() & 0xFFFFFF));
+                    : ((strokeAlpha << 24) | (town.data().rgbColor() & 0xFFFFFF));
             // Interior uses the town's FILL colour (nation fill), not the outline colour — except
             // favourites, which stay gold inside as well as out.
             int fillColor = fillColor0 == 0 ? 0
-                    : favorite ? ((SITE_FILL_ALPHA << 24) | 0xFFE066)
-                    : ((SITE_FILL_ALPHA << 24) | (town.data().fillRgbColor() & 0xFFFFFF));
+                    : favorite ? ((interiorAlpha << 24) | 0xFFE066)
+                    : ((interiorAlpha << 24) | (town.data().fillRgbColor() & 0xFFFFFF));
 
             for (RingGeometry ring : town.rings()) {
                 renderRing(ctx, ring, 0, outlineColor, fillColor, cameraX, cameraZ, blockScale, sw, sh);
@@ -523,8 +546,13 @@ public class WorldMapRenderer {
                                            double worldTop, double worldBottom) {
         TownRenderCache snapshot = townRenderCache;
         if (snapshot != outlineTilesSnapshot || favoritesVersion != outlineTilesFavVersion
-                || statusVersion != outlineTilesStatusVersion) {
-            clearOutlineTiles();              // town data, favourites, or status-exclusion changed → rebuild
+                || statusVersion != outlineTilesStatusVersion
+                || config.smoothTownOutlines != outlineTilesSmooth) {
+            // Style is part of what a tile contains, and the cache key has no spare bits (16 zoom + 24 tx
+            // + 24 ty fills the long), so toggling smooth/blocky must drop the cache or the old style
+            // would keep being blitted. Toggling is a settings action, so the re-bake cost is irrelevant.
+            clearOutlineTiles();              // town data, favourites, status-exclusion, or STYLE changed
+            outlineTilesSmooth = config.smoothTownOutlines;
             outlineTilesSnapshot = snapshot;
             outlineTilesFavVersion = favoritesVersion;
             outlineTilesStatusVersion = statusVersion;
@@ -744,7 +772,18 @@ public class WorldMapRenderer {
         // settle-then-redraw debounce makes raw affordable: one off-thread bake per settled zoom, and the
         // radial reduction stage eats most of the raw points in a single O(n) pass anyway.
         double simplifyTol = OUTLINE_SIMPLIFY_TOLERANCE_PX * density;
-        int lod = 0;
+        // Style-dependent bake. Blocky reproduces the direct renderer exactly: the LOD tier that zoom
+        // would have picked, no pixel-space simplification, no anti-aliasing, and the user's own
+        // Border/Fill Opacity - so a baked tile is what the direct path would have drawn, minus the
+        // thousands of draw calls.
+        boolean smooth = config.smoothTownOutlines;
+        double guiScale = ppb / density;                       // GUI-space blockScale this tile represents
+        int lod = smooth ? 0 : Math.min(LOD_GRID.length - 1, selectLod(guiScale));
+        int strokeAlphaT = smooth ? SITE_STROKE_ALPHA : (config.borderAlpha & 0xFF);
+        int fillAlphaT   = smooth ? SITE_FILL_ALPHA   : (config.fillAlpha & 0xFF);
+        // The direct path also suppresses fills past FILL_MAX_TOWNS, but that is a per-frame cost guard
+        // which a baked tile does not need; the scale gate is the part that is actually about looks.
+        boolean bakeFill = smooth || guiScale >= TOWN_FILL_MIN_SCALE;
         // Anti-aliased strokes with round joins over DP-simplified rings — the squaremap/Leaflet look.
         // The fine 1.1× zoom buckets keep the blit within ~5% of 1:1, and the LINEAR sampler smooths the
         // residual resample uniformly (sub-half-pixel), the same way the browser composites its canvas.
@@ -752,7 +791,8 @@ public class WorldMapRenderer {
         Graphics2D g = img.createGraphics();
         boolean drew = false;
         try {
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                    smooth ? RenderingHints.VALUE_ANTIALIAS_ON : RenderingHints.VALUE_ANTIALIAS_OFF);
             g.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
             // Zoom-adaptive on-screen stroke width: fine when zoomed in (a chunk spans many tile px),
             // a touch bolder when zoomed out where the diagonal simplification reads best. Fixes the
@@ -761,9 +801,15 @@ public class WorldMapRenderer {
             // to convert to the tile-space stroke).
             // Upper clamp only bites when zoomed OUT. Keeping it under a pixel there is what stops the
             // far-zoom mush: a ~2px stroke on a town that's only a few px wide swallows the shape.
-            double guiW = Math.max(0.65, Math.min(0.85, 20.0 / (16.0 * ppb)));
-            g.setStroke(new BasicStroke((float) (guiW * density),
-                    BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            if (smooth) {
+                double guiW = Math.max(0.65, Math.min(0.85, 20.0 / (16.0 * ppb)));
+                g.setStroke(new BasicStroke((float) (guiW * density),
+                        BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            } else {
+                // Exactly one GUI pixel, square ends and mitred corners: the direct path's
+                // drawHorizontalLine/drawVerticalLine produce hard 1px lines with square joins.
+                g.setStroke(new BasicStroke((float) density, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER));
+            }
             for (RenderTown town : towns) {
                 if (!town.intersectsWorld(left, right, top, bottom)) continue;
                 if (statusSnapshot.contains(town.key())) continue;   // status-highlighted → drawn live, not baked
@@ -800,7 +846,7 @@ public class WorldMapRenderer {
                         px[i] = (xs[i] - tileWorldX) * ppb;
                         pz[i] = (zs[i] - tileWorldZ) * ppb;
                     }
-                    int n = simplifyRing(px, pz, simplifyTol);
+                    int n = smooth ? simplifyRing(px, pz, simplifyTol) : xs.length;
                     Path2D.Double path = new Path2D.Double();
                     path.moveTo(px[0], pz[0]);
                     for (int i = 1; i < n; i++) {
@@ -810,9 +856,11 @@ public class WorldMapRenderer {
                     // Leaflet's _fillStroke on the SAME simplified path: soft fill first, wide translucent
                     // stroke over it. Fill and stroke can never disagree about the shape — the reason the
                     // site's borders always sit flush on their fills.
-                    g.setColor(awtColor((SITE_FILL_ALPHA << 24) | fillRgb));
-                    g.fill(path);
-                    g.setColor(awtColor((SITE_STROKE_ALPHA << 24) | rgb));
+                    if (bakeFill) {
+                        g.setColor(awtColor((fillAlphaT << 24) | fillRgb));
+                        g.fill(path);
+                    }
+                    g.setColor(awtColor((strokeAlphaT << 24) | rgb));
                     g.draw(path);
                     drew = true;
                 }
