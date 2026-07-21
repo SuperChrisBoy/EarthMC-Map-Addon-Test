@@ -1,0 +1,207 @@
+name: Publish to CurseForge
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "GitHub release tag to publish to CurseForge, for example v1.3.2"
+        required: true
+      version_type:
+        description: "CurseForge release type"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - release
+          - beta
+          - alpha
+      game_version:
+        description: "Minecraft game version(s), comma-separated if needed, for example 1.21.11 or 26.1.2,26.1.1,26.1"
+        required: true
+        default: "1.21.11"
+      version_number:
+        description: "Optional version number for the CurseForge display name. Defaults to the tag without v."
+        required: false
+      changelog:
+        description: "Optional changelog override. If blank, the GitHub release notes are used."
+        required: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      GAME_VERSION: ${{ inputs.game_version || '1.21.11' }}
+      LOADER: "Fabric"
+      CURSEFORGE_PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      CF_API: "https://minecraft.curseforge.com/api"
+      USER_AGENT: "JR1258/EarthMC-Map-Addon GitHub Actions"
+      VERSION_TYPE: ${{ inputs.version_type || 'release' }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout metadata assets
+        uses: actions/checkout@v4
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_VERSION_NUMBER: ${{ inputs.version_number }}
+          INPUT_CHANGELOG: ${{ inputs.changelog }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${CF_API_TOKEN}" ]]; then
+            echo "CF_API_TOKEN secret is not set." >&2
+            exit 1
+          fi
+          if [[ -z "${CURSEFORGE_PROJECT_ID}" ]]; then
+            echo "CURSEFORGE_PROJECT_ID repository variable is not set." >&2
+            exit 1
+          fi
+
+          tag="${INPUT_TAG}"
+          if [[ -z "${tag}" ]]; then
+            echo "No release tag was provided." >&2
+            exit 1
+          fi
+          version_number="${INPUT_VERSION_NUMBER:-${tag#v}}"
+          name="EarthMC Map Addon ${version_number}"
+          changelog="${INPUT_CHANGELOG}"
+          if [[ -z "${changelog}" ]]; then
+            changelog="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json body --jq .body)"
+          fi
+
+          printf '%s' "${changelog}" > changelog.md
+
+          {
+            echo "tag=${tag}"
+            echo "version_number=${version_number}"
+            echo "name=${name}"
+            echo "changelog_path=changelog.md"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Resolve CurseForge game version IDs
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # CurseForge identifies game versions and modloaders by opaque numeric IDs, not by name,
+          # so resolve the human-readable names passed to this workflow against its live catalogue.
+          versions_json="$(curl --fail-with-body -sS \
+            -H "X-Api-Token: ${CF_API_TOKEN}" \
+            -H "User-Agent: ${USER_AGENT}" \
+            "${CF_API}/game/versions")"
+
+          loader_id="$(jq -r --arg loader "${LOADER}" \
+            'map(select(.name == $loader)) | .[0].id // empty' <<< "${versions_json}")"
+          if [[ -z "${loader_id}" ]]; then
+            echo "Could not find loader '${LOADER}' in the CurseForge game version catalogue." >&2
+            exit 1
+          fi
+
+          : > mc_ids.txt
+          missing=""
+          IFS=',' read -ra parts <<< "${GAME_VERSION}"
+          for raw in "${parts[@]}"; do
+            name="$(echo "${raw}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+            [[ -z "${name}" ]] && continue
+            # A bare integer is passed through as a CurseForge version ID verbatim. That is the
+            # escape hatch for a version that cannot be resolved by name (real MC version names
+            # always contain dots, so they can never be mistaken for an ID).
+            if [[ "${name}" =~ ^[0-9]+$ ]]; then
+              echo "${name}" >> mc_ids.txt
+              continue
+            fi
+            id="$(jq -r --arg n "${name}" \
+              'map(select(.name == $n or .slug == $n)) | .[0].id // empty' <<< "${versions_json}")"
+            if [[ -z "${id}" ]]; then
+              missing="${missing} ${name}"
+            else
+              echo "${id}" >> mc_ids.txt
+            fi
+          done
+
+          if [[ -n "${missing}" ]]; then
+            echo "No CurseForge game version matched:${missing}" >&2
+            echo "The name must match a version that already exists on CurseForge; inspect ${CF_API}/game/versions." >&2
+            exit 1
+          fi
+
+          # gameVersions = the resolved Minecraft version IDs plus the Fabric loader ID.
+          game_versions_json="$(jq -cn \
+            --argjson loader "${loader_id}" \
+            --rawfile ids mc_ids.txt \
+            '($ids | split("\n") | map(select(length > 0) | tonumber)) + [$loader]')"
+
+          echo "game_versions_json=${game_versions_json}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved CurseForge gameVersions: ${game_versions_json}"
+
+      - name: Download release jar
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          primary_game_version="${GAME_VERSION%%,*}"
+          gh release download "${{ steps.meta.outputs.tag }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "*.jar" \
+            --clobber \
+            --dir dist
+
+          jar="$(find dist -type f -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' | grep -F "${primary_game_version}" | sort | head -n 1 || true)"
+          if [[ -z "${jar}" ]]; then
+            jar="$(find dist -type f -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' | sort | head -n 1)"
+          fi
+          if [[ -z "${jar}" ]]; then
+            echo "No publishable jar found in GitHub release assets." >&2
+            exit 1
+          fi
+          echo "JAR_PATH=${jar}" >> "${GITHUB_ENV}"
+
+      - name: Publish file to CurseForge
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          changelog="$(cat "${{ steps.meta.outputs.changelog_path }}")"
+
+          jq -n \
+            --arg changelog "${changelog}" \
+            --arg name "${{ steps.meta.outputs.name }}" \
+            --arg release_type "${VERSION_TYPE}" \
+            --argjson game_versions '${{ steps.versions.outputs.game_versions_json }}' \
+            '{
+              changelog: $changelog,
+              changelogType: "markdown",
+              displayName: $name,
+              gameVersions: $game_versions,
+              releaseType: $release_type
+            }' > curseforge-metadata.json
+
+          # metadata is sent as a plain form field, not a file part: "<" reads the value from the
+          # file (so a multi-line changelog is safe) without attaching a filename, matching what
+          # CurseForge's own upload clients send.
+          response="$(curl --fail-with-body -sS \
+            -X POST "${CF_API}/projects/${CURSEFORGE_PROJECT_ID}/upload-file" \
+            -H "X-Api-Token: ${CF_API_TOKEN}" \
+            -H "User-Agent: ${USER_AGENT}" \
+            -F "metadata=<curseforge-metadata.json" \
+            -F "file=@${JAR_PATH};type=application/java-archive")"
+
+          printf '%s' "${response}" > curseforge-response.json
+          file_id="$(jq -r '.id // empty' curseforge-response.json)"
+          if [[ -z "${file_id}" ]]; then
+            echo "CurseForge upload did not return a file id. Response:" >&2
+            cat curseforge-response.json >&2
+            exit 1
+          fi
+
+          echo "Uploaded to CurseForge project ${CURSEFORGE_PROJECT_ID} as file ${file_id}."
+          echo "CurseForge scans the file asynchronously; it appears on the project's Files page once approved."
