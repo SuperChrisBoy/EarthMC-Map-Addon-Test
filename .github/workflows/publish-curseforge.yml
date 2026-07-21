@@ -185,20 +185,33 @@ jobs:
               releaseType: $release_type
             }' > curseforge-metadata.json
 
+          echo "Request metadata:"
+          jq '.changelog |= (.[0:80] + "...")' curseforge-metadata.json
+
+          # Write the body to a file and capture the status separately rather than using
+          # --fail-with-body: on a non-2xx that writes the body to stdout AND exits non-zero, so
+          # under `set -e` the step dies before the body can be shown and CurseForge's actual
+          # error message is lost.
           # metadata is sent as a plain form field, not a file part: "<" reads the value from the
           # file (so a multi-line changelog is safe) without attaching a filename, matching what
           # CurseForge's own upload clients send.
-          response="$(curl --fail-with-body -sS \
+          http_code="$(curl -sS -o curseforge-response.json -w '%{http_code}' \
             -X POST "${CF_API}/projects/${CURSEFORGE_PROJECT_ID}/upload-file" \
             -H "X-Api-Token: ${CF_API_TOKEN}" \
             -H "User-Agent: ${USER_AGENT}" \
             -F "metadata=<curseforge-metadata.json" \
             -F "file=@${JAR_PATH};type=application/java-archive")"
 
-          printf '%s' "${response}" > curseforge-response.json
+          if [[ "${http_code}" != "200" ]]; then
+            echo "CurseForge upload failed with HTTP ${http_code}. Response body:" >&2
+            cat curseforge-response.json >&2
+            echo >&2
+            exit 1
+          fi
+
           file_id="$(jq -r '.id // empty' curseforge-response.json)"
           if [[ -z "${file_id}" ]]; then
-            echo "CurseForge upload did not return a file id. Response:" >&2
+            echo "CurseForge returned HTTP 200 but no file id. Response:" >&2
             cat curseforge-response.json >&2
             exit 1
           fi
