@@ -504,7 +504,7 @@ public final class ChunkCounterOverlay {
             double[] xs = loopXs.get(li), ys = loopYs.get(li);
             for (int i = 0; i < xs.length; i++) {
                 int j = (i + 1) % xs.length;
-                drawThinSegment(ctx, xs[i], ys[i], xs[j], ys[j], border, sw, sh);
+                net.townymap.render.WorldMapRenderer.drawThinSegment(ctx, xs[i], ys[i], xs[j], ys[j], border, sw, sh);
             }
         }
         return true;
@@ -594,31 +594,6 @@ public final class ChunkCounterOverlay {
     }
 
     /** 1px line, using a rotated fill for diagonals (axis-aligned ones take the cheap path). */
-    private static void drawThinSegment(DrawContext ctx, double x1, double y1, double x2, double y2,
-                                        int argb, int sw, int sh) {
-        if ((x1 < 0 && x2 < 0) || (x1 > sw && x2 > sw) || (y1 < 0 && y2 < 0) || (y1 > sh && y2 > sh)) return;
-        int ix1 = (int) Math.round(x1), iy1 = (int) Math.round(y1);
-        int ix2 = (int) Math.round(x2), iy2 = (int) Math.round(y2);
-        if (iy1 == iy2) {
-            if (ix1 != ix2) ctx.fill(Math.min(ix1, ix2), iy1, Math.max(ix1, ix2), iy1 + 1, argb);
-            return;
-        }
-        if (ix1 == ix2) {
-            ctx.fill(ix1, Math.min(iy1, iy2), ix1 + 1, Math.max(iy1, iy2), argb);
-            return;
-        }
-        double dx = x2 - x1, dy = y2 - y1;
-        int len = (int) Math.ceil(Math.hypot(dx, dy));
-        org.joml.Matrix3x2fStack m = ctx.getMatrices();
-        m.pushMatrix();
-        try {
-            m.translate((float) x1, (float) y1);
-            m.rotate((float) Math.atan2(dy, dx));
-            ctx.fill(0, 0, len, 1, argb);
-        } finally {
-            m.popMatrix();
-        }
-    }
 
     private static void drawLowZoomSelection(DrawContext ctx, SelectionState selection,
                                              double cameraX, double cameraZ, double blockScale,

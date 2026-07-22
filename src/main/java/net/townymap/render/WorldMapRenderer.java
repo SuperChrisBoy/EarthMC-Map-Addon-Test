@@ -130,8 +130,6 @@ public class WorldMapRenderer {
     // outlines can never fully disappear mid-zoom, yet it never double-draws under the finer levels
     // (which would thicken/halo the lines you just approved).
     private static final double OUTLINE_OVERVIEW_PPB = 0.02;
-    private int pendingOutlineZoom = Integer.MIN_VALUE;
-    private long pendingOutlineZoomSinceMs;
     // Leaflet's smoothFactor (1.0), in GUI px — scaled by density into tile px at use. Verified against
     // Leaflet 1.9.4 source: simplify = radial vertex reduction THEN Douglas-Peucker, both with sqTolerance.
     // The tolerance is the same world-space distance for every tile of a zoom level, so neighbouring tiles
@@ -158,10 +156,31 @@ public class WorldMapRenderer {
         t.setPriority(Thread.NORM_PRIORITY - 1);   // yield to the render thread
         return t;
     });
-    private final LinkedHashMap<Long, Identifier> outlineTiles = new LinkedHashMap<>(64, 0.75f, true);
-    private final Set<Long> outlineTilesLoading = ConcurrentHashMap.newKeySet();
-    private final Set<Long> outlineTilesEmpty = ConcurrentHashMap.newKeySet();
-    private final Queue<LoadedOutlineTile> outlineTilesCompleted = new ConcurrentLinkedQueue<>();
+    /**
+     * One bakeable outline layer. There are two, sharing all of the tiling machinery:
+     *  - main   — every town EXCEPT the map-mode ones, in its own colours.
+     *  - status — ONLY the map-mode towns, rasterised in WHITE and blitted with the animated highlight
+     *             colour as a tint. Baking white and tinting at blit time is what lets the highlight
+     *             animate every frame while still being a baked tile, so its line is pixel-identical to
+     *             the towns around it. Re-baking per frame to animate would be the churn we removed.
+     */
+    private static final class TileLayer {
+        final String name;              // namespaces the texture id; both layers share the key space
+        final boolean statusLayer;
+        final LinkedHashMap<Long, Identifier> tiles = new LinkedHashMap<>(64, 0.75f, true);
+        final Set<Long> loading = ConcurrentHashMap.newKeySet();
+        final Set<Long> empty = ConcurrentHashMap.newKeySet();
+        final Queue<LoadedOutlineTile> completed = new ConcurrentLinkedQueue<>();
+        int lastReadyZoom = Integer.MIN_VALUE;
+        int pendingZoom = Integer.MIN_VALUE;
+        long pendingSinceMs;
+        int tint = 0xFFFFFFFF;          // set per frame; 0xFFFFFFFF leaves the baked colours untouched
+
+        TileLayer(String name, boolean statusLayer) { this.name = name; this.statusLayer = statusLayer; }
+    }
+
+    private final TileLayer mainTiles = new TileLayer("main", false);
+    private final TileLayer statusTiles = new TileLayer("status", true);
     private TownRenderCache outlineTilesSnapshot;   // which snapshot the current tiles were built for
     private boolean outlineTilesSmooth = true;     // outline STYLE baked into the current tiles
     private int outlineTilesFavVersion = -1;        // favourites baked into the current tiles
@@ -175,7 +194,7 @@ public class WorldMapRenderer {
     private int lastStatusMode = -1;
     private int lastStatusDetailsSize = -1;
     private int lastStatusFavVersion = -1;
-    private int lastReadyOutlineZoom = Integer.MIN_VALUE;   // last zoom whose tiles fully covered the view
+
 
     public WorldMapRenderer(TownyMapConfig config, SquaremapApiClient api) {
         this.config = config;
@@ -439,11 +458,19 @@ public class WorldMapRenderer {
 
         // Tiles bake fill AND stroke on the same simplified path (Leaflet's _fillStroke), so nothing
         // else needs to draw when they're ready.
-        if (useTiles && renderTownOutlineTiles(ctx, cameraX, cameraZ, blockScale, sw, sh,
-                                               worldLeft, worldRight, worldTop, worldBottom)) {
+        if (useTiles && renderTownOutlineTiles(ctx, mainTiles, 0xFFFFFFFF, cameraX, cameraZ, blockScale,
+                                               sw, sh, worldLeft, worldRight, worldTop, worldBottom)) {
+            // Highlight layer on top, tinted with the live (optionally animating) colour. Blitted after the
+            // main layer so it sits above the outlines it is highlighting.
             if (config.townStatusOverlayMode > 0) {
-                renderStatusHighlightsLive(ctx, visibleTowns, cameraX, cameraZ, blockScale, sw, sh);
+                renderTownOutlineTiles(ctx, statusTiles, 0xFF000000 | statusHighlightRgb(),
+                                       cameraX, cameraZ, blockScale, sw, sh,
+                                       worldLeft, worldRight, worldTop, worldBottom);
             }
+            // Map-mode towns are excluded from the bake (their colour animates) and must be drawn live,
+            // but NOT here: these tiles are textured quads and would paint straight over a ctx.fill in the
+            // same batch, which is why the highlight never appeared. Deferred to the late pass instead,
+            // exactly like the player dots and the claim chunks.
             return;
         }
 
@@ -527,23 +554,43 @@ public class WorldMapRenderer {
 
     // The status-highlighted subset is excluded from the tile bake, so draw it here live in the animated
     // status colour — one outline, flush on the border, with no baked line beneath it to drift against.
-    private void renderStatusHighlightsLive(DrawContext ctx, List<RenderTown> visibleTowns,
-                                            double cameraX, double cameraZ, double blockScale, int sw, int sh) {
-        if (statusHighlightKeys.isEmpty()) return;
-        int statusColor = 0xFF000000 | statusHighlightRgb();
-        for (RenderTown town : visibleTowns) {
-            if (!statusHighlightKeys.contains(town.key())) continue;
-            for (RingGeometry ring : town.rings()) {
-                renderRing(ctx, ring, 0, statusColor, 0, cameraX, cameraZ, blockScale, sw, sh);
-            }
+    /**
+     * Draws a 1px line at an arbitrary angle by rotating the matrix around its start point — DrawContext
+     * can only fill axis-aligned rects, so a diagonal has to be a rotated quad. Axis-aligned cases take
+     * the plain fill path (no rotation, so they stay pixel-crisp).
+     */
+    public static void drawThinSegment(DrawContext ctx, double x1, double y1, double x2, double y2,
+                                       int argb, int sw, int sh) {
+        if ((x1 < 0 && x2 < 0) || (x1 > sw && x2 > sw) || (y1 < 0 && y2 < 0) || (y1 > sh && y2 > sh)) return;
+        int ix1 = (int) Math.round(x1), iy1 = (int) Math.round(y1);
+        int ix2 = (int) Math.round(x2), iy2 = (int) Math.round(y2);
+        if (iy1 == iy2) {
+            if (ix1 != ix2) ctx.fill(Math.min(ix1, ix2), iy1, Math.max(ix1, ix2), iy1 + 1, argb);
+            return;
+        }
+        if (ix1 == ix2) {
+            ctx.fill(ix1, Math.min(iy1, iy2), ix1 + 1, Math.max(iy1, iy2), argb);
+            return;
+        }
+        double dx = x2 - x1, dy = y2 - y1;
+        int len = (int) Math.ceil(Math.hypot(dx, dy));
+        org.joml.Matrix3x2fStack m = ctx.getMatrices();
+        m.pushMatrix();
+        try {
+            m.translate((float) x1, (float) y1);
+            m.rotate((float) Math.atan2(dy, dx));
+            ctx.fill(0, 0, len, 1, argb);
+        } finally {
+            m.popMatrix();
         }
     }
 
     // ── Cached town-outline tiles ─────────────────────────────────────────────
 
-    private boolean renderTownOutlineTiles(DrawContext ctx, double cameraX, double cameraZ, double blockScale,
+    private boolean renderTownOutlineTiles(DrawContext ctx, TileLayer layer, int tint, double cameraX, double cameraZ, double blockScale,
                                            int sw, int sh, double worldLeft, double worldRight,
                                            double worldTop, double worldBottom) {
+        layer.tint = tint;
         TownRenderCache snapshot = townRenderCache;
         if (snapshot != outlineTilesSnapshot || favoritesVersion != outlineTilesFavVersion
                 || statusVersion != outlineTilesStatusVersion
@@ -551,14 +598,18 @@ public class WorldMapRenderer {
             // Style is part of what a tile contains, and the cache key has no spare bits (16 zoom + 24 tx
             // + 24 ty fills the long), so toggling smooth/blocky must drop the cache or the old style
             // would keep being blitted. Toggling is a settings action, so the re-bake cost is irrelevant.
-            clearOutlineTiles();              // town data, favourites, status-exclusion, or STYLE changed
+            // Both layers are invalidated together: which towns are highlighted decides how the two are
+            // partitioned, so a stale half would double-draw or drop towns. The highlight COLOUR is not in
+            // here on purpose — it is applied as a blit tint, so changing it costs no re-bake at all.
+            clearOutlineTiles(mainTiles);
+            clearOutlineTiles(statusTiles);
             outlineTilesSmooth = config.smoothTownOutlines;
             outlineTilesSnapshot = snapshot;
             outlineTilesFavVersion = favoritesVersion;
             outlineTilesStatusVersion = statusVersion;
         }
         if (snapshot.allTowns().isEmpty()) return true;   // nothing to draw, but still "handled" (no direct)
-        processOutlineTileUploads();
+        processOutlineTileUploads(layer);
         Set<String> favSnapshot = favoriteTownKeys.isEmpty() ? Set.of() : Set.copyOf(favoriteTownKeys);
         Set<String> statusSnapshot = statusHighlightKeys;   // already immutable (Set.of() / Set.copyOf)
 
@@ -578,14 +629,14 @@ public class WorldMapRenderer {
         // Leaflet redraws its canvas on zoom END, scaling the old picture during the gesture. While the
         // zoom bucket is still settling, show a coarser cached level and DON'T bake the new bucket yet
         // (avoids the rebuild flood).
-        if (zoom != lastReadyOutlineZoom) {
+        if (zoom != layer.lastReadyZoom) {
             long now = System.currentTimeMillis();
-            if (zoom != pendingOutlineZoom) {
-                pendingOutlineZoom = zoom;
-                pendingOutlineZoomSinceMs = now;
+            if (zoom != layer.pendingZoom) {
+                layer.pendingZoom = zoom;
+                layer.pendingSinceMs = now;
             }
-            if (now - pendingOutlineZoomSinceMs < OUTLINE_ZOOM_SETTLE_MS) {
-                drawCoarserFallback(ctx, zoom, cameraX, cameraZ, blockScale, sw, sh,
+            if (now - layer.pendingSinceMs < OUTLINE_ZOOM_SETTLE_MS) {
+                drawCoarserFallback(ctx, layer, zoom, cameraX, cameraZ, blockScale, sw, sh,
                                     worldLeft, worldRight, worldTop, worldBottom,
                                     density, snapshot, favSnapshot, statusSnapshot);
                 return true;
@@ -601,10 +652,10 @@ public class WorldMapRenderer {
         for (int ty = minTy; ty <= maxTy; ty++) {
             for (int tx = minTx; tx <= maxTx; tx++) {
                 long key = outlineTileKey(zoom, tx, ty);
-                if (outlineTiles.containsKey(key)) {
+                if (layer.tiles.containsKey(key)) {
                     readyCount++;
-                } else if (!outlineTilesEmpty.contains(key)) {
-                    requestOutlineTile(key, zoom, tx, ty, tileWorldSize, ppb, density,
+                } else if (!layer.empty.contains(key)) {
+                    requestOutlineTile(layer, key, zoom, tx, ty, tileWorldSize, ppb, density,
                                        snapshot, favSnapshot, statusSnapshot);
                     allReady = false;
                 }
@@ -616,18 +667,18 @@ public class WorldMapRenderer {
         if (readyCount > 0) {
             for (int ty = minTy; ty <= maxTy; ty++) {
                 for (int tx = minTx; tx <= maxTx; tx++) {
-                    Identifier tex = outlineTiles.get(outlineTileKey(zoom, tx, ty));
+                    Identifier tex = layer.tiles.get(outlineTileKey(zoom, tx, ty));
                     if (tex != null) {
-                        blitOutlineTile(ctx, tex, tx, ty, tileWorldSize, cameraX, cameraZ, blockScale, sw, sh);
+                        blitOutlineTile(ctx, layer, tex, tx, ty, tileWorldSize, cameraX, cameraZ, blockScale, sw, sh);
                     }
                 }
             }
         } else {
-            drawCoarserFallback(ctx, zoom, cameraX, cameraZ, blockScale, sw, sh,
+            drawCoarserFallback(ctx, layer, zoom, cameraX, cameraZ, blockScale, sw, sh,
                                 worldLeft, worldRight, worldTop, worldBottom,
                                 density, snapshot, favSnapshot, statusSnapshot);
         }
-        if (allReady) lastReadyOutlineZoom = zoom;
+        if (allReady) layer.lastReadyZoom = zoom;
 
         // ALWAYS handled in the tile range — the caller must never fall to the old rectilinear renderer.
         return true;
@@ -636,7 +687,7 @@ public class WorldMapRenderer {
     /** Single coarser layer for when this zoom has nothing cached: the last fully-ready level if it has
      *  anything, else the pinned whole-map overview floor. Only ever drawn INSTEAD of the current zoom's
      *  tiles, never under them. */
-    private void drawCoarserFallback(DrawContext ctx, int zoom, double cameraX, double cameraZ,
+    private void drawCoarserFallback(DrawContext ctx, TileLayer layer, int zoom, double cameraX, double cameraZ,
                                      double blockScale, int sw, int sh, double worldLeft, double worldRight,
                                      double worldTop, double worldBottom, double density,
                                      TownRenderCache snapshot, Set<String> favSnapshot,
@@ -644,12 +695,12 @@ public class WorldMapRenderer {
         // Stand in with the last fully-ready level. (Picking the "nearest cached" level instead was tried
         // and reverted: which level is nearest changes as tiles bake and evict, so the stand-in hopped
         // between levels frame to frame and made every town flicker.)
-        if (lastReadyOutlineZoom != Integer.MIN_VALUE && lastReadyOutlineZoom != zoom
-                && blitOutlineTilesAtZoom(ctx, lastReadyOutlineZoom, cameraX, cameraZ, blockScale,
+        if (layer.lastReadyZoom != Integer.MIN_VALUE && layer.lastReadyZoom != zoom
+                && blitOutlineTilesAtZoom(ctx, layer, layer.lastReadyZoom, cameraX, cameraZ, blockScale,
                                           sw, sh, worldLeft, worldRight, worldTop, worldBottom)) {
             return;
         }
-        drewOverviewFloor(ctx, cameraX, cameraZ, blockScale, sw, sh,
+        drewOverviewFloor(ctx, layer, cameraX, cameraZ, blockScale, sw, sh,
                           worldLeft, worldRight, worldTop, worldBottom,
                           density, snapshot, favSnapshot, statusSnapshot);
     }
@@ -657,7 +708,7 @@ public class WorldMapRenderer {
     /** Blits every visible tile at {@code zoom} (scaled to the current view) — but only if it has full
      *  coverage (every visible tile is loaded or known-empty), so we never show gaps. Returns false if
      *  any tile is still missing, so the caller can fall back. */
-    private boolean blitOutlineTilesAtZoom(DrawContext ctx, int zoom, double cameraX, double cameraZ,
+    private boolean blitOutlineTilesAtZoom(DrawContext ctx, TileLayer layer, int zoom, double cameraX, double cameraZ,
                                            double blockScale, int sw, int sh, double worldLeft,
                                            double worldRight, double worldTop, double worldBottom) {
         double ppb = outlineTilePixelsPerBlock(zoom);
@@ -672,9 +723,9 @@ public class WorldMapRenderer {
         boolean drewAny = false;
         for (int ty = minTy; ty <= maxTy; ty++) {
             for (int tx = minTx; tx <= maxTx; tx++) {
-                Identifier tex = outlineTiles.get(outlineTileKey(zoom, tx, ty));
+                Identifier tex = layer.tiles.get(outlineTileKey(zoom, tx, ty));
                 if (tex != null) {
-                    blitOutlineTile(ctx, tex, tx, ty, tileWorldSize, cameraX, cameraZ, blockScale, sw, sh);
+                    blitOutlineTile(ctx, layer, tex, tx, ty, tileWorldSize, cameraX, cameraZ, blockScale, sw, sh);
                     drewAny = true;
                 }
             }
@@ -689,7 +740,7 @@ public class WorldMapRenderer {
 
     /** Requests (once) and blits the pinned overview level for the visible area. Used only as the floor
      *  when no finer level had anything cached, so it never stacks under the fine tiles. */
-    private void drewOverviewFloor(DrawContext ctx, double cameraX, double cameraZ, double blockScale,
+    private void drewOverviewFloor(DrawContext ctx, TileLayer layer, double cameraX, double cameraZ, double blockScale,
                                    int sw, int sh, double worldLeft, double worldRight,
                                    double worldTop, double worldBottom, double density,
                                    TownRenderCache snapshot, Set<String> favSnapshot,
@@ -704,11 +755,11 @@ public class WorldMapRenderer {
         for (int ty = minTy; ty <= maxTy; ty++) {
             for (int tx = minTx; tx <= maxTx; tx++) {
                 long key = outlineTileKey(ovZoom, tx, ty);
-                Identifier tex = outlineTiles.get(key);
+                Identifier tex = layer.tiles.get(key);
                 if (tex != null) {
-                    blitOutlineTile(ctx, tex, tx, ty, ovTileWorld, cameraX, cameraZ, blockScale, sw, sh);
-                } else if (!outlineTilesEmpty.contains(key)) {
-                    requestOutlineTile(key, ovZoom, tx, ty, ovTileWorld, ovPpb, density,
+                    blitOutlineTile(ctx, layer, tex, tx, ty, ovTileWorld, cameraX, cameraZ, blockScale, sw, sh);
+                } else if (!layer.empty.contains(key)) {
+                    requestOutlineTile(layer, key, ovZoom, tx, ty, ovTileWorld, ovPpb, density,
                                        snapshot, favSnapshot, statusSnapshot);
                 }
             }
@@ -722,29 +773,29 @@ public class WorldMapRenderer {
         return Math.min(OUTLINE_TILE_MAX_DENSITY, Math.max(1.0, client.getWindow().getScaleFactor()));
     }
 
-    private void requestOutlineTile(long key, int zoom, int tx, int ty, double tileWorldSize, double ppb,
+    private void requestOutlineTile(TileLayer layer, long key, int zoom, int tx, int ty, double tileWorldSize, double ppb,
                                     double density, TownRenderCache snapshot, Set<String> favSnapshot,
                                     Set<String> statusSnapshot) {
-        if (outlineTilesLoading.size() >= MAX_OUTLINE_TILE_LOADS) return;
-        if (!outlineTilesLoading.add(key)) return;
+        if (layer.loading.size() >= MAX_OUTLINE_TILE_LOADS) return;
+        if (!layer.loading.add(key)) return;
         // Stamp the versions this tile is being baked with, so a tile that finishes after the favourite or
         // status-exclusion set changes is rejected on upload instead of showing a stale exclusion.
         int favVer = outlineTilesFavVersion;
         int statVer = outlineTilesStatusVersion;
         outlineTileExecutor.execute(() -> {
             try {
-                NativeImage img = rasterizeOutlineTile(zoom, tx, ty, tileWorldSize, ppb, density, snapshot, favSnapshot, statusSnapshot);
-                if (img == null) outlineTilesEmpty.add(key);
-                else outlineTilesCompleted.add(new LoadedOutlineTile(key, snapshot, img, favVer, statVer));
+                NativeImage img = rasterizeOutlineTile(layer, zoom, tx, ty, tileWorldSize, ppb, density, snapshot, favSnapshot, statusSnapshot);
+                if (img == null) layer.empty.add(key);
+                else layer.completed.add(new LoadedOutlineTile(key, snapshot, img, favVer, statVer));
             } catch (Exception e) {
                 LOGGER.warn("[TownyMap] Failed to rasterise town outline tile: {}", e.getMessage());
             } finally {
-                outlineTilesLoading.remove(key);
+                layer.loading.remove(key);
             }
         });
     }
 
-    private NativeImage rasterizeOutlineTile(int zoom, int tx, int ty, double tileWorldSize, double ppb,
+    private NativeImage rasterizeOutlineTile(TileLayer layer, int zoom, int tx, int ty, double tileWorldSize, double ppb,
                                              double density, TownRenderCache snapshot, Set<String> favSnapshot,
                                              Set<String> statusSnapshot) {
         double tileWorldX = tx * tileWorldSize;
@@ -812,15 +863,23 @@ public class WorldMapRenderer {
             }
             for (RenderTown town : towns) {
                 if (!town.intersectsWorld(left, right, top, bottom)) continue;
-                if (statusSnapshot.contains(town.key())) continue;   // status-highlighted → drawn live, not baked
+                // Each layer bakes only its own towns, through the SAME rasteriser — so a highlighted
+                // town's line is pixel-identical to its neighbours', which stroking it live could never
+                // achieve (a ctx.fill line cannot be an anti-aliased sub-pixel stroke over a soft fill).
+                boolean statusHit = statusSnapshot.contains(town.key());
+                if (layer.statusLayer != statusHit) continue;
                 // Favourites are baked exactly like every other town — identical thin stroke, identical
                 // translucent fill — only the COLOUR differs (gold). Previously they also got a fully
                 // opaque line, which made them shout next to the ~65%-alpha neighbours.
                 boolean favorite = favSnapshot.contains(town.key());
                 // Outline uses squaremap's stroke colour, interior uses its fillColor — on EarthMC those
                 // are the nation's two colours, so towns read as their nation instead of one flat tint.
-                int rgb = favorite ? 0xFFE066 : (town.data().rgbColor() & 0xFFFFFF);
-                int fillRgb = favorite ? 0xFFE066 : (town.data().fillRgbColor() & 0xFFFFFF);
+                // White on the status layer: the blit tint multiplies, so white x tint == the tint's
+                // colour exactly, while the baked alphas (stroke 165 / fill 64) survive untouched.
+                int rgb = layer.statusLayer ? 0xFFFFFF
+                        : favorite ? 0xFFE066 : (town.data().rgbColor() & 0xFFFFFF);
+                int fillRgb = layer.statusLayer ? 0xFFFFFF
+                        : favorite ? 0xFFE066 : (town.data().fillRgbColor() & 0xFFFFFF);
 
                 // With "Far Zoom Town Dots" ON, a town only a few px across collapses to a crisp dot
                 // (an anti-aliased outline that small can read as a blob). With it OFF we keep drawing
@@ -959,26 +1018,27 @@ public class WorldMapRenderer {
         return kept;
     }
 
-    private void processOutlineTileUploads() {
+    private void processOutlineTileUploads(TileLayer layer) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null) return;
         for (int i = 0; i < MAX_OUTLINE_TILE_UPLOADS_PER_FRAME; i++) {
-            LoadedOutlineTile loaded = outlineTilesCompleted.poll();
+            LoadedOutlineTile loaded = layer.completed.poll();
             if (loaded == null) return;
             if (loaded.snapshot() != outlineTilesSnapshot
                     || loaded.favVersion() != outlineTilesFavVersion
                     || loaded.statusVersion() != outlineTilesStatusVersion
-                    || outlineTiles.containsKey(loaded.key())) {
+                    || layer.tiles.containsKey(loaded.key())) {
                 loaded.image().close();   // stale (data/favourites/status changed) or duplicate
                 continue;
             }
             try {
-                Identifier id = Identifier.of("townymapaddon", "town_outline_tile/" + loaded.key());
+                Identifier id = Identifier.of("townymapaddon",
+                        "town_outline_tile/" + layer.name + "/" + loaded.key());
                 OutlineTileTexture tex = new OutlineTileTexture(
-                        () -> "TownyMap outline tile " + loaded.key(), loaded.image());
+                        () -> "TownyMap " + layer.name + " outline tile " + loaded.key(), loaded.image());
                 client.getTextureManager().registerTexture(id, tex);
-                outlineTiles.put(loaded.key(), id);
-                evictOldOutlineTiles(client);
+                layer.tiles.put(loaded.key(), id);
+                evictOldOutlineTiles(layer, client);
             } catch (Exception e) {
                 loaded.image().close();
                 LOGGER.warn("[TownyMap] Failed to upload town outline tile: {}", e.getMessage());
@@ -986,7 +1046,7 @@ public class WorldMapRenderer {
         }
     }
 
-    private void blitOutlineTile(DrawContext ctx, Identifier texture, int tx, int ty, double tileWorldSize,
+    private void blitOutlineTile(DrawContext ctx, TileLayer layer, Identifier texture, int tx, int ty, double tileWorldSize,
                                  double cameraX, double cameraZ, double blockScale, int sw, int sh) {
         double tileWorldX = tx * tileWorldSize;
         double tileWorldZ = ty * tileWorldSize;
@@ -1002,34 +1062,35 @@ public class WorldMapRenderer {
         // share their rounded screen edge by construction (x2 of one IS x1 of the next), so there are no
         // gaps to hide, and overlapping translucent AA strokes would double-blend into dark seams anyway.
         ctx.drawTexture(RenderPipelines.GUI_TEXTURED, texture, x1, y1, 0.0F, 0.0F,
-                drawW, drawH, OUTLINE_TILE_PIXELS, OUTLINE_TILE_PIXELS, OUTLINE_TILE_PIXELS, OUTLINE_TILE_PIXELS);
+                drawW, drawH, OUTLINE_TILE_PIXELS, OUTLINE_TILE_PIXELS, OUTLINE_TILE_PIXELS, OUTLINE_TILE_PIXELS,
+                layer.tint);
     }
 
-    private void clearOutlineTiles() {
+    private void clearOutlineTiles(TileLayer layer) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client != null) {
-            for (Identifier id : outlineTiles.values()) client.getTextureManager().destroyTexture(id);
+            for (Identifier id : layer.tiles.values()) client.getTextureManager().destroyTexture(id);
         }
-        outlineTiles.clear();
-        outlineTilesEmpty.clear();
-        outlineTilesLoading.clear();
-        lastReadyOutlineZoom = Integer.MIN_VALUE;   // cached tiles are gone → no stale zoom to fall back to
+        layer.tiles.clear();
+        layer.empty.clear();
+        layer.loading.clear();
+        layer.lastReadyZoom = Integer.MIN_VALUE;   // cached tiles are gone → no stale zoom to fall back to
         LoadedOutlineTile loaded;
-        while ((loaded = outlineTilesCompleted.poll()) != null) loaded.image().close();
+        while ((loaded = layer.completed.poll()) != null) loaded.image().close();
     }
 
-    private void evictOldOutlineTiles(MinecraftClient client) {
+    private void evictOldOutlineTiles(TileLayer layer, MinecraftClient client) {
         // The pinned overview level is never evicted — it's the floor that keeps outlines on screen, and
         // it's only a couple dozen tiles.
         int pinnedZoom = overviewOutlineZoom();
-        while (outlineTiles.size() > MAX_OUTLINE_TILES) {
+        while (layer.tiles.size() > MAX_OUTLINE_TILES) {
             Long victim = null;
-            for (Long k : outlineTiles.keySet()) {
+            for (Long k : layer.tiles.keySet()) {
                 if (outlineTileKeyZoom(k) != pinnedZoom) { victim = k; break; }
             }
             if (victim == null) break;   // nothing left but pinned overview tiles
-            client.getTextureManager().destroyTexture(outlineTiles.get(victim));
-            outlineTiles.remove(victim);
+            client.getTextureManager().destroyTexture(layer.tiles.get(victim));
+            layer.tiles.remove(victim);
         }
     }
 
