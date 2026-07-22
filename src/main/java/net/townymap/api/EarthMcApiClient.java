@@ -5,6 +5,10 @@ import net.townymap.model.EarthMcNationData;
 import net.townymap.model.EarthMcPlayerData;
 import net.townymap.model.NationBonusProjection;
 import net.townymap.model.NationResidentStats;
+import net.townymap.model.NationFullData;
+import net.townymap.model.PlayerFullData;
+import net.townymap.model.TownFullData;
+import net.townymap.model.TownOverclaimProjection;
 import net.townymap.model.TownPopupData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,6 +21,7 @@ import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.*;
 
 /**
@@ -419,11 +424,10 @@ public class EarthMcApiClient {
             }
         }
 
-        boolean pvp = false;
-        if (t.has("flags") && t.get("flags").isJsonObject()) {
-            JsonObject flags = t.getAsJsonObject("flags");
-            if (flags.has("pvp")) pvp = flags.get("pvp").getAsBoolean();
-        }
+        // The permission flags live under perms.flags, NOT a top-level "flags" object. This read the
+        // latter, which the API has never returned, so pvp was silently false for every town — and the
+        // PvP status-overlay mode consequently never highlighted anything.
+        boolean pvp = permsFlag(t, "pvp");
 
         boolean isPublic = false;
         boolean canOutsidersSpawn = false;
@@ -518,6 +522,69 @@ public class EarthMcApiClient {
         }, executor);
     }
 
+    /**
+     * When this town becomes overclaimable, from its residents' purge dates.
+     *
+     * <p>The claim limit is residents x perResident + bonusBlocks + nationBonus, so every purge costs one
+     * resident's worth of chunks. perResident is derived from the town's own numbers rather than assuming
+     * EarthMC's current 12, so this keeps working if that value is ever retuned.
+     */
+    public CompletableFuture<TownOverclaimProjection> fetchTownOverclaim(String townName) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (townName == null || townName.isBlank()) return TownOverclaimProjection.NONE;
+            try {
+                JsonObject body = new JsonObject();
+                JsonArray q = new JsonArray();
+                q.add(townName);
+                body.add("query", q);
+                String json = postGated(BASE + "/towns", body.toString());
+                if (json == null) return TownOverclaimProjection.NONE;
+                JsonArray arr = JsonParser.parseString(json).getAsJsonArray();
+                if (arr.isEmpty()) return TownOverclaimProjection.NONE;
+                return computeTownOverclaim(arr.get(0).getAsJsonObject());
+            } catch (RuntimeException e) {
+                return TownOverclaimProjection.NONE;
+            }
+        }, executor);
+    }
+
+    private TownOverclaimProjection computeTownOverclaim(JsonObject t) {
+        JsonObject stats = t.has("stats") && t.get("stats").isJsonObject()
+                ? t.getAsJsonObject("stats") : new JsonObject();
+        int claimed = intOf(stats, "numTownBlocks", -1);
+        int max = intOf(stats, "maxTownBlocks", -1);
+        int residents = intOf(stats, "numResidents", 0);
+        int bonusBlocks = intOf(stats, "bonusBlocks", 0);
+        int nationBonus = intOf(stats, "nationBonus", 0);
+        if (claimed < 0 || max < 0 || residents <= 0) return TownOverclaimProjection.NONE;
+
+        double perResident = (max - bonusBlocks - nationBonus) / (double) residents;
+        if (perResident <= 0) return TownOverclaimProjection.NONE;
+
+        java.util.List<String> ids = extractResidentIds(t);
+        if (ids.isEmpty() || ids.size() > MAX_RESIDENT_LOOKUP) return TownOverclaimProjection.NONE;
+        long now = System.currentTimeMillis();
+        java.util.List<Long> dates = collectRemovalDates(ids, now);
+        if (dates == null) return TownOverclaimProjection.NONE;
+
+        // Soonest purge first. Residents the API omits (opted out) never appear, so they are treated as
+        // never purging — that keeps the estimate conservative rather than inventing an earlier date.
+        java.util.List<Long> future = new java.util.ArrayList<>();
+        for (long d : dates) if (d > now) future.add(d);
+        java.util.Collections.sort(future);
+
+        for (int lost = 1; lost <= future.size(); lost++) {
+            int remaining = residents - lost;
+            int maxAfter = (int) Math.floor(remaining * perResident) + bonusBlocks + nationBonus;
+            if (claimed > maxAfter) {
+                long at = future.get(lost - 1);
+                Countdown c = countdownTo(at, now);
+                return new TownOverclaimProjection(c.dropAtMs(), c.date(), c.days(), lost);
+            }
+        }
+        return TownOverclaimProjection.NONE;   // stays safe for as long as we can see
+    }
+
     private int computeTownActive(JsonObject t) {
         java.util.List<String> ids = extractResidentIds(t);
         int n = ids.size();
@@ -602,10 +669,10 @@ public class EarthMcApiClient {
         if (rawDrop == Long.MAX_VALUE) return NationBonusProjection.NONE;         // drop driven by unknown residents
 
         Countdown c = countdownTo(rawDrop, now);
-        return new NationBonusProjection(nextBonus, c.days(), c.hours(), c.minutes(), c.date());
+        return new NationBonusProjection(nextBonus, c.days(), c.hours(), c.minutes(), c.date(), c.dropAtMs());
     }
 
-    private record Countdown(int days, int hours, int minutes, String date) {}
+    private record Countdown(int days, int hours, int minutes, String date, long dropAtMs) {}
 
     /** Anchors a raw 42-day mark to EarthMC's ~12:00 Europe/Berlin daily purge and expresses the wait as
      *  local calendar days plus absolute-instant hours/minutes — identical treatment to the nation bonus
@@ -624,7 +691,7 @@ public class EarthMcApiClient {
         int days = (int) Math.max(0, dropDate.toEpochDay() - today.toEpochDay());
         int hours = (int) Math.max(0, Math.ceil((dropMs - now) / 3_600_000.0));
         int minutes = (int) Math.max(0, Math.ceil((dropMs - now) / 60_000.0));
-        return new Countdown(days, hours, minutes, dropDate.format(DATE_FMT));
+        return new Countdown(days, hours, minutes, dropDate.format(DATE_FMT), dropMs);
     }
 
     private static int tierIndexForBonus(int bonus) {
@@ -900,6 +967,282 @@ public class EarthMcApiClient {
             return str(obj.getAsJsonObject(key), "name", "");
         }
         return "";
+    }
+
+    /** Reads one of the four town permission flags from perms.flags. */
+    private static boolean permsFlag(JsonObject town, String flag) {
+        if (!town.has("perms") || !town.get("perms").isJsonObject()) return false;
+        JsonObject perms = town.getAsJsonObject("perms");
+        if (!perms.has("flags") || !perms.get("flags").isJsonObject()) return false;
+        JsonObject flags = perms.getAsJsonObject("flags");
+        return flags.has(flag) && !flags.get(flag).isJsonNull() && flags.get(flag).getAsBoolean();
+    }
+
+    /** Collects the "name" of each entry in a list of {name, uuid} objects. */
+    private static List<String> namesOf(JsonObject obj, String key) {
+        List<String> out = new ArrayList<>();
+        if (!obj.has(key) || !obj.get(key).isJsonArray()) return out;
+        for (JsonElement el : obj.getAsJsonArray(key)) {
+            if (el.isJsonObject()) {
+                String n = str(el.getAsJsonObject(), "name", "");
+                if (!n.isBlank()) out.add(n);
+            } else if (el.isJsonPrimitive()) {
+                out.add(el.getAsString());
+            }
+        }
+        return out;
+    }
+
+    private static long ts(JsonObject obj, String key) {
+        if (obj == null || !obj.has(key) || obj.get(key).isJsonNull()) return 0L;
+        try { return obj.get(key).getAsLong(); } catch (Exception e) { return 0L; }
+    }
+
+    private static int intOf(JsonObject obj, String key, int fallback) {
+        if (obj == null || !obj.has(key) || obj.get(key).isJsonNull()) return fallback;
+        try { return obj.get(key).getAsInt(); } catch (Exception e) { return fallback; }
+    }
+
+    private static double dblOf(JsonObject obj, String key, double fallback) {
+        if (obj == null || !obj.has(key) || obj.get(key).isJsonNull()) return fallback;
+        try { return obj.get(key).getAsDouble(); } catch (Exception e) { return fallback; }
+    }
+
+    /**
+     * Full town record for the expanded panel. Parsed from the SAME /towns response the map already
+     * fetches, so opening the panel costs no additional request.
+     */
+    private static TownFullData parseTownFull(JsonObject t) {
+        JsonObject status = t.has("status") && t.get("status").isJsonObject() ? t.getAsJsonObject("status") : new JsonObject();
+        JsonObject stats  = t.has("stats")  && t.get("stats").isJsonObject()  ? t.getAsJsonObject("stats")  : new JsonObject();
+        JsonObject times  = t.has("timestamps") && t.get("timestamps").isJsonObject() ? t.getAsJsonObject("timestamps") : new JsonObject();
+
+        String mayor = t.has("mayor") && t.get("mayor").isJsonObject()
+                ? str(t.getAsJsonObject("mayor"), "name", "?") : "?";
+        String nation = t.has("nation") && t.get("nation").isJsonObject()
+                ? str(t.getAsJsonObject("nation"), "name", "") : "";
+
+        int sx = 0, sy = 0, sz = 0;
+        if (t.has("coordinates") && t.get("coordinates").isJsonObject()) {
+            JsonObject coords = t.getAsJsonObject("coordinates");
+            if (coords.has("spawn") && coords.get("spawn").isJsonObject()) {
+                JsonObject sp = coords.getAsJsonObject("spawn");
+                sx = (int) Math.round(dblOf(sp, "x", 0));
+                sy = (int) Math.round(dblOf(sp, "y", 0));
+                sz = (int) Math.round(dblOf(sp, "z", 0));
+            }
+        }
+
+        java.util.LinkedHashMap<String, List<String>> ranks = new java.util.LinkedHashMap<>();
+        if (t.has("ranks") && t.get("ranks").isJsonObject()) {
+            for (var e : t.getAsJsonObject("ranks").entrySet()) {
+                List<String> holders = new ArrayList<>();
+                if (e.getValue().isJsonArray()) {
+                    for (JsonElement el : e.getValue().getAsJsonArray()) {
+                        if (el.isJsonObject()) holders.add(str(el.getAsJsonObject(), "name", ""));
+                        else if (el.isJsonPrimitive()) holders.add(el.getAsString());
+                    }
+                }
+                ranks.put(e.getKey(), List.copyOf(holders));
+            }
+        }
+
+        List<TownFullData.Warp> warps = new ArrayList<>();
+        if (t.has("warps") && t.get("warps").isJsonArray()) {
+            for (JsonElement el : t.getAsJsonArray("warps")) {
+                if (!el.isJsonObject()) continue;
+                JsonObject w = el.getAsJsonObject();
+                int wx = 0, wy = 0, wz = 0;
+                if (w.has("location") && w.get("location").isJsonObject()) {
+                    JsonObject loc = w.getAsJsonObject("location");
+                    wx = (int) Math.round(dblOf(loc, "x", 0));
+                    wy = (int) Math.round(dblOf(loc, "y", 0));
+                    wz = (int) Math.round(dblOf(loc, "z", 0));
+                }
+                warps.add(new TownFullData.Warp(str(w, "name", "?"), str(w, "access", ""),
+                        str(w, "createdBy", ""), ts(w, "createdAt"), wx, wy, wz));
+            }
+        }
+
+        return new TownFullData(
+                str(t, "name", "?"), str(t, "board", ""), str(t, "founder", ""),
+                str(t, "wiki", ""), str(t, "discord", ""), mayor, nation,
+                ts(times, "registered"), ts(times, "joinedNationAt"), ts(times, "ruinedAt"),
+                bool(status, "isPublic"), bool(status, "isOpen"), bool(status, "isNeutral"),
+                bool(status, "isCapital"), bool(status, "isOverClaimed"), bool(status, "isRuined"),
+                bool(status, "isForSale"), bool(status, "hasNation"), bool(status, "canOutsidersSpawn"),
+                bool(status, "canPassiveMobsSpawn"), bool(status, "hasSnowAccumulation"),
+                bool(status, "hasFriendlyFire"),
+                intOf(stats, "numTownBlocks", 0), intOf(stats, "maxTownBlocks", -1),
+                intOf(stats, "bonusBlocks", 0), intOf(stats, "nationBonus", 0),
+                intOf(stats, "numResidents", 0), intOf(stats, "numTrusted", 0),
+                intOf(stats, "numOutlaws", 0), dblOf(stats, "balance", 0),
+                dblOf(stats, "forSalePrice", -1),
+                permsFlag(t, "pvp"), permsFlag(t, "explosion"), permsFlag(t, "fire"), permsFlag(t, "mobs"),
+                sx, sy, sz,
+                namesOf(t, "residents"), namesOf(t, "trusted"), namesOf(t, "outlaws"),
+                namesOf(t, "quarters"), Map.copyOf(ranks), List.copyOf(warps));
+    }
+
+    private static List<String> strList(JsonObject obj, String key) {
+        List<String> out = new ArrayList<>();
+        if (obj == null || !obj.has(key) || !obj.get(key).isJsonArray()) return out;
+        for (JsonElement el : obj.getAsJsonArray(key)) {
+            if (el.isJsonObject()) {
+                String n = str(el.getAsJsonObject(), "name", "");
+                if (!n.isBlank()) out.add(n);
+            } else if (el.isJsonPrimitive()) {
+                out.add(el.getAsString());
+            }
+        }
+        return out;
+    }
+
+    private static PlayerFullData parsePlayerFull(JsonObject pl) {
+        JsonObject status = pl.has("status") && pl.get("status").isJsonObject() ? pl.getAsJsonObject("status") : new JsonObject();
+        JsonObject stats  = pl.has("stats")  && pl.get("stats").isJsonObject()  ? pl.getAsJsonObject("stats")  : new JsonObject();
+        JsonObject times  = pl.has("timestamps") && pl.get("timestamps").isJsonObject() ? pl.getAsJsonObject("timestamps") : new JsonObject();
+        String town = pl.has("town") && pl.get("town").isJsonObject() ? str(pl.getAsJsonObject("town"), "name", "") : "";
+        String nation = pl.has("nation") && pl.get("nation").isJsonObject() ? str(pl.getAsJsonObject("nation"), "name", "") : "";
+
+        List<String> townRanks = List.of(), nationRanks = List.of();
+        if (pl.has("ranks") && pl.get("ranks").isJsonObject()) {
+            JsonObject r = pl.getAsJsonObject("ranks");
+            townRanks = List.copyOf(strList(r, "townRanks"));
+            nationRanks = List.copyOf(strList(r, "nationRanks"));
+        }
+        return new PlayerFullData(
+                str(pl, "name", "?"), str(pl, "title", ""), str(pl, "surname", ""),
+                str(pl, "formattedName", ""), str(pl, "about", ""), str(pl, "discord", ""),
+                town, nation,
+                ts(times, "registered"), ts(times, "joinedTownAt"), ts(times, "lastOnline"),
+                bool(status, "isOnline"), bool(status, "isNPC"), bool(status, "isMayor"),
+                bool(status, "isKing"), bool(status, "hasTown"), bool(status, "hasNation"),
+                dblOf(stats, "balance", 0), intOf(stats, "numFriends", 0),
+                List.copyOf(strList(pl, "friends")), townRanks, nationRanks);
+    }
+
+    private static NationFullData parseNationFull(JsonObject n) {
+        JsonObject status = n.has("status") && n.get("status").isJsonObject() ? n.getAsJsonObject("status") : new JsonObject();
+        JsonObject stats  = n.has("stats")  && n.get("stats").isJsonObject()  ? n.getAsJsonObject("stats")  : new JsonObject();
+        JsonObject times  = n.has("timestamps") && n.get("timestamps").isJsonObject() ? n.getAsJsonObject("timestamps") : new JsonObject();
+        String king = n.has("king") && n.get("king").isJsonObject() ? str(n.getAsJsonObject("king"), "name", "") : "";
+        String capital = n.has("capital") && n.get("capital").isJsonObject() ? str(n.getAsJsonObject("capital"), "name", "") : "";
+
+        int sx = 0, sy = 0, sz = 0;
+        if (n.has("coordinates") && n.get("coordinates").isJsonObject()) {
+            JsonObject c = n.getAsJsonObject("coordinates");
+            if (c.has("spawn") && c.get("spawn").isJsonObject()) {
+                JsonObject sp = c.getAsJsonObject("spawn");
+                sx = (int) Math.round(dblOf(sp, "x", 0));
+                sy = (int) Math.round(dblOf(sp, "y", 0));
+                sz = (int) Math.round(dblOf(sp, "z", 0));
+            }
+        }
+
+        java.util.LinkedHashMap<String, List<String>> ranks = new java.util.LinkedHashMap<>();
+        if (n.has("ranks") && n.get("ranks").isJsonObject()) {
+            for (var e : n.getAsJsonObject("ranks").entrySet()) {
+                List<String> holders = new ArrayList<>();
+                if (e.getValue().isJsonArray()) {
+                    for (JsonElement el : e.getValue().getAsJsonArray()) {
+                        if (el.isJsonObject()) holders.add(str(el.getAsJsonObject(), "name", ""));
+                        else if (el.isJsonPrimitive()) holders.add(el.getAsString());
+                    }
+                }
+                ranks.put(e.getKey(), List.copyOf(holders));
+            }
+        }
+
+        List<NationFullData.Pact> pacts = new ArrayList<>();
+        List<String> embOwn = new ArrayList<>(), embAgainst = new ArrayList<>();
+        if (n.has("pacts") && n.get("pacts").isJsonObject()) {
+            JsonObject pj = n.getAsJsonObject("pacts");
+            for (String key : new String[]{"active", "pending"}) {
+                if (!pj.has(key) || !pj.get(key).isJsonArray()) continue;
+                for (JsonElement el : pj.getAsJsonArray(key)) {
+                    if (!el.isJsonObject()) continue;
+                    JsonObject p = el.getAsJsonObject();
+                    // createdAt / expiresAt / duration are nested under "stats"; reading them off the pact
+                    // itself silently produced zeros, which is why every pact rendered with no dates.
+                    JsonObject ps = p.has("stats") && p.get("stats").isJsonObject()
+                            ? p.getAsJsonObject("stats") : new JsonObject();
+                    pacts.add(new NationFullData.Pact(str(p, "sender", ""), str(p, "receiver", ""),
+                            str(p, "status", key.toUpperCase(java.util.Locale.ROOT)),
+                            ts(ps, "createdAt"), ts(ps, "expiresAt"), ts(ps, "duration")));
+                }
+            }
+        }
+        if (n.has("embargoes") && n.get("embargoes").isJsonObject()) {
+            JsonObject ej = n.getAsJsonObject("embargoes");
+            embOwn = strList(ej, "own");
+            embAgainst = strList(ej, "against");
+        }
+
+        return new NationFullData(
+                str(n, "name", "?"), str(n, "board", ""), str(n, "wiki", ""), str(n, "discord", ""),
+                king, capital, ts(times, "registered"),
+                bool(status, "isPublic"), bool(status, "isOpen"), bool(status, "isNeutral"),
+                intOf(stats, "nationBonus", 0), intOf(stats, "numTownBlocks", 0),
+                intOf(stats, "numResidents", 0), intOf(stats, "numTowns", 0),
+                intOf(stats, "numOutlaws", 0), intOf(stats, "numAllies", 0),
+                intOf(stats, "numEnemies", 0), dblOf(stats, "balance", 0),
+                sx, sy, sz,
+                List.copyOf(strList(n, "towns")), List.copyOf(strList(n, "residents")),
+                List.copyOf(strList(n, "outlaws")), List.copyOf(strList(n, "allies")),
+                List.copyOf(strList(n, "enemies")), List.copyOf(strList(n, "sanctioned")),
+                Map.copyOf(ranks), List.copyOf(pacts),
+                List.copyOf(embOwn), List.copyOf(embAgainst));
+    }
+
+    /** Full record for ONE player, for the expanded panel. */
+    public CompletableFuture<PlayerFullData> fetchPlayerFull(String playerName) {
+        return fetchOne(BASE + "/players", playerName, EarthMcApiClient::parsePlayerFull);
+    }
+
+    /** Full record for ONE nation, for the expanded panel. */
+    public CompletableFuture<NationFullData> fetchNationFull(String nationName) {
+        return fetchOne(BASE + "/nations", nationName, EarthMcApiClient::parseNationFull);
+    }
+
+    /** One-name query against any of the v4 collection endpoints, parsed by {@code parser}. */
+    private <T> CompletableFuture<T> fetchOne(String url, String name,
+                                              java.util.function.Function<JsonObject, T> parser) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                JsonObject body = new JsonObject();
+                JsonArray q = new JsonArray();
+                q.add(name);
+                body.add("query", q);
+                JsonElement root = JsonParser.parseString(postGated(url, body.toString()));
+                if (!root.isJsonArray() || root.getAsJsonArray().isEmpty()) return null;
+                JsonElement first = root.getAsJsonArray().get(0);
+                return first.isJsonObject() ? parser.apply(first.getAsJsonObject()) : null;
+            } catch (Exception e) {
+                LOGGER.warn("[TownyMap] Full lookup failed for {}: {}", name, e.getMessage());
+                return null;
+            }
+        }, executor);
+    }
+
+    /** Fetches the full record for ONE town, for the expanded panel. */
+    public CompletableFuture<TownFullData> fetchTownFull(String townName) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                JsonObject body = new JsonObject();
+                JsonArray q = new JsonArray();
+                q.add(townName);
+                body.add("query", q);
+                String json = postGated(BASE + "/towns", body.toString());
+                JsonElement root = JsonParser.parseString(json);
+                if (!root.isJsonArray() || root.getAsJsonArray().isEmpty()) return null;
+                JsonElement first = root.getAsJsonArray().get(0);
+                return first.isJsonObject() ? parseTownFull(first.getAsJsonObject()) : null;
+            } catch (Exception e) {
+                LOGGER.warn("[TownyMap] Failed to fetch full town data for {}: {}", townName, e.getMessage());
+                return null;
+            }
+        }, executor);
     }
 
     private static boolean bool(JsonObject obj, String key) {

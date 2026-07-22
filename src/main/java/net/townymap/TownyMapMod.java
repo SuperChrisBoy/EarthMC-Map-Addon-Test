@@ -99,6 +99,8 @@ public class TownyMapMod implements ClientModInitializer {
     private static final Set<String> townActiveLoading = ConcurrentHashMap.newKeySet();
     private static final Map<String, Integer> nationActiveCache = new ConcurrentHashMap<>();
     private static final Map<String, NationBonusProjection> nationBonusProjCache = new ConcurrentHashMap<>();
+    private static final Map<String, net.townymap.model.TownOverclaimProjection> townOverclaimCache = new ConcurrentHashMap<>();
+    private static final Set<String> townOverclaimLoading = ConcurrentHashMap.newKeySet();
     private static final Set<String> nationBonusProjLoading = ConcurrentHashMap.newKeySet();
     private static final AtomicBoolean townDetailsSaveScheduled = new AtomicBoolean(false);
     private static volatile MapJumpTarget townInfoRouteTarget;
@@ -1274,6 +1276,8 @@ public class TownyMapMod implements ClientModInitializer {
         TownInfoOverlay.ActionResult result = TownInfoOverlay.handleClick(mouseX, mouseY);
         if (result.action() == TownInfoOverlay.Action.FAVORITE) {
             toggleFavorite(result.townName());
+        } else if (result.action() == TownInfoOverlay.Action.EXPAND) {
+            openTownDetail(result.townName());
         } else if (result.action() == TownInfoOverlay.Action.DISCORD) {
             TownInfoOverlay.openDiscord(result.url());
         } else if (result.action() == TownInfoOverlay.Action.ROUTE) {
@@ -1284,6 +1288,47 @@ public class TownyMapMod implements ClientModInitializer {
             TownSearchOverlay.openSearch(result.searchType(), result.searchName());
         }
         return result;
+    }
+
+    /**
+     * Opens an expanded panel for a town, nation or player. The full record is fetched on demand rather
+     * than held for every visible entity: those payloads carry entire resident/town/friend lists, which
+     * would be a lot of memory to keep for thousands of entities to serve a panel showing one at a time.
+     *
+     * <p>{@code parent} becomes the panel's back target, so following names from town to player to nation
+     * walks back the way it came.
+     */
+    public static void openDetail(net.townymap.gui.DetailScreen.Kind kind, String name,
+                                  net.minecraft.client.gui.screen.Screen parent) {
+        if (earthMcApi == null || name == null || name.isBlank()) return;
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null) return;
+        net.minecraft.client.gui.screen.Screen from =
+                parent != null ? parent : client.currentScreen;
+
+        java.util.concurrent.CompletableFuture<net.townymap.gui.DetailScreen.Page> future = switch (kind) {
+            case TOWN -> earthMcApi.fetchTownFull(name)
+                    .thenApply(d -> d == null ? null : net.townymap.gui.DetailPages.town(d));
+            case PLAYER -> earthMcApi.fetchPlayerFull(name)
+                    .thenApply(d -> d == null ? null : net.townymap.gui.DetailPages.player(d));
+            case NATION -> earthMcApi.fetchNationFull(name)
+                    .thenApply(d -> d == null ? null : net.townymap.gui.DetailPages.nation(d));
+        };
+
+        // Show the panel immediately in a loading state. Waiting for the fetch before opening anything made
+        // a click look like it had simply done nothing, which is exactly how a slow or failed lookup read.
+        net.townymap.gui.DetailScreen screen = new net.townymap.gui.DetailScreen(from, name);
+        client.setScreen(screen);
+        future.thenAccept(page -> client.execute(() -> {
+            if (client.currentScreen != screen) return;   // navigated away while the fetch was in flight
+            if (page == null) screen.markFailed();
+            else screen.setPage(page);
+        }));
+    }
+
+    /** Convenience for the map popup's Expand button. */
+    public static void openTownDetail(String townName) {
+        openDetail(net.townymap.gui.DetailScreen.Kind.TOWN, townName, null);
     }
 
     /**
@@ -1587,6 +1632,25 @@ public class TownyMapMod implements ClientModInitializer {
     /** Triggers the combined active+projection lookup on first view (a per-resident timestamp lookup, so
      *  only nations actually opened are looked up) and returns the projection (null until loaded). The
      *  active count lands in the cached nation details, driving the inactive row. */
+    /**
+     * When the given town becomes overclaimable, or null until the lookup lands. Safe to call every frame:
+     * the fetch is deduped by both the result cache and an in-flight set, exactly like the nation bonus
+     * projection, so a panel polling this issues at most one request per town.
+     */
+    public static net.townymap.model.TownOverclaimProjection townOverclaimProjection(String townName) {
+        if (townName == null || townName.isBlank() || earthMcApi == null) return null;
+        String key = townKey(townName);
+        net.townymap.model.TownOverclaimProjection cached = townOverclaimCache.get(key);
+        if (cached != null) return cached;
+        if (!townOverclaimLoading.add(key)) return null;
+        earthMcApi.fetchTownOverclaim(townName).whenComplete((proj, error) -> {
+            townOverclaimCache.put(key,
+                    proj != null ? proj : net.townymap.model.TownOverclaimProjection.NONE);
+            townOverclaimLoading.remove(key);
+        });
+        return null;
+    }
+
     public static NationBonusProjection nationBonusProjection(String nationName) {
         if (nationName == null) return null;
         NationBonusProjection cached = nationBonusProjCache.get(townKey(nationName));

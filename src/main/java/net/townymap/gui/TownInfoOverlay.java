@@ -183,8 +183,7 @@ public final class TownInfoOverlay {
         String town = currentData.townName();
         if (inside(mouseX, mouseY, favoriteX1, favoriteY1, favoriteX2, favoriteY2)) return ActionResult.favorite(town);
         if (inside(mouseX, mouseY, discordX1, discordY1, discordX2, discordY2)) {
-            String url = normalizeDiscordUrl(currentData.discord());
-            return url.isBlank() ? ActionResult.none() : ActionResult.discord(town, url);
+            return ActionResult.expand(town);
         }
         if (inside(mouseX, mouseY, routeX1, routeY1, routeX2, routeY2)) return ActionResult.route(town);
         return ActionResult.none();
@@ -330,8 +329,10 @@ public final class TownInfoOverlay {
         routeY2 = by + BUTTON_HEIGHT;
         hasButtons = true;
 
-        boolean hasDiscord = !normalizeDiscordUrl(currentData.discord()).isBlank();
-        drawButton(ctx, tr, discordX1, discordY1, discordX2, discordY2, "Discord", hasDiscord);
+        // "Expand" replaces the old Discord button: the popup can only show a handful of fields, and the
+        // full panel carries the Discord link itself. Always enabled — unlike Discord, every town has
+        // something to show.
+        drawButton(ctx, tr, discordX1, discordY1, discordX2, discordY2, "Expand", true);
         drawButton(ctx, tr, routeX1, routeY1, routeX2, routeY2, "Route", true);
     }
 
@@ -387,6 +388,10 @@ public final class TownInfoOverlay {
         public static ActionResult favorite(String townName) {
             return new ActionResult(Action.FAVORITE, townName, "", "", "");
         }
+        public static ActionResult expand(String townName) {
+            return new ActionResult(Action.EXPAND, townName, "", "", "");
+        }
+
         public static ActionResult discord(String townName, String url) {
             return new ActionResult(Action.DISCORD, townName, url, "", "");
         }
@@ -401,6 +406,7 @@ public final class TownInfoOverlay {
     public enum Action {
         NONE,
         FAVORITE,
+        EXPAND,
         DISCORD,
         ROUTE,
         SEARCH
