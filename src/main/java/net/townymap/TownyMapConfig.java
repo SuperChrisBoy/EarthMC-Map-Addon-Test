@@ -318,6 +318,37 @@ public class TownyMapConfig {
         return value;
     }
 
+    /**
+     * Fields holding the user's own DATA rather than their preferences. "Reset All" must not touch these:
+     * losing a favourites list or a set of counted chunks to a settings reset would be destructive and
+     * unrecoverable, and no one pressing "Reset All" on a settings screen expects it.
+     */
+    private static final java.util.Set<String> PRESERVED_ON_RESET = java.util.Set.of(
+            "favoriteTowns", "chunkCounterSelection", "chunkCounterGroups",
+            "activeChunkCounterGroup", "chunkCounterGroupCount");
+
+    /**
+     * Copies every persisted field of this config into {@code target}. "Reset All" uses a freshly
+     * constructed TownyMapConfig, which holds the field-initialised defaults, so this resets the whole
+     * screen without enumerating settings by hand — an explicit list would silently miss any option
+     * added later. Mirrors exactly what Gson persists: public, non-static, non-final fields.
+     */
+    public void copyInto(TownyMapConfig target) {
+        for (java.lang.reflect.Field f : TownyMapConfig.class.getDeclaredFields()) {
+            if (PRESERVED_ON_RESET.contains(f.getName())) continue;
+            int mods = f.getModifiers();
+            if (java.lang.reflect.Modifier.isStatic(mods)
+                    || java.lang.reflect.Modifier.isFinal(mods)
+                    || java.lang.reflect.Modifier.isTransient(mods)
+                    || !java.lang.reflect.Modifier.isPublic(mods)) continue;
+            try {
+                f.set(target, f.get(this));
+            } catch (IllegalAccessException ignored) {
+                // A field we cannot write is one the user cannot change either; skipping is correct.
+            }
+        }
+    }
+
     public void save() {
         Path path = FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
         try {
