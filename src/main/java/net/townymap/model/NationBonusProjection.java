@@ -15,6 +15,25 @@ package net.townymap.model;
  * @param dropDate         human-readable date of the drop (e.g. "Jul 11 2026")
  */
 public record NationBonusProjection(int nextBonus, int daysUntilDrop, int hoursUntilDrop,
-                                    int minutesUntilDrop, String dropDate) {
-    public static final NationBonusProjection NONE = new NationBonusProjection(0, -1, -1, -1, "");
+                                    int minutesUntilDrop, String dropDate, long dropAtMs) {
+    public static final NationBonusProjection NONE = new NationBonusProjection(0, -1, -1, -1, "", 0L);
+
+    /**
+     * Days remaining recomputed against {@code now}, so a panel left open counts down instead of showing
+     * the snapshot taken when the projection was fetched.
+     */
+    public int daysUntilDropAt(long now) {
+        if (dropAtMs <= 0) return daysUntilDrop;
+        return (int) Math.max(0, Math.ceil((dropAtMs - now) / 86_400_000.0));
+    }
+
+    public int hoursUntilDropAt(long now) {
+        if (dropAtMs <= 0) return hoursUntilDrop;
+        return (int) Math.max(0, Math.ceil((dropAtMs - now) / 3_600_000.0));
+    }
+
+    public int minutesUntilDropAt(long now) {
+        if (dropAtMs <= 0) return minutesUntilDrop;
+        return (int) Math.max(0, Math.ceil((dropAtMs - now) / 60_000.0));
+    }
 }

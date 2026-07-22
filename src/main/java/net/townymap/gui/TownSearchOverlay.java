@@ -62,6 +62,8 @@ public final class TownSearchOverlay {
     private static int cachedNationDetailCount = -1;
     private static List<Result> cachedResults = List.of();
     private static int infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH;
+    private static int infoExpandX, infoExpandY, infoExpandW, infoExpandH;
+    private static boolean infoExpandVisible;
     private static boolean infoDiscordVisible;
     private static String infoDiscordUrl = "";
     // Clickable name spans inside the selected-info panel (Mayor/King → player,
@@ -133,6 +135,15 @@ public final class TownSearchOverlay {
         if (favoriteClick.consumed()) return favoriteClick;
         if (infoDiscordVisible && inside(mouseX, mouseY, infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH)) {
             TownInfoOverlay.openDiscord(infoDiscordUrl);
+            return ClickResult.consumedResult();
+        }
+        if (infoExpandVisible && inside(mouseX, mouseY, infoExpandX, infoExpandY, infoExpandW, infoExpandH)) {
+            DetailScreen.Kind kind = switch (selectedType) {
+                case "nation" -> DetailScreen.Kind.NATION;
+                case "player" -> DetailScreen.Kind.PLAYER;
+                default -> DetailScreen.Kind.TOWN;
+            };
+            TownyMapMod.openDetail(kind, selectedName, null);
             return ClickResult.consumedResult();
         }
         // Clicking a name inside the info panel re-searches for that entity.
@@ -515,6 +526,7 @@ public final class TownSearchOverlay {
         selectedType = "";
         selectedName = "";
         infoDiscordVisible = false;
+        infoExpandVisible = false;
         infoDiscordUrl = "";
         infoLinks.clear();
     }
@@ -577,6 +589,7 @@ public final class TownSearchOverlay {
                                            Map<String, PlayerHistoryEntry> playerHistory,
                                            Map<String, EarthMcNationData> nationDetails) {
         infoDiscordVisible = false;
+        infoExpandVisible = false;
         infoDiscordUrl = "";
         infoLinks.clear();
         if (selectedName.isBlank()) return;
@@ -585,6 +598,8 @@ public final class TownSearchOverlay {
         if (lines.isEmpty()) return;
         String discordUrl = selectedDiscordUrl(townDetails, nationDetails);
         boolean showDiscordButton = !discordUrl.isBlank();
+        // Every entity the search panel can show has a full panel behind it, so Expand is always offered.
+        boolean showExpand = !selectedType.isBlank();
         if (lines.size() > MAX_INFO_LINES) {
             lines = new ArrayList<>(lines.subList(0, MAX_INFO_LINES));
         }
@@ -592,7 +607,7 @@ public final class TownSearchOverlay {
         int maxW = 0;
         for (InfoRow row : lines) maxW = Math.max(maxW, rowWidth(tr, row));
         int boxW = Math.min(Math.max(WIDTH, maxW + 16), Math.max(WIDTH, sw - 24));
-        int buttonRowHeight = showDiscordButton ? ROW_HEIGHT + 7 : 0;
+        int buttonRowHeight = (showDiscordButton || showExpand) ? ROW_HEIGHT + 7 : 0;
         int boxH = lines.size() * 12 + 14 + buttonRowHeight;
         int x = Math.max(8, sw - boxW - 12);
         int y = Math.max(36, Math.min(sh - boxH - 36, sh / 2 - boxH / 2));
@@ -617,22 +632,41 @@ public final class TownSearchOverlay {
             }
             ty += 12;
         }
-        if (showDiscordButton) {
-            infoDiscordX = x + 7;
-            infoDiscordY = y + boxH - ROW_HEIGHT - 7;
-            infoDiscordW = Math.min(82, boxW - 14);
-            infoDiscordH = ROW_HEIGHT;
-            infoDiscordVisible = true;
-            infoDiscordUrl = discordUrl;
-            if (DarkButtons.enabled()) {
-                DarkButtons.draw(ctx, infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH, "Discord",
-                        true, 0xFFFFFFFF, scaledMouseX(), scaledMouseY());
-            } else {
-                Button button = Button.builder(coloredText("Discord", 0xFFFFFF), ignored -> {})
-                        .bounds(infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH)
-                        .build();
-                button.extractRenderState(ctx, scaledMouseX(), scaledMouseY(), 0.0F);
+        if (showDiscordButton || showExpand) {
+            int btnY = y + boxH - ROW_HEIGHT - 7;
+            int avail = boxW - 14;
+            int gap = 5;
+            int btnW = (showDiscordButton && showExpand)
+                    ? Math.min(82, (avail - gap) / 2) : Math.min(82, avail);
+            int bx = x + 7;
+            if (showDiscordButton) {
+                infoDiscordX = bx;
+                infoDiscordY = btnY;
+                infoDiscordW = btnW;
+                infoDiscordH = ROW_HEIGHT;
+                infoDiscordVisible = true;
+                infoDiscordUrl = discordUrl;
+                drawPanelButton(ctx, infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH, "Discord");
+                bx += btnW + gap;
             }
+            if (showExpand) {
+                infoExpandX = bx;
+                infoExpandY = btnY;
+                infoExpandW = btnW;
+                infoExpandH = ROW_HEIGHT;
+                infoExpandVisible = true;
+                drawPanelButton(ctx, infoExpandX, infoExpandY, infoExpandW, infoExpandH, "Expand");
+            }
+        }
+    }
+
+    private static void drawPanelButton(GuiGraphicsExtractor ctx, int bx, int by, int bw, int bh, String label) {
+        if (DarkButtons.enabled()) {
+            DarkButtons.draw(ctx, bx, by, bw, bh, label, true, 0xFFFFFFFF, scaledMouseX(), scaledMouseY());
+        } else {
+            Button button = Button.builder(coloredText(label, 0xFFFFFF), ignored -> {})
+                    .bounds(bx, by, bw, bh).build();
+            button.extractRenderState(ctx, scaledMouseX(), scaledMouseY(), 0.0F);
         }
     }
 
@@ -734,13 +768,15 @@ public final class TownSearchOverlay {
         }
         lines.add(InfoRow.text("§7Gold: §f" + formatGold(details.balance())));
         if (!details.registered().isBlank()) lines.add(InfoRow.text("§7Registered: §f" + details.registered()));
-        if (marker == null) {
-            if (details.lastOnlineMs() > 0) {
-                lines.add(InfoRow.text("§7Last online: §f" + details.lastOnline()
-                        + " §7(" + ageLabel(details.lastOnlineMs()) + ")"));
-            } else if (!details.lastOnline().isBlank()) {
-                lines.add(InfoRow.text("§7Last online: §f" + details.lastOnline()));
-            }
+        // Always say something about presence. This used to be skipped entirely for a player visible on the
+        // map, so the one case where the answer is simply "right now" showed nothing at all.
+        if (marker != null || details.online()) {
+            lines.add(InfoRow.text("§7Online: §anow"));
+        } else if (details.lastOnlineMs() > 0) {
+            lines.add(InfoRow.text("§7Last online: §f" + ageLabel(details.lastOnlineMs())
+                    + " §7(" + details.lastOnline() + ")"));
+        } else if (!details.lastOnline().isBlank()) {
+            lines.add(InfoRow.text("§7Last online: §f" + details.lastOnline()));
         }
         return List.copyOf(lines);
     }
