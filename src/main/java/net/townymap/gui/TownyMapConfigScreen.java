@@ -17,6 +17,7 @@ import net.townymap.mixin.CycleButtonAccessor;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -42,19 +43,62 @@ public class TownyMapConfigScreen extends Screen {
     private static final int COL_GAP = 6;
     private static final int PANEL_PAD = 14;
     private static final int SCROLLBAR_W = 6;
+    private static final int SIDEBAR_W = 96;     // category rail down the left of the body
+    private static final int DESC_H = 28;        // help strip above the footer
     private static final int FOOTER_HEIGHT = 40;
     private static final int PANEL_TOP = 32;
     private static final int SEARCH_Y = 38;
     private static final int SEARCH_H = 16;
     private static final int BODY_TOP = 60;
 
-    private static final int PANEL_BG = 0xE80E0F12;
+    // 0xB8 (72%) rather than the old 0xE8 (91%): the map stays legible behind the panel, which is what
+    // makes the screen feel like it belongs on top of the map instead of covering it.
+    private static final int PANEL_BG = 0xB80E0F12;
+    private static final int SIDEBAR_BG = 0x66080A0C;
+    private static final int ROW_HOVER = 0x22FFFFFF;
+    private static final int DESC_COLOR = 0xFF9CA3AF;
     private static final int PANEL_BORDER = 0xCC3A3D42;
     private static final int PANEL_ACCENT = 0xFF4FA37A;
     private static final int LABEL_COLOR = 0xFFE5E7EB;
 
     private static final Component YES = Component.literal("Yes").withStyle(ChatFormatting.GREEN);
     private static final Component NO = Component.literal("No").withStyle(ChatFormatting.RED);
+
+    /** Help text for the settings whose label does not explain them on its own. Options not listed here
+     *  are self-describing, so the strip simply stays empty rather than repeating the label back. */
+    private static final Map<String, String> DESCRIPTIONS = Map.ofEntries(
+            Map.entry("EarthMC Only",
+                    "Only run on EarthMC. Turn off to use the overlay on any server."),
+            Map.entry("EarthMC Map In Nether",
+                    "The map covers the overworld only. Choose whether to hide it in the Nether or convert coordinates."),
+            Map.entry("Smooth Town Outlines",
+                    "Smooth squaremap-style borders. Turn off for the original blocky chunk edges."),
+            Map.entry("Far Zoom Town Dots",
+                    "Collapse small towns to a dot when zoomed far out. Off keeps their real shape."),
+            Map.entry("Real Borders",
+                    "Draw actual country and state borders from Natural Earth data underneath the towns."),
+            Map.entry("Squaremap Background",
+                    "Show the map.earthmc.net imagery behind the overlay instead of Xaero's own tiles."),
+            Map.entry("Darken Map",
+                    "Dim the map imagery so town borders and player dots stand out more."),
+            Map.entry("World Map Overview",
+                    "Allow zooming out past Xaero's normal limit to see the whole EarthMC map."),
+            Map.entry("Dark Buttons",
+                    "Flat dark styling for the on-map buttons and this screen instead of vanilla textures."),
+            Map.entry("Wilderness Player Alert",
+                    "Flash a warning on the minimap when a player outside your nation is nearby."),
+            Map.entry("Player Name Range",
+                    "How far out player names stay on screen before they fade at distance."),
+            Map.entry("Town/Nation Range",
+                    "Zoom range within which town and nation labels are drawn."),
+            Map.entry("Map Mode RGB",
+                    "Tint every town by a single colour instead of its nation's colours."),
+            Map.entry("Custom Overlays",
+                    "Load your own GeoJSON overlays from the config folder."),
+            Map.entry("Chunk Grid",
+                    "Draw chunk boundaries on the minimap."),
+            Map.entry("Nation Capital Stars",
+                    "Mark each nation's capital with a star on the world map."));
 
     /** Field-initialised defaults, used to drive the per-row Reset buttons. */
     private static final TownyMapConfig DEFAULTS = new TownyMapConfig();
@@ -66,9 +110,13 @@ public class TownyMapConfigScreen extends Screen {
     private String searchQuery = "";
     private int scrollOffset;
     private int contentHeight;
+    private final List<String> categories = new ArrayList<>();
+    private String activeCategory;
+    private String currentCategory;          // section being populated during init()
+    private String hoveredDescription;
 
     // Geometry, recomputed each init() (handles resize).
-    private int panelLeft, panelWidth, innerRight, contentLeft, contentRight;
+    private int panelLeft, panelWidth, innerRight, contentLeft, contentRight, sidebarLeft;
     private int labelX, labelMaxW, ctrlX, resetX;
 
     public TownyMapConfigScreen(Screen parent) {
@@ -81,18 +129,19 @@ public class TownyMapConfigScreen extends Screen {
         cfg = TownyMapMod.getConfig();
         rows.clear();
 
-        panelWidth = Math.max(320, Math.min(this.width - 40, 460));
+        panelWidth = Math.max(400, Math.min(this.width - 40, 560));
         panelLeft = (this.width - panelWidth) / 2;
         innerRight = panelLeft + panelWidth - PANEL_PAD;
-        contentLeft = panelLeft + PANEL_PAD;
+        sidebarLeft = panelLeft;
+        contentLeft = panelLeft + SIDEBAR_W + PANEL_PAD;
         contentRight = innerRight - SCROLLBAR_W;
         resetX = contentRight - RESET_W;
         ctrlX = resetX - COL_GAP - CTRL_W;
         labelX = contentLeft;
         labelMaxW = Math.max(40, ctrlX - COL_GAP - labelX);
 
-        searchField = new EditBox(this.font, contentLeft, SEARCH_Y,
-                innerRight - contentLeft, SEARCH_H, Component.literal("Search"));
+        searchField = new EditBox(this.font, panelLeft + PANEL_PAD, SEARCH_Y,
+                innerRight - (panelLeft + PANEL_PAD), SEARCH_H, Component.literal("Search"));
         searchField.setMaxLength(64);
         searchField.setHint(Component.literal("Search…").withStyle(ChatFormatting.DARK_GRAY));
         searchField.setValue(searchQuery);
@@ -210,8 +259,15 @@ public class TownyMapConfigScreen extends Screen {
         action("Reload Overlays", () -> net.townymap.integration.CustomOverlayManager.reload());
 
         this.addRenderableWidget(
+                Button.builder(Component.literal("Reset All"), b -> {
+                    TownyMapConfig d = new TownyMapConfig();
+                    d.copyInto(cfg);
+                    cfg.save();
+                    this.rebuildWidgets();
+                }).bounds(panelLeft + PANEL_PAD, this.height - 30, 80, 20).build());
+        this.addRenderableWidget(
                 Button.builder(CommonComponents.GUI_DONE, b -> this.onClose())
-                        .bounds(this.width / 2 - 75, this.height - 30, 150, 20).build());
+                        .bounds(innerRight - 100, this.height - 30, 100, 20).build());
 
         relayout();
     }
@@ -219,7 +275,9 @@ public class TownyMapConfigScreen extends Screen {
     // ── Row building ──────────────────────────────────────────────────────────
 
     private void section(String label) {
-        rows.add(new Row(label, null, null, false, null));
+        currentCategory = label;
+        if (!categories.contains(label)) categories.add(label);
+        rows.add(new Row(label, null, null, false, null, label));
     }
 
     private void option(String label, AbstractWidget control, BooleanSupplier isDefault, Runnable resetAction) {
@@ -228,7 +286,7 @@ public class TownyMapConfigScreen extends Screen {
             cfg.save();
             this.rebuildWidgets();
         }).bounds(resetX, 0, RESET_W, 20).build();
-        rows.add(new Row(label, control, reset, false, isDefault));
+        rows.add(new Row(label, control, reset, false, isDefault, currentCategory));
         this.addRenderableWidget(control);
         this.addRenderableWidget(reset);
     }
@@ -236,7 +294,7 @@ public class TownyMapConfigScreen extends Screen {
     private void action(String label, Runnable onClick) {
         Button b = Button.builder(Component.literal(label), x -> onClick.run())
                 .bounds(contentLeft, 0, Math.max(40, contentRight - contentLeft), 20).build();
-        rows.add(new Row(label, b, null, true, null));
+        rows.add(new Row(label, b, null, true, null, currentCategory));
         this.addRenderableWidget(b);
     }
 
@@ -258,11 +316,14 @@ public class TownyMapConfigScreen extends Screen {
     private void relayout() {
         boolean searching = !searchQuery.isBlank();
         String needle = searchQuery.toLowerCase(Locale.ROOT);
+        if (activeCategory == null && !categories.isEmpty()) activeCategory = categories.get(0);
         int y = 0;
         for (int i = 0; i < rows.size(); i++) {
             Row r = rows.get(i);
             if (r.isSection()) {
-                boolean any = !searching || sectionHasMatch(i, needle);
+                // Categories are the left rail now, so the in-list header only appears while searching,
+                // where results span categories and need to say which one they came from.
+                boolean any = searching && sectionHasMatch(i, needle);
                 r.visible = any;
                 if (any) {
                     if (y > 0) y += SECTION_GAP;
@@ -270,7 +331,8 @@ public class TownyMapConfigScreen extends Screen {
                     y += SECTION_HEADER_H;
                 }
             } else {
-                boolean match = !searching || matches(r, needle);
+                boolean match = searching ? matches(r, needle)
+                                          : java.util.Objects.equals(r.category, activeCategory);
                 r.visible = match;
                 if (match) {
                     r.contentY = y;
@@ -338,6 +400,18 @@ public class TownyMapConfigScreen extends Screen {
         double my = click.y();
         int btn = click.button();
         // Right-click a cycling control to step it backward (mirrors the in-game map buttons).
+        // Category rail
+        if (btn == 0 && searchQuery.isBlank()
+                && mx >= sidebarLeft && mx < sidebarLeft + SIDEBAR_W
+                && my >= bodyTop() && my < bodyBottom()) {
+            int idx = (int) ((my - (bodyTop() + 4)) / 18);
+            if (idx >= 0 && idx < categories.size()) {
+                activeCategory = categories.get(idx);
+                scrollOffset = 0;
+                relayout();
+                return true;
+            }
+        }
         if (btn == 1) {
             for (Row r : rows) {
                 if (r.control instanceof CycleButton<?> cycling
@@ -374,10 +448,14 @@ public class TownyMapConfigScreen extends Screen {
     public void extractRenderState(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float delta) {
         renderPanel(ctx);
         refreshResetStates();
+        // Highlight before the widgets so the tint sits under the controls, not over them.
+        drawRowHighlight(ctx, mouseX, mouseY);
         super.extractRenderState(ctx, mouseX, mouseY, delta);
         if (DarkButtons.enabled()) drawDarkWidgetOverlay(ctx, mouseX, mouseY);
         ctx.centeredText(this.font, this.title, this.width / 2, 14, 0xFFFFFFFF);
+        drawSidebar(ctx, mouseX, mouseY);
         drawSectionsAndLabels(ctx);
+        drawDescription(ctx);
         drawScrollbar(ctx);
         drawScrollFades(ctx);
     }
@@ -403,8 +481,70 @@ public class TownyMapConfigScreen extends Screen {
         ctx.fill(panelLeft, PANEL_TOP, panelRight, bottom, PANEL_BG);
         ctx.fill(panelLeft, PANEL_TOP, panelRight, PANEL_TOP + 3, PANEL_ACCENT);
         ctx.fill(panelLeft, bodyTop() - 1, panelRight, bodyTop(), 0x663A3D42);
-        ctx.fill(panelLeft, bodyBottom(), panelRight, bodyBottom() + 1, 0x663A3D42);
-        ctx.fill(panelLeft, bodyBottom() + 1, panelRight, bottom, 0xAA14161A);
+
+        // Category rail: only while not searching, since search results span every category.
+        if (searchQuery.isBlank()) {
+            ctx.fill(sidebarLeft, bodyTop(), sidebarLeft + SIDEBAR_W, bodyBottom(), SIDEBAR_BG);
+            ctx.fill(sidebarLeft + SIDEBAR_W, bodyTop(), sidebarLeft + SIDEBAR_W + 1, bodyBottom(), 0x663A3D42);
+        }
+
+        int descTop = bodyBottom();
+        ctx.fill(panelLeft, descTop, panelRight, descTop + 1, 0x663A3D42);
+        ctx.fill(panelLeft, descTop + 1, panelRight, descTop + DESC_H, 0x5514161A);
+        ctx.fill(panelLeft, descTop + DESC_H, panelRight, descTop + DESC_H + 1, 0x663A3D42);
+        ctx.fill(panelLeft, descTop + DESC_H + 1, panelRight, bottom, 0xAA14161A);
+    }
+
+    private void drawSidebar(GuiGraphicsExtractor ctx, int mouseX, int mouseY) {
+        if (!searchQuery.isBlank()) return;
+        int y = bodyTop() + 4;
+        for (String cat : categories) {
+            boolean active = cat.equals(activeCategory);
+            boolean hover = mouseX >= sidebarLeft && mouseX < sidebarLeft + SIDEBAR_W
+                    && mouseY >= y && mouseY < y + 18;
+            if (active) {
+                ctx.fill(sidebarLeft, y, sidebarLeft + SIDEBAR_W, y + 18, 0x554FA37A);
+                ctx.fill(sidebarLeft, y, sidebarLeft + 3, y + 18, PANEL_ACCENT);
+            } else if (hover) {
+                ctx.fill(sidebarLeft, y, sidebarLeft + SIDEBAR_W, y + 18, ROW_HOVER);
+            }
+            String label = this.font.plainSubstrByWidth(cat, SIDEBAR_W - 16);
+            ctx.text(this.font, label, sidebarLeft + 9,
+                    y + (18 - this.font.lineHeight) / 2,
+                    active ? 0xFFFFFFFF : 0xFFB9BFC7, false);
+            y += 18;
+        }
+    }
+
+    /** Highlights the row under the cursor and remembers its help text for the strip below. */
+    private void drawRowHighlight(GuiGraphicsExtractor ctx, int mouseX, int mouseY) {
+        hoveredDescription = null;
+        int top = bodyTop(), bottom = bodyBottom();
+        if (mouseX < contentLeft - PANEL_PAD || mouseX > innerRight) return;
+        for (Row r : rows) {
+            if (!r.visible || r.isSection()) continue;
+            int rowY = top + r.contentY - scrollOffset;
+            if (rowY < top || rowY + 20 > bottom) continue;
+            if (mouseY >= rowY && mouseY < rowY + 20) {
+                ctx.fill(contentLeft - 6, rowY, contentRight + 2, rowY + 20, ROW_HOVER);
+                ctx.fill(contentLeft - 6, rowY, contentLeft - 4, rowY + 20, PANEL_ACCENT);
+                hoveredDescription = DESCRIPTIONS.get(r.label);
+                return;
+            }
+        }
+    }
+
+    private void drawDescription(GuiGraphicsExtractor ctx) {
+        if (hoveredDescription == null) return;
+        int descTop = bodyBottom();
+        int maxW = innerRight - (panelLeft + PANEL_PAD);
+        List<net.minecraft.util.FormattedCharSequence> wrapped =
+                this.font.split(Component.literal(hoveredDescription), maxW);
+        int y = descTop + 6;
+        for (int i = 0; i < Math.min(2, wrapped.size()); i++) {
+            ctx.text(this.font, wrapped.get(i), panelLeft + PANEL_PAD, y, DESC_COLOR, false);
+            y += 10;
+        }
     }
 
     private void drawSectionsAndLabels(GuiGraphicsExtractor ctx) {
@@ -461,7 +601,7 @@ public class TownyMapConfigScreen extends Screen {
     }
 
     private int bodyBottom() {
-        return Math.max(BODY_TOP + 60, this.height - FOOTER_HEIGHT);
+        return Math.max(BODY_TOP + 60, this.height - FOOTER_HEIGHT - DESC_H);
     }
 
     private int maxScroll() {
@@ -519,10 +659,13 @@ public class TownyMapConfigScreen extends Screen {
         final Button reset;
         final boolean fullWidth;
         final BooleanSupplier isDefault;
+        final String category;
         int contentY;
         boolean visible = true;
 
-        Row(String label, AbstractWidget control, Button reset, boolean fullWidth, BooleanSupplier isDefault) {
+        Row(String label, AbstractWidget control, Button reset, boolean fullWidth,
+            BooleanSupplier isDefault, String category) {
+            this.category = category;
             this.label = label;
             this.control = control;
             this.reset = reset;
