@@ -108,7 +108,14 @@ public class SquaremapApiClient {
         fetchExecutor.shutdownNow();
     }
 
-    public List<TownData>     getTowns()        { return towns;        }
+    /** When non-null, archive mode is active: getTowns() serves this frozen snapshot and live refresh is
+     *  paused, so the whole renderer shows the historical claims with no other changes. */
+    private volatile List<TownData> archiveTowns = null;
+
+    public List<TownData>     getTowns()        { return archiveTowns != null ? archiveTowns : towns; }
+    public boolean isArchiveActive()            { return archiveTowns != null; }
+    public void setArchiveTowns(List<TownData> t) { archiveTowns = t == null ? null : List.copyOf(t); }
+    public void clearArchive()                  { archiveTowns = null; lastMarkerFetchMs = 0; }
     /** Mayor parsed from the squaremap popup for this town key, or null if unknown. */
     public String getTownMayor(String townKey) { return townKey == null ? null : townMayors.get(townKey); }
     public String getTownNation(String townKey) { return townKey == null ? null : townNations.get(townKey); }
@@ -129,6 +136,7 @@ public class SquaremapApiClient {
     }
 
     private void tickTownMarkers(long refreshMs) {
+        if (archiveTowns != null) return;   // archive snapshot is frozen — don't overwrite it with live data
         long now = System.currentTimeMillis();
         if (!towns.isEmpty() && now - lastMarkerTickCheckMs < 1_000L) return;
         lastMarkerTickCheckMs = now;
@@ -437,7 +445,12 @@ public class SquaremapApiClient {
                     continue;
                 }
 
-                result.add(new PlayerMarker(name != null ? name : "?", uuid, x, z));
+                float yaw = 0f;
+                if (p.has("yaw") && p.get("yaw").isJsonPrimitive()) {
+                    try { yaw = p.get("yaw").getAsFloat(); } catch (Exception ignored) {}
+                }
+
+                result.add(new PlayerMarker(name != null ? name : "?", uuid, x, z, yaw));
             }
         } catch (Exception e) {
             LOGGER.error("[TownyMap] Failed to parse players.json", e);

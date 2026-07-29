@@ -9,6 +9,7 @@ import net.townymap.gui.DetailScreen.NameList;
 import net.townymap.gui.DetailScreen.Page;
 import net.townymap.gui.DetailScreen.Ref;
 import net.townymap.gui.DetailScreen.Rule;
+import net.townymap.api.ArchiveClient;
 import net.townymap.model.NationFullData;
 import net.townymap.model.PlayerFullData;
 import net.townymap.model.TownFullData;
@@ -73,6 +74,19 @@ public final class DetailPages {
         if (names != null && !names.isEmpty()) blocks.add(new NameList(title, refs(names, kind)));
     }
 
+    /** Adds "Meganation" / "Alliances" rows for a nation, if it belongs to any (from the alliance roster). */
+    private static void addAllianceBlocks(List<DetailScreen.Block> b, String nation) {
+        if (nation == null || nation.isBlank()) return;
+        List<String> megas = TownyMapMod.meganationsForNation(nation);
+        if (!megas.isEmpty()) {
+            b.add(new DetailScreen.Wide(megas.size() > 1 ? "Meganations" : "Meganation", String.join(", ", megas)));
+        }
+        List<String> allis = TownyMapMod.alliancesForNation(nation);
+        if (!allis.isEmpty()) {
+            b.add(new DetailScreen.Wide(allis.size() > 1 ? "Alliances" : "Alliance", String.join(", ", allis)));
+        }
+    }
+
     // ── Town ──────────────────────────────────────────────────────────────────
 
     public static Page town(TownFullData t) {
@@ -94,6 +108,7 @@ public final class DetailPages {
                     new Col("Nation", "—"),
                     new Col("Spawn", t.spawnX() + ", " + t.spawnY() + ", " + t.spawnZ()))));
         }
+        addAllianceBlocks(b, t.hasNation() ? t.nation() : "");
 
         if (!t.board().isBlank()) b.add(new DetailScreen.Wide("Board", t.board()));
         b.add(new Rule());
@@ -137,6 +152,108 @@ public final class DetailPages {
         String sub = t.hasNation() && !t.nation().isBlank()
                 ? (t.isCapital() ? "capital of " + t.nation() : t.nation()) : "no nation";
         return new Page(Kind.TOWN, t.name(), sub, b, DiscordUrl.normalize(t.discord()), t.wiki());
+    }
+
+    /** The Expand panel for an ARCHIVED town — built only from what the Wayback snapshot recorded. Fields the
+     *  archive doesn't have (chunks, bank, spawn, open/for-sale, discord, wiki…) are simply not shown. */
+    public static Page archiveTown(ArchiveClient.ArchiveTown t) {
+        List<DetailScreen.Block> b = new ArrayList<>();
+
+        b.add(new Cols(List.of(
+                new Col("Mayor", orDash(t.mayor()), t.mayor() == null || t.mayor().isBlank() ? null : new Ref(Kind.PLAYER, t.mayor())),
+                new Col("Founded", orDash(t.founded())),
+                new Col("Chunks", String.valueOf(t.chunks())))));
+
+        if (t.nation() != null && !t.nation().isBlank()) {
+            // No alliance/meganation rows here: that data is only available live, not for the archived date.
+            b.add(new Cols(List.of(new Col("Nation", t.nation(), new Ref(Kind.NATION, t.nation())))));
+        }
+        if (t.board() != null && !t.board().isBlank()) b.add(new DetailScreen.Wide("Board", t.board()));
+        b.add(new Rule());
+
+        b.add(chips("public", t.isPublic(), "pvp", t.pvp()));
+        addNames(b, "Residents", t.residents(), Kind.PLAYER);
+        addNames(b, "Councillors", t.councillors(), Kind.PLAYER);
+
+        String sub = (t.nation() == null || t.nation().isBlank()) ? "no nation"
+                : (t.capital() ? "capital of " + t.nation() : t.nation());
+        return new Page(Kind.TOWN, t.name(), sub, b, "", "");
+    }
+
+    private static String orDash(String s) {
+        return s == null || s.isBlank() ? "—" : s;
+    }
+
+    /**
+     * EarthMC's formattedName is MiniMessage (e.g. "&lt;dark_blue&gt; Maire Name"). Builds a styled MC
+     * {@link net.minecraft.network.chat.Component} from it — named colours/formats via {@link net.minecraft.ChatFormatting},
+     * and &lt;#rrggbb&gt; hex via {@link net.minecraft.network.chat.TextColor} — so it renders in its true colour.
+     */
+    static net.minecraft.network.chat.Component miniToText(String s) {
+        net.minecraft.network.chat.MutableComponent root = net.minecraft.network.chat.Component.empty();
+        if (s == null || s.isEmpty()) return root;
+        net.minecraft.network.chat.Style style = net.minecraft.network.chat.Style.EMPTY;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("<(/?)(#[0-9a-fA-F]{6}|[a-zA-Z_]+)(:[^>]*)?>").matcher(s);
+        int last = 0;
+        while (m.find()) {
+            if (m.start() > last) root.append(net.minecraft.network.chat.Component.literal(s.substring(last, m.start())).setStyle(style));
+            last = m.end();
+            if (!m.group(1).isEmpty()) { style = net.minecraft.network.chat.Style.EMPTY; continue; }   // closing → reset
+            String tag = m.group(2).toLowerCase(java.util.Locale.ROOT);
+            if (tag.startsWith("#") && tag.length() == 7) {
+                try {
+                    style = style.withColor(net.minecraft.network.chat.TextColor.fromRgb(Integer.parseInt(tag.substring(1), 16)));
+                } catch (NumberFormatException ignored) { /* keep style */ }
+            } else if (tag.equals("reset")) {
+                style = net.minecraft.network.chat.Style.EMPTY;
+            } else {
+                net.minecraft.ChatFormatting f = chatFormattingByName(tag);
+                // 26.2 dropped ChatFormatting.isColor(); colours are the first 16 enum constants (BLACK..WHITE).
+                if (f != null) style = f.ordinal() < 16 ? style.withColor(f) : style.applyFormat(f);   // unknown → dropped
+            }
+        }
+        if (last < s.length()) root.append(net.minecraft.network.chat.Component.literal(s.substring(last)).setStyle(style));
+        return root;
+    }
+
+    /** Name → ChatFormatting. 26.2 removed getByName(String), so resolve by the enum name (dark_blue → DARK_BLUE). */
+    private static net.minecraft.ChatFormatting chatFormattingByName(String tag) {
+        try {
+            return net.minecraft.ChatFormatting.valueOf(tag.toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /** The Expand panel for a player in ARCHIVE mode — only their residency that date (town, its nation, and
+     *  their rank in it). No live data (last online, balance, registration…) exists in the snapshot. */
+    public static Page archivePlayer(String name, String town, String nation, String role) {
+        List<DetailScreen.Block> b = new ArrayList<>();
+        List<Col> cols = new ArrayList<>();
+        cols.add(new Col("Town", orDash(town), town == null || town.isBlank() ? null : new Ref(Kind.TOWN, town)));
+        if (nation != null && !nation.isBlank()) cols.add(new Col("Nation", nation, new Ref(Kind.NATION, nation)));
+        cols.add(new Col("Rank", orDash(role)));
+        b.add(new Cols(cols));
+        String sub = town == null || town.isBlank() ? "" : role.toLowerCase(java.util.Locale.ROOT) + " of " + town;
+        return new Page(Kind.PLAYER, name, sub, b, "", "");
+    }
+
+    /** The Expand panel for an ARCHIVED nation — derived entirely from that date's member towns: the towns
+     *  themselves, their residents and their chunk totals. Nation-level data the snapshot can't give (king,
+     *  founded, bank, bonus, over-claim, allies…) is omitted. */
+    public static Page archiveNation(String name, String capital, List<String> towns,
+                                     List<String> residents, int chunks) {
+        List<DetailScreen.Block> b = new ArrayList<>();
+        b.add(new Cols(List.of(
+                new Col("Capital", orDash(capital), capital == null || capital.isBlank() ? null : new Ref(Kind.TOWN, capital)),
+                new Col("Towns", String.valueOf(towns.size())),
+                new Col("Residents", String.valueOf(residents.size())))));
+        b.add(new Cols(List.of(new Col("Chunks", String.valueOf(chunks)))));
+        b.add(new Rule());
+        addNames(b, "Towns", towns, Kind.TOWN);
+        addNames(b, "Residents", residents, Kind.PLAYER);
+        return new Page(Kind.NATION, name, towns.size() + " towns", b, "", "");
     }
 
     /**
@@ -197,7 +314,7 @@ public final class DetailPages {
                 new Col("Balance", money(p.balance())))));
 
         if (!p.formattedName().isBlank() && !p.formattedName().equals(p.name())) {
-            b.add(new DetailScreen.Wide("Formatted name", p.formattedName()));
+            b.add(new DetailScreen.LegacyLine("Formatted name", miniToText(p.formattedName())));
         }
         if (!p.about().isBlank()) b.add(new DetailScreen.Wide("About", p.about()));
         b.add(new Rule());
@@ -235,6 +352,7 @@ public final class DetailPages {
                 new Col("Capital", n.capital().isBlank() ? "—" : n.capital(),
                         n.capital().isBlank() ? null : new Ref(Kind.TOWN, n.capital())),
                 new Col("Founded", date(n.registeredMs())))));
+        addAllianceBlocks(b, n.name());
 
         if (!n.board().isBlank()) b.add(new DetailScreen.Wide("Board", n.board()));
         b.add(new Rule());

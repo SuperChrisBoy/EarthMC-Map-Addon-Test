@@ -36,6 +36,12 @@ public record TownData(String name, int rgbColor, int fillRgbColor, List<int[][]
         return ((alpha & 0xFF) << 24) | (fillRgbColor & 0x00FFFFFF);
     }
 
+    /** A copy with new outline/fill colours but identical geometry — used by the meganation/alliance map
+     *  modes to recolour a town by its alliance. Reuses the precomputed bounds (no re-scan). */
+    public TownData withColors(int newRgbColor, int newFillRgbColor) {
+        return new TownData(name, newRgbColor, newFillRgbColor, polygonRings, minX, maxX, minZ, maxZ);
+    }
+
     public String key() {
         return name == null ? "" : name.toLowerCase(Locale.ROOT);
     }

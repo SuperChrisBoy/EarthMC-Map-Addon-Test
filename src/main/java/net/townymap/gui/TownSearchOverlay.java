@@ -47,6 +47,9 @@ public final class TownSearchOverlay {
 
     private static boolean focused;
     private static String query = "";
+    private static int caret = 0;             // cursor position within query (0..length)
+    private static int selAnchor = -1;        // other end of a selection; -1 = none. Selection = [lo, hi]
+    private static boolean textDragging = false;   // a left-drag started in the bar is extending the selection
     private static int selected;
     private static String selectedType = "";
     private static String selectedName = "";
@@ -64,6 +67,7 @@ public final class TownSearchOverlay {
     private static int infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH;
     private static int infoExpandX, infoExpandY, infoExpandW, infoExpandH;
     private static boolean infoExpandVisible;
+    private static int infoAnchorX, infoAnchorY;   // the right-side panel's top-left, for UI-Scale hit-testing
     private static boolean infoDiscordVisible;
     private static String infoDiscordUrl = "";
     // Clickable name spans inside the selected-info panel (Mayor/King → player,
@@ -85,8 +89,11 @@ public final class TownSearchOverlay {
                               List<String> favoriteTowns) {
         Minecraft mc = Minecraft.getInstance();
         Font tr = mc.font;
+        tickTextDrag(mc, sw);   // follow a left-drag over the bar (updates the caret/selection)
         int x = left(sw);
         int y = top();
+        boolean scaled = UiScale.active();   // shrink around the bar's CENTRE so a centred bar stays centred
+        if (scaled) UiScale.push(ctx, x + WIDTH / 2f, y + ROW_HEIGHT / 2f);
         int border = focused ? ACTIVE_BORDER : BORDER;
 
         ctx.fill(x - 1, y - 1, x + WIDTH + 1, y + ROW_HEIGHT + 1, border);
@@ -94,7 +101,17 @@ public final class TownSearchOverlay {
 
         String display = query.isEmpty() && !focused ? "Search towns/nations/players" : query;
         int color = query.isEmpty() && !focused ? 0xFFAAAAAA : 0xFFFFFFFF;
-        ctx.text(tr, display, x + 7, y + 5, color, true);
+        int textLeft = x + 7;
+        if (focused && hasSelection()) {   // drag / Ctrl+A selection highlight behind the text
+            int a = textLeft + tr.width(query.substring(0, selLo()));
+            int b = textLeft + tr.width(query.substring(0, selHi()));
+            ctx.fill(a, y + 3, b, y + ROW_HEIGHT - 2, 0x993B6FE0);
+        }
+        ctx.text(tr, display, textLeft, y + 5, color, true);
+        if (focused && (System.currentTimeMillis() / 500) % 2 == 0) {   // blinking caret, only as tall as the text
+            int cx = textLeft + tr.width(query.substring(0, Math.min(caret, query.length())));
+            ctx.fill(cx, y + 5, cx + 1, y + 4 + tr.lineHeight, 0xFFFFFFFF);
+        }
         renderFavorites(ctx, tr, favoritesX(x), y, sw, towns, favoriteTowns);
 
         // The results dropdown shows only while the bar is focused (actively
@@ -111,10 +128,20 @@ public final class TownSearchOverlay {
                 ctx.fill(x, rowY, x + WIDTH, rowY + ROW_HEIGHT, i == selected ? HOVER : BG);
                 ctx.text(tr, trimToWidth(tr, result.label(), WIDTH - 14), x + 7, rowY + 5, 0xFFFFFFFF, true);
             }
+            // Empty bar: tell players how to open the historical archive (there's no other discoverable entry).
+            // Kept short so the row lines up with the search bar's own width.
+            if (query.isEmpty()) {
+                int rowY = resultRowY(y, 0);
+                ctx.fill(x - 1, rowY - 1, x + WIDTH + 1, rowY + ROW_HEIGHT + 1, BORDER);
+                ctx.fill(x, rowY, x + WIDTH, rowY + ROW_HEIGHT, BG);
+                ctx.text(tr, trimToWidth(tr, "§7Type §fdd/mm/yyyy §7= archive", WIDTH - 14),
+                        x + 7, rowY + 5, 0xFFFFFFFF, true);
+            }
         }
         // The selected info panel is tied to the search bar: an empty bar means no lingering right-clicked
         // or searched selection. (A real selection always keeps the bar populated — openSearch/select set
         // the query — so this only fires once the bar has actually been cleared.)
+        if (scaled) UiScale.pop(ctx);   // end the bar/dropdown scale; the right-side info panel scales itself
         if (query.isEmpty()) clearSelection();
         renderSelectedInfo(ctx, tr, sw, sh,
                 towns, players, townDetails, playerDetails, playerHistory, nationDetails);
@@ -131,13 +158,20 @@ public final class TownSearchOverlay {
                                     List<String> favoriteTowns) {
         int x = left(sw);
         int y = top();
-        ClickResult favoriteClick = favoriteClick(mouseX, mouseY, favoritesX(x), y, towns, favoriteTowns);
+        // The bar/dropdown and the right-side info panel scale around different anchors, so un-scale the
+        // mouse for each separately. The caret uses the RAW mouse (charIndexAtX un-scales it itself).
+        double barMx = mouseX, barMy = mouseY, infoMx = mouseX, infoMy = mouseY;
+        if (UiScale.active()) {
+            barMx = UiScale.unscale(mouseX, x + WIDTH / 2.0); barMy = UiScale.unscale(mouseY, y + ROW_HEIGHT / 2.0);
+            infoMx = UiScale.unscale(mouseX, infoAnchorX);    infoMy = UiScale.unscale(mouseY, infoAnchorY);
+        }
+        ClickResult favoriteClick = favoriteClick(barMx, barMy, favoritesX(x), y, towns, favoriteTowns);
         if (favoriteClick.consumed()) return favoriteClick;
-        if (infoDiscordVisible && inside(mouseX, mouseY, infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH)) {
+        if (infoDiscordVisible && inside(infoMx, infoMy, infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH)) {
             TownInfoOverlay.openDiscord(infoDiscordUrl);
             return ClickResult.consumedResult();
         }
-        if (infoExpandVisible && inside(mouseX, mouseY, infoExpandX, infoExpandY, infoExpandW, infoExpandH)) {
+        if (infoExpandVisible && inside(infoMx, infoMy, infoExpandX, infoExpandY, infoExpandW, infoExpandH)) {
             DetailScreen.Kind kind = switch (selectedType) {
                 case "nation" -> DetailScreen.Kind.NATION;
                 case "player" -> DetailScreen.Kind.PLAYER;
@@ -148,16 +182,19 @@ public final class TownSearchOverlay {
         }
         // Clicking a name inside the info panel re-searches for that entity.
         for (InfoLink link : infoLinks) {
-            if (link.contains(mouseX, mouseY)) {
+            if (link.contains(infoMx, infoMy)) {
                 activateLink(link);
                 return ClickResult.consumedResult();
             }
         }
 
-        if (inside(mouseX, mouseY, x, y, WIDTH, ROW_HEIGHT)) {
+        if (inside(barMx, barMy, x, y, WIDTH, ROW_HEIGHT)) {
             focused = true;
             selected = 0;
-            clearSelection();   // hide the info panel while typing a new search
+            caret = charIndexAtX(sw, mouseX);   // place the cursor where they clicked (raw mouse)
+            selAnchor = caret;                  // anchor a potential drag-select
+            textDragging = true;
+            clearSelection();                   // hide the info panel while typing a new search
             return ClickResult.consumedResult();
         }
 
@@ -166,7 +203,7 @@ public final class TownSearchOverlay {
                     playerDetails, playerHistory, apiNations, nationDetails);
             for (int i = 0; i < results.size(); i++) {
                 int rowY = resultRowY(y, i);
-                if (inside(mouseX, mouseY, x, rowY, WIDTH, ROW_HEIGHT)) {
+                if (inside(barMx, barMy, x, rowY, WIDTH, ROW_HEIGHT)) {
                     selected = i;
                     Result result = results.get(i);
                     focused = false;
@@ -179,7 +216,61 @@ public final class TownSearchOverlay {
         // Click landed outside the search UI: just close the dropdown. Do NOT clear the selected info here —
         // that's deferred to the map click-away dismiss (armMapClickDismiss), so panning keeps the result up.
         focused = false;
+        textDragging = false;
+        selAnchor = -1;
         return ClickResult.none();
+    }
+
+    /**
+     * While a text-drag is active, follow the live mouse each frame (Xaero's GuiMap doesn't forward
+     * mouseDragged to us, and the map can't pan because our click cancelled its press handler). Ends the drag
+     * when the button is released — a press with no movement leaves just a caret.
+     */
+    private static void tickTextDrag(Minecraft mc, int sw) {
+        if (!textDragging) return;
+        boolean held = focused && mc.getWindow() != null
+                && GLFW.glfwGetMouseButton(mc.getWindow().handle(), GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
+        if (held) {
+            caret = charIndexAtX(sw, mc.mouseHandler.xpos() * sw / (double) mc.getWindow().getWidth());
+        } else {
+            textDragging = false;
+            if (selAnchor == caret) selAnchor = -1;
+        }
+    }
+
+    private static boolean hasSelection() { return selAnchor >= 0 && selAnchor != caret; }
+    private static int selLo() { return Math.min(caret, selAnchor); }
+    private static int selHi() { return Math.max(caret, selAnchor); }
+
+    /** The caret index nearest a screen-space x within the bar (0..length). */
+    private static int charIndexAtX(int sw, double mouseX) {
+        Font tr = Minecraft.getInstance().font;
+        if (UiScale.active()) mouseX = UiScale.unscale(mouseX, left(sw) + WIDTH / 2.0);   // scaled around the bar centre
+        double target = mouseX - (left(sw) + 7);
+        if (target <= 0) return 0;
+        for (int i = 1; i <= query.length(); i++) {
+            double mid = (tr.width(query.substring(0, i - 1)) + tr.width(query.substring(0, i))) / 2.0;
+            if (target < mid) return i - 1;
+        }
+        return query.length();
+    }
+
+    private static void deleteSelection() {
+        int lo = selLo(), hi = selHi();
+        query = query.substring(0, lo) + query.substring(hi);
+        caret = lo;
+        selAnchor = -1;
+    }
+
+    /** Inserts text at the caret (replacing any selection), respecting the length cap. */
+    private static void insertText(String s) {
+        if (hasSelection()) deleteSelection();
+        int room = MAX_QUERY - query.length();
+        if (room <= 0 || s.isEmpty()) return;
+        if (s.length() > room) s = s.substring(0, room);
+        query = query.substring(0, caret) + s + query.substring(caret);
+        caret += s.length();
+        selAnchor = -1;
     }
 
     public static ClickResult keyPressed(int keyCode, List<TownData> towns, List<PlayerMarker> players,
@@ -195,17 +286,53 @@ public final class TownSearchOverlay {
 
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
             focused = false;
+            selAnchor = -1;
+            return ClickResult.consumedResult();
+        }
+        // Ctrl+A selects the whole query.
+        if (keyCode == GLFW.GLFW_KEY_A && ctrlDown()) {
+            selAnchor = 0;
+            caret = query.length();
+            return ClickResult.consumedResult();
+        }
+        // Clipboard: Ctrl+C copy, Ctrl+X cut, Ctrl+V paste — on the selection if there is one, else the whole query.
+        if (keyCode == GLFW.GLFW_KEY_C && ctrlDown()) {
+            setClipboard(hasSelection() ? query.substring(selLo(), selHi()) : query);
+            return ClickResult.consumedResult();
+        }
+        if (keyCode == GLFW.GLFW_KEY_X && ctrlDown()) {
+            setClipboard(hasSelection() ? query.substring(selLo(), selHi()) : query);
+            if (hasSelection()) deleteSelection(); else { query = ""; caret = 0; selAnchor = -1; }
+            afterEdit();
+            return ClickResult.consumedResult();
+        }
+        if (keyCode == GLFW.GLFW_KEY_V && ctrlDown()) {
+            insertText(sanitizePaste(getClipboard()));
+            afterEdit();
             return ClickResult.consumedResult();
         }
         if (keyCode == GLFW.GLFW_KEY_BACKSPACE) {
-            if (!query.isEmpty()) query = query.substring(0, query.length() - 1);
-            invalidateResults();
-            clearSelection();
-            selected = Math.min(selected, Math.max(0,
-                    results(towns, players, townDetails, apiPlayers,
-                            playerDetails, playerHistory, apiNations, nationDetails).size() - 1));
+            if (hasSelection()) deleteSelection();
+            else if (ctrlDown()) deleteWordBackward();
+            else if (caret > 0) { query = query.substring(0, caret - 1) + query.substring(caret); caret--; }
+            selAnchor = -1;
+            afterEdit();
             return ClickResult.consumedResult();
         }
+        if (keyCode == GLFW.GLFW_KEY_DELETE) {
+            if (hasSelection()) deleteSelection();
+            else if (caret < query.length()) query = query.substring(0, caret) + query.substring(caret + 1);
+            selAnchor = -1;
+            afterEdit();
+            return ClickResult.consumedResult();
+        }
+        if (keyCode == GLFW.GLFW_KEY_LEFT || keyCode == GLFW.GLFW_KEY_RIGHT) {
+            int to = keyCode == GLFW.GLFW_KEY_LEFT ? caret - 1 : caret + 1;
+            moveCaret(Math.max(0, Math.min(query.length(), to)), shiftDown());
+            return ClickResult.consumedResult();
+        }
+        if (keyCode == GLFW.GLFW_KEY_HOME) { moveCaret(0, shiftDown()); return ClickResult.consumedResult(); }
+        if (keyCode == GLFW.GLFW_KEY_END)  { moveCaret(query.length(), shiftDown()); return ClickResult.consumedResult(); }
         if (keyCode == GLFW.GLFW_KEY_DOWN) {
             if (!results.isEmpty()) selected = Math.min(results.size() - 1, selected + 1);
             return ClickResult.consumedResult();
@@ -229,12 +356,75 @@ public final class TownSearchOverlay {
     public static boolean charTyped(char chr) {
         if (!focused) return false;
         if (Character.isISOControl(chr)) return true;
-        query += chr;
+        insertText(String.valueOf(chr));   // replaces any selection, inserts at the caret
+        afterEdit();
+        return true;
+    }
+
+    /** Post-edit housekeeping: reset the result cursor and rebuild the dropdown. */
+    private static void afterEdit() {
         selected = 0;
         invalidateResults();
         clearSelection();
-        return true;
     }
+
+    private static void moveCaret(int to, boolean extend) {
+        if (extend) { if (selAnchor < 0) selAnchor = caret; }
+        else selAnchor = -1;
+        caret = Math.max(0, Math.min(query.length(), to));
+    }
+
+    /** Ctrl+Backspace: deletes the word (and any whitespace right before it) just before the caret. */
+    private static void deleteWordBackward() {
+        int i = caret;
+        while (i > 0 && Character.isWhitespace(query.charAt(i - 1))) i--;
+        while (i > 0 && !Character.isWhitespace(query.charAt(i - 1))) i--;
+        query = query.substring(0, i) + query.substring(caret);
+        caret = i;
+    }
+
+    private static boolean shiftDown() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null || mc.getWindow() == null) return false;
+        long h = mc.getWindow().handle();
+        return GLFW.glfwGetKey(h, GLFW.GLFW_KEY_LEFT_SHIFT) == GLFW.GLFW_PRESS
+                || GLFW.glfwGetKey(h, GLFW.GLFW_KEY_RIGHT_SHIFT) == GLFW.GLFW_PRESS;
+    }
+
+    private static final int MAX_QUERY = 60;
+
+    private static void setClipboard(String s) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc != null && mc.keyboardHandler != null && s != null) mc.keyboardHandler.setClipboard(s);
+    }
+
+    private static String getClipboard() {
+        Minecraft mc = Minecraft.getInstance();
+        return mc != null && mc.keyboardHandler != null ? mc.keyboardHandler.getClipboard() : "";
+    }
+
+    /** Strips control characters (newlines, tabs…) so a multi-line paste stays a single search line. */
+    private static String sanitizePaste(String s) {
+        if (s == null) return "";
+        StringBuilder b = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (!Character.isISOControl(c)) b.append(c);
+        }
+        return b.toString();
+    }
+
+    /** True while Ctrl (or Cmd on macOS) is held — via raw GLFW, matching how this mod reads Shift elsewhere. */
+    private static boolean ctrlDown() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null || mc.getWindow() == null) return false;
+        long h = mc.getWindow().handle();
+        return GLFW.glfwGetKey(h, GLFW.GLFW_KEY_LEFT_CONTROL) == GLFW.GLFW_PRESS
+                || GLFW.glfwGetKey(h, GLFW.GLFW_KEY_RIGHT_CONTROL) == GLFW.GLFW_PRESS
+                || GLFW.glfwGetKey(h, GLFW.GLFW_KEY_LEFT_SUPER) == GLFW.GLFW_PRESS
+                || GLFW.glfwGetKey(h, GLFW.GLFW_KEY_RIGHT_SUPER) == GLFW.GLFW_PRESS;
+    }
+
 
     public static String query() {
         return query;
@@ -311,6 +501,13 @@ public final class TownSearchOverlay {
                                         Map<String, EarthMcNationData> nationDetails) {
         String needle = query.trim().toLowerCase(Locale.ROOT);
         if (needle.isEmpty()) return List.of();
+
+        // A dd/mm/yyyy query is an archive request: load the Wayback snapshot nearest that date.
+        int archiveDate = parseArchiveDate(query.trim());
+        if (archiveDate > 0) {
+            return List.of(new Result("View archive: " + archiveDateLabel(archiveDate),
+                    null, 0, "archive", String.valueOf(archiveDate)));
+        }
         if (needle.equals(cachedNeedle)
                 && cachedTownCount == towns.size()
                 && cachedTownDetailCount == townDetails.size()
@@ -364,6 +561,8 @@ public final class TownSearchOverlay {
 
             EarthMcNationData details = nationDetails.get(lowerName);
             String suffix = details == null ? "Checking" : capitalLabel(details);
+            String allianceTag = TownyMapMod.allianceTagForNation(nation.name());
+            if (!allianceTag.isEmpty()) suffix += " · " + allianceTag;
             nationMatches.add(new Result("Nation: " + nation.name() + " (" + suffix + ")",
                     nationTarget(nation.name(), details, townIndex),
                     score(nation.name(), needle), "nation", nation.name()));
@@ -451,7 +650,8 @@ public final class TownSearchOverlay {
         return result;
     }
 
-    private static void invalidateResults() {
+    /** Public so external data loads (e.g. the alliance roster) can force the result labels to rebuild. */
+    public static void invalidateResults() {
         cachedNeedle = null;
         cachedResults = List.of();
     }
@@ -509,7 +709,38 @@ public final class TownSearchOverlay {
         return "Capital: " + details.capitalName();
     }
 
+    /** Parses a dd/mm/yyyy date (lenient) to yyyymmdd, or 0 if invalid / before MIN_DATE. Public so the
+     *  settings screen can offer the same entry point. */
+    public static int parseArchiveDate(String s) {
+        // Lenient dd/mm/yyyy: no leading zero needed (17/4/2026); the separator may be / . , - OR a space
+        // (17 4 2026); and the year may be 2 or 4 digits (17 4 26 → 2026).
+        String sep = "(?:\\s*[/.,-]\\s*|\\s+)";
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("^\\s*(\\d{1,2})" + sep + "(\\d{1,2})" + sep + "(\\d{4}|\\d{2})\\s*$").matcher(s);
+        if (!m.matches()) return 0;
+        int d = Integer.parseInt(m.group(1)), mo = Integer.parseInt(m.group(2)), y = Integer.parseInt(m.group(3));
+        if (y < 100) y += 2000;   // two-digit year → 20xx
+        if (d < 1 || d > 31 || mo < 1 || mo > 12) return 0;
+        int yyyymmdd = y * 10000 + mo * 100 + d;
+        return yyyymmdd >= net.townymap.api.ArchiveClient.MIN_DATE ? yyyymmdd : 0;
+    }
+
+    private static String archiveDateLabel(int yyyymmdd) {
+        int y = yyyymmdd / 10000, mo = (yyyymmdd / 100) % 100, d = yyyymmdd % 100;
+        String[] mon = {"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+        return d + " " + mon[mo] + " " + y;
+    }
+
     private static void select(Result result) {
+        if ("archive".equals(result.type())) {
+            clearSelection();
+            query = "";
+            caret = 0;
+            selAnchor = -1;
+            invalidateResults();
+            TownyMapMod.enterArchive(Integer.parseInt(result.name()));
+            return;
+        }
         if ("town".equals(result.type())) {
             // Towns use the same rich popup as right-clicking the map (Route button + full details),
             // so the search bar and the map share one town GUI instead of a separate inline panel.
@@ -537,6 +768,9 @@ public final class TownSearchOverlay {
         query = "";
         focused = false;
         selected = 0;
+        caret = 0;
+        selAnchor = -1;
+        textDragging = false;
         favoritesOpen = false;
         cachedNeedle = null;
         clearSelection();
@@ -570,6 +804,9 @@ public final class TownSearchOverlay {
         query = name;
         selected = 0;
         focused = false;
+        caret = query.length();
+        selAnchor = -1;
+        textDragging = false;
         invalidateResults();
         if ("town".equals(type)) {
             // Town links resolve to the shared rich popup, matching a search selection / right-click.
@@ -611,12 +848,20 @@ public final class TownSearchOverlay {
         int boxH = lines.size() * 12 + 14 + buttonRowHeight;
         int x = Math.max(8, sw - boxW - 12);
         int y = Math.max(36, Math.min(sh - boxH - 36, sh / 2 - boxH / 2));
+        // Scale around the panel's RIGHT-MIDDLE so it stays pinned to the right edge and vertically centred.
+        infoAnchorX = x + boxW; infoAnchorY = y + boxH / 2;
+        boolean scaled = UiScale.active();
+        if (scaled) UiScale.push(ctx, infoAnchorX, infoAnchorY);
 
         ctx.fill(x - 1, y - 1, x + boxW + 1, y + boxH + 1, BORDER);
         ctx.fill(x, y, x + boxW, y + boxH, BG);
+        if ("player".equals(selectedType)) {   // player head in the top-right corner
+            int hs = 16;
+            net.townymap.render.PlayerHeadRenderer.drawMenuHead(ctx, selectedName, x + boxW - 5 - hs / 2, y + 5 + hs / 2, hs);
+        }
 
-        int mx = scaledMouseX();
-        int my = scaledMouseY();
+        int mx = scaled ? (int) Math.round(UiScale.unscale(scaledMouseX(), infoAnchorX)) : scaledMouseX();
+        int my = scaled ? (int) Math.round(UiScale.unscale(scaledMouseY(), infoAnchorY)) : scaledMouseY();
         int ty = y + 7;
         for (InfoRow row : lines) {
             if (row.hasLink()) {
@@ -658,6 +903,7 @@ public final class TownSearchOverlay {
                 drawPanelButton(ctx, infoExpandX, infoExpandY, infoExpandW, infoExpandH, "Expand");
             }
         }
+        if (scaled) UiScale.pop(ctx);
     }
 
     private static void drawPanelButton(GuiGraphicsExtractor ctx, int bx, int by, int bw, int bh, String label) {
@@ -706,7 +952,15 @@ public final class TownSearchOverlay {
                 lines.add(InfoRow.text("§7Details: §fChecking..."));
                 return List.copyOf(lines);
             }
+            boolean archive = TownyMapMod.isArchiveMode();
             if (!details.capitalName().isBlank()) lines.add(InfoRow.link("§7Capital: §f", details.capitalName(), "town"));
+            if (!archive) {   // alliance/meganation membership is only known live, not for the archived date
+                List<String> nationMegas = TownyMapMod.meganationsForNation(selectedName);
+                if (!nationMegas.isEmpty()) lines.add(InfoRow.text("§7Meganation: §f" + String.join(", ", nationMegas)));
+                List<String> nationAllis = TownyMapMod.alliancesForNation(selectedName);
+                if (!nationAllis.isEmpty())
+                    lines.add(InfoRow.text("§7Alliance" + (nationAllis.size() > 1 ? "s" : "") + ": §f" + String.join(", ", nationAllis)));
+            }
             if (!details.kingName().isBlank()) lines.add(InfoRow.link("§7King: §f", details.kingName(), "player"));
             if (!details.founded().isBlank()) lines.add(InfoRow.text("§7Founded: §f" + details.founded()));
             if (details.townCount() > 0) lines.add(InfoRow.text("§7Towns: §f" + details.townCount()));
@@ -718,29 +972,48 @@ public final class TownSearchOverlay {
                 // Nation bonus on its own row, with a projection of the next level drop when known.
                 // EarthMC computes the bonus on ACTIVE residents (inactive members are still counted in
                 // residentCount but don't earn bonus), so use its authoritative stats.nationBonus — the
-                // local tier-of-total-residents is only a fallback when the API didn't send it.
-                int bonusValue = details.nationBonus() >= 0
-                        ? details.nationBonus() : nationBonus(details.residentCount());
-                String bonusLine = "§7Bonus: §f" + bonusValue;
-                NationBonusProjection proj = TownyMapMod.nationBonusProjection(selectedName);
-                if (proj != null && proj.daysUntilDrop() >= 0) {
-                    // Cascade the countdown: days → hours (<24h) → minutes (<1h). Sub-day units come from the
-                    // absolute instant, so they're already offset-correct vs the ~noon-Berlin purge.
-                    String when;
-                    if (proj.minutesUntilDrop() < 60) when = proj.minutesUntilDrop() + "m";
-                    else if (proj.minutesUntilDrop() < 1440) when = proj.hoursUntilDrop() + "h";
-                    else when = proj.daysUntilDrop() + "d";
-                    bonusLine += " §8(→" + proj.nextBonus() + " in " + when + ", " + proj.dropDate() + ")";
+                // local tier-of-total-residents is only a fallback when the API didn't send it. Omitted in
+                // archive mode: it's a formula on the total, not a value the snapshot actually recorded.
+                if (!archive) {
+                    int bonusValue = details.nationBonus() >= 0
+                            ? details.nationBonus() : nationBonus(details.residentCount());
+                    String bonusLine = "§7Bonus: §f" + bonusValue;
+                    NationBonusProjection proj = TownyMapMod.nationBonusProjection(selectedName);
+                    if (proj != null && proj.daysUntilDrop() >= 0) {
+                        // Cascade the countdown: days → hours (<24h) → minutes (<1h). Sub-day units come from
+                        // the absolute instant, so they're already offset-correct vs the ~noon-Berlin purge.
+                        String when;
+                        if (proj.minutesUntilDrop() < 60) when = proj.minutesUntilDrop() + "m";
+                        else if (proj.minutesUntilDrop() < 1440) when = proj.hoursUntilDrop() + "h";
+                        else when = proj.daysUntilDrop() + "d";
+                        bonusLine += " §8(→" + proj.nextBonus() + " in " + when + ", " + proj.dropDate() + ")";
+                    }
+                    lines.add(InfoRow.text(bonusLine));
                 }
-                lines.add(InfoRow.text(bonusLine));
             }
             if (details.chunkCount() > 0) lines.add(InfoRow.text("§7Chunks: §f" + details.chunkCount()));
-            lines.add(InfoRow.text("§7Gold: §f" + formatGold(details.balance())));
+            if (!archive) lines.add(InfoRow.text("§7Gold: §f" + formatGold(details.balance())));
             if (details.outlawCount() > 0) lines.add(InfoRow.text("§7Outlaws: §f" + details.outlawCount()));
             if (details.enemyCount() > 0) lines.add(InfoRow.text("§7Enemies: §f" + details.enemyCount()));
             return List.copyOf(lines);
         }
         if (!"player".equals(selectedType)) return List.of();
+
+        // Archive mode: a player is only what the snapshot reveals — their town, its nation, and their rank.
+        // Nothing live (status, last seen, gold, last online…) is shown.
+        if (TownyMapMod.isArchiveMode()) {
+            ArrayList<InfoRow> lines = new ArrayList<>();
+            lines.add(InfoRow.text("§f§lPlayer: " + selectedName));
+            TownyMapMod.ArchivePlayerInfo info = TownyMapMod.archivePlayerInfo(selectedName);
+            if (info == null) {
+                lines.add(InfoRow.text("§7Not in this snapshot"));
+            } else {
+                lines.add(InfoRow.link("§7Town: §f", info.town(), "town"));
+                if (!info.nation().isBlank()) lines.add(InfoRow.link("§7Nation: §f", info.nation(), "nation"));
+                lines.add(InfoRow.text("§7Rank: §f" + info.role()));
+            }
+            return List.copyOf(lines);
+        }
 
         PlayerMarker marker = visibleMarker(selectedName, players);
         EarthMcPlayerData details = playerDetails.get(selectedName.toLowerCase(Locale.ROOT));
