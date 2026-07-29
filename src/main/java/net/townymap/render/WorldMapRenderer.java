@@ -54,6 +54,10 @@ public class WorldMapRenderer {
 
     private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("TownyMapAddon");
     private static final int DOT_HALF = 2;
+    // Hard ceiling on heads drawn in one frame; past it the rest are dots. Heads are 2 unbatchable textured
+    // draws each, so this caps the worst case — a very dense town at high zoom with hundreds on screen. The
+    // Head Range setting (config.playerHeadMinScale) is the main gate: below that zoom, everyone is a dot.
+    private static final int MAX_PLAYER_HEADS = 90;
     private static final double TOWN_FILL_MIN_SCALE = 0.035;
     private static final double MIN_TOWN_SCREEN_PIXELS = 0.0;
     private static final int CHUNK_SIZE = 16;
@@ -195,6 +199,16 @@ public class WorldMapRenderer {
     private int lastStatusDetailsSize = -1;
     private int lastStatusFavVersion = -1;
 
+    // Render source for the frame. In the Meganations/Alliances modes this is a recoloured copy of the town
+    // list (each town tinted by its alliance); otherwise it's api.getTowns() untouched. Published to a
+    // volatile so the off-thread cache builder reads one consistent instance. Memo fields make the recolour
+    // rebuild only when the base list, the mode, or the alliance data actually changes.
+    private volatile List<TownData> renderSource = null;
+    private List<TownData> recolored;
+    private List<TownData> recoloredBase;
+    private int recoloredMode = -1;
+    private int recoloredVersion = -1;
+
 
     public WorldMapRenderer(TownyMapConfig config, SquaremapApiClient api) {
         this.config = config;
@@ -208,6 +222,11 @@ public class WorldMapRenderer {
         visibleTownSeen.clear();
         townRenderCache = TownRenderCache.empty();
         townCacheRequestedSource = List.of();
+        // Force the baked outline tiles to rebuild on the next frame, so a data swap (entering/leaving
+        // archive mode) replaces the borders instead of the old ones lingering. Nulling the snapshot makes
+        // the render path's own mismatch check clear the tiles — on the render thread, where the texture
+        // manager is safe to touch — rather than clearing textures here, which may run off-thread.
+        outlineTilesSnapshot = null;
     }
 
     public void render(DrawContext ctx,
@@ -217,6 +236,7 @@ public class WorldMapRenderer {
                        Map<String, EarthMcPlayerData> playerDetails,
                        Map<String, EarthMcNationData> nationDetails) {
         if (blockScale <= 0) return;
+        renderSource = effectiveSource();   // publish this frame's source before the cache reads it
         double worldLeft   = cameraX - sw / 2.0 / blockScale;
         double worldRight  = cameraX + sw / 2.0 / blockScale;
         double worldTop    = cameraZ - sh / 2.0 / blockScale;
@@ -462,7 +482,7 @@ public class WorldMapRenderer {
                                                sw, sh, worldLeft, worldRight, worldTop, worldBottom)) {
             // Highlight layer on top, tinted with the live (optionally animating) colour. Blitted after the
             // main layer so it sits above the outlines it is highlighting.
-            if (config.townStatusOverlayMode > 0) {
+            if (isHighlightMode()) {
                 renderTownOutlineTiles(ctx, statusTiles, 0xFF000000 | statusHighlightRgb(),
                                        cameraX, cameraZ, blockScale, sw, sh,
                                        worldLeft, worldRight, worldTop, worldBottom);
@@ -476,7 +496,7 @@ public class WorldMapRenderer {
 
         int statusRgb = statusHighlightRgb();
         int fillColor0 = fillsEligible ? 0xFF : 0;
-        boolean overlayOn = config.townStatusOverlayMode > 0;
+        boolean overlayOn = isHighlightMode();
         boolean haveFavorites = !favoriteTownKeys.isEmpty();
 
         // Opacity depends on which outline style is active, because the two modes have different
@@ -516,10 +536,15 @@ public class WorldMapRenderer {
             case 1 -> details.canOutsidersSpawn();
             case 2 -> details.isOverClaimed();
             case 3 -> details.isOpen();
-            case 4 -> details.isForSale();
-            case 5 -> !details.hasNation();
+            // 4 (Meganations) and 5 (Alliances) are not single-colour highlights — they recolour the source.
             default -> false;
         };
+    }
+
+    /** The single-colour highlight modes (Public/Overclaim/Open). Modes 4/5 recolour the source instead. */
+    private boolean isHighlightMode() {
+        int m = config.townStatusOverlayMode;
+        return m >= 1 && m <= 3;
     }
 
     // Recomputes the set of towns the status mode highlights, which the tile bake EXCLUDES (they're drawn
@@ -537,8 +562,8 @@ public class WorldMapRenderer {
         lastStatusFavVersion = favoritesVersion;
 
         Set<String> next;
-        if (mode == 0) {
-            next = Set.of();
+        if (!isHighlightMode()) {
+            next = Set.of();   // None, or an alliance mode (which recolours the source instead)
         } else {
             next = new HashSet<>();
             for (RenderTown town : townRenderCache.allTowns()) {
@@ -1422,11 +1447,45 @@ public class WorldMapRenderer {
     }
 
     private TownRenderCache townRenderCache() {
-        List<TownData> towns = api.getTowns();
+        List<TownData> towns = currentRenderSource();
         TownRenderCache cache = townRenderCache;
         if (cache.matches(towns)) return cache;
         requestTownRenderCacheBuild(towns);
         return cache;
+    }
+
+    /** The town list to render this frame: alliance-recoloured in modes 4/5, otherwise api.getTowns(). */
+    private List<TownData> currentRenderSource() {
+        List<TownData> s = renderSource;
+        return s != null ? s : api.getTowns();
+    }
+
+    private List<TownData> effectiveSource() {
+        List<TownData> base = api.getTowns();
+        // Archive snapshots keep their own historical colours: the alliance recolour resolves nations from the
+        // LIVE feed, which doesn't know the archived towns, so applying it here would black the whole snapshot
+        // out (and make leaving archive look like nothing changed). Always show the snapshot as-is.
+        if (TownyMapMod.isArchiveMode()) return base;
+        int mode = config == null ? 0 : config.townStatusOverlayMode;
+        if (mode != 4 && mode != 5) return base;   // not an alliance layer → identity preserved (no rebuild)
+        int version = TownyMapMod.allianceDataVersion();
+        if (version == 0) return base;             // alliance data not loaded yet → keep normal colours
+        if (base == recoloredBase && mode == recoloredMode && version == recoloredVersion && recolored != null) {
+            return recolored;
+        }
+        boolean mega = (mode == 4);
+        ArrayList<TownData> out = new ArrayList<>(base.size());
+        for (TownData t : base) {
+            int[] c = TownyMapMod.allianceColorsForNation(TownyMapMod.bareTownNation(t.name()), mega);
+            // In an alliance layer, towns that belong to one show its colour; every other town (nationless,
+            // or in a nation that isn't in this layer) is blacked out so the alliances stand alone.
+            out.add(c != null ? t.withColors(c[0], c[1]) : t.withColors(0x000000, 0x000000));
+        }
+        recoloredBase = base;
+        recoloredMode = mode;
+        recoloredVersion = version;
+        recolored = List.copyOf(out);
+        return recolored;
     }
 
     private void requestTownRenderCacheBuild(List<TownData> towns) {
@@ -1438,13 +1497,13 @@ public class WorldMapRenderer {
             List<TownData> source = townCacheRequestedSource;
             try {
                 TownRenderCache built = buildTownRenderCache(source, townRenderCache);
-                if (api.getTowns() == source) {
+                if (currentRenderSource() == source) {
                     townRenderCache = built;
                 }
             } finally {
                 townCacheBuildRunning.set(false);
-                if (api.getTowns() != townRenderCache.source()) {
-                    requestTownRenderCacheBuild(api.getTowns());
+                if (currentRenderSource() != townRenderCache.source()) {
+                    requestTownRenderCacheBuild(currentRenderSource());
                 }
             }
         });
@@ -1762,10 +1821,14 @@ public class WorldMapRenderer {
                                           double worldLeft, double worldRight,
                                           double worldTop, double worldBottom,
                                           Map<String, EarthMcNationData> nationDetails) {
-        if (!config.townsEnabled || !config.nationStarsEnabled || nationDetails.isEmpty()) return;
+        if (!config.townsEnabled || !config.nationStarsEnabled || nationDetails.isEmpty()) {
+            nationStarHits = List.of();
+            return;
+        }
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null) return;
 
+        ArrayList<StarHit> hits = new ArrayList<>();
         for (EarthMcNationData nation : nationDetails.values()) {
             double markerX, markerZ;
 
@@ -1792,7 +1855,24 @@ public class WorldMapRenderer {
             if (x < -10 || x > sw + 10 || y < -10 || y > sh + 10) continue;
 
             ctx.drawText(client.textRenderer, "★", x - 3, y - 5, 0xFFFFD84D, true);
+            hits.add(new StarHit(x, y, nation.name()));   // record where it landed for click hit-testing
         }
+        nationStarHits = hits.isEmpty() ? List.of() : List.copyOf(hits);
+    }
+
+    private record StarHit(int x, int y, String nation) {}
+    private volatile List<StarHit> nationStarHits = List.of();
+    private static final double STAR_CLICK_RADIUS = 7.0;
+
+    /** The nation whose capital star is under the given screen point (last drawn frame), or null. */
+    public String nationStarAt(double screenX, double screenY) {
+        String best = null;
+        double bestDist = STAR_CLICK_RADIUS + 1;
+        for (StarHit h : nationStarHits) {
+            double d = Math.hypot(screenX - h.x(), screenY - h.y());
+            if (d < bestDist) { bestDist = d; best = h.nation(); }
+        }
+        return bestDist <= STAR_CLICK_RADIUS ? best : null;
     }
 
     private TownData townByName(String name) {
@@ -1805,9 +1885,43 @@ public class WorldMapRenderer {
     private void renderPlayers(DrawContext ctx,
                                double cameraX, double cameraZ, double blockScale,
                                int sw, int sh, Map<String, EarthMcPlayerData> playerDetails) {
+        if (TownyMapMod.isArchiveMode()) return;   // archived snapshots have no live players
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null) return;
         String selfName = client.getSession().getUsername();
+        // bit 0 = world map, and only when zoomed in past the Head Range threshold.
+        boolean heads = (config.playerHeadMode & 1) != 0 && blockScale >= config.playerHeadMinScale;
+        boolean names = config.showPlayerNames && blockScale >= config.playerNameMinScale;
+        boolean affil = blockScale >= config.playerAffiliationMinScale;
+        int headsDrawn = 0;
+
+        // Last-seen ghosts first, so live players draw on top of them.
+        if (config.playerLastSeen) {
+            for (TownyMapMod.GhostMarker g : TownyMapMod.lastSeenGhosts()) {
+                if (g.name().equalsIgnoreCase(selfName)) continue;
+                int gx = toScreenX(g.x(), cameraX, blockScale, sw);
+                int gy = toScreenY(g.z(), cameraZ, blockScale, sh);
+                if (gx < -10 || gx > sw + 10 || gy < -10 || gy > sh + 10) continue;
+                int red = (g.alpha() << 24) | 0xE23B3B;
+                if (heads) {
+                    PlayerHeadRenderer.draw(ctx, g.uuid(), g.name(), gx, gy, 8, red);
+                } else {
+                    ctx.fill(gx - DOT_HALF, gy - DOT_HALF, gx + DOT_HALF, gy + DOT_HALF, red);
+                }
+                // A ghost had no name/town/nation before, so you couldn't tell who it was. Draw them now,
+                // in the same red (faded with the dot) so it still reads as a last-seen marker.
+                if (names) {
+                    EarthMcPlayerData d = playerDetails.get(g.name().toLowerCase(Locale.ROOT));
+                    // Ghosts never go through playerDotColor (fixed red), so nothing else fetches their
+                    // town/nation — ask for it here, or the affiliation line stays permanently blank.
+                    if (affil && d == null) TownyMapMod.requestPlayerLabelDetails(g.name());
+                    String aff = affil ? affiliation(d) : "";
+                    drawPlayerLabel(ctx, client, g.name(), aff, gx, gy, heads,
+                            (g.alpha() << 24) | 0xFFB0B0, (g.alpha() << 24) | 0xE7B0B0);
+                }
+            }
+        }
+
         for (PlayerMarker p : api.getPlayers()) {
             if (p.name().equalsIgnoreCase(selfName)) continue;
 
@@ -1818,32 +1932,51 @@ public class WorldMapRenderer {
 
             int color = TownyMapMod.playerDotColor(p.name(), p.key());
             if ((color >>> 24) == 0) continue;
-            ctx.fill(dotX - DOT_HALF, dotY - DOT_HALF,
-                     dotX + DOT_HALF, dotY + DOT_HALF,
-                     color);
-
-            if (config.showPlayerNames && blockScale >= config.playerNameMinScale) {
-                EarthMcPlayerData details = playerDetails.get(p.name().toLowerCase(Locale.ROOT));
-                String affiliation = affiliation(details);
-                boolean showAffiliation = !affiliation.isBlank() && blockScale >= config.playerAffiliationMinScale;
-                int nameY = showAffiliation ? dotY + 7 : dotY - 4;
-                if (showAffiliation) {
-                    ctx.drawText(
-                            client.textRenderer,
-                            affiliation,
-                            dotX + DOT_HALF + 2,
-                            dotY - 5,
-                            0xFFB8D7FF,
-                            true);
-                }
-                ctx.drawText(
-                        client.textRenderer,
-                        p.name(),
-                        dotX + DOT_HALF + 2,
-                        nameY,
-                        config.playerLabelColor,
-                        true);
+            boolean drewHead = heads && headsDrawn < MAX_PLAYER_HEADS;
+            if (drewHead) {
+                headsDrawn++;
+                PlayerHeadRenderer.draw(ctx, p.uuid(), p.name(), dotX, dotY, 8, color);
+            } else {
+                ctx.fill(dotX - DOT_HALF, dotY - DOT_HALF,
+                         dotX + DOT_HALF, dotY + DOT_HALF,
+                         color);
             }
+
+            if (names) {
+                EarthMcPlayerData details = playerDetails.get(p.name().toLowerCase(Locale.ROOT));
+                // playerDotColor above already requests this, but ask again if it is still missing so the
+                // label populates even when the colour path deferred (e.g. self details not loaded yet).
+                if (affil && details == null) TownyMapMod.requestPlayerLabelDetails(p.name());
+                String affiliation = affil ? affiliation(details) : "";
+                drawPlayerLabel(ctx, client, p.name(), affiliation, dotX, dotY, drewHead,
+                        config.playerLabelColor, 0xFFB8D7FF);
+            }
+        }
+    }
+
+    /**
+     * Player name plus optional town/nation.
+     *
+     * <p>With a head, both are stacked ABOVE the marker (town/nation on top, name below it) and centred,
+     * so neither overlaps the head. With a plain dot, they sit beside it as before. The affiliation is
+     * always the line above the name.
+     */
+    private void drawPlayerLabel(DrawContext ctx, MinecraftClient client, String name, String affiliation,
+                                 int cx, int cy, boolean head, int nameColor, int affColor) {
+        var tr = client.textRenderer;
+        boolean showAff = affiliation != null && !affiliation.isBlank();
+        if (head) {
+            int headHalf = 6;                    // matches PlayerHeadRenderer's dot half for size 8
+            int nameY = cy - headHalf - 11;      // name just above the head
+            ctx.drawText(tr, name, cx - tr.getWidth(name) / 2, nameY, nameColor, true);
+            if (showAff) {
+                ctx.drawText(tr, affiliation, cx - tr.getWidth(affiliation) / 2, nameY - 9, affColor, true);
+            }
+        } else {
+            int textX = cx + DOT_HALF + 2;
+            int nameY = showAff ? cy + 7 : cy - 4;
+            if (showAff) ctx.drawText(tr, affiliation, textX, cy - 5, affColor, true);
+            ctx.drawText(tr, name, textX, nameY, nameColor, true);
         }
     }
 

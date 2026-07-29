@@ -30,7 +30,7 @@ public class DetailScreen extends Screen {
     /** A clickable entity reference. */
     public record Ref(Kind kind, String name) {}
 
-    public sealed interface Block permits Cols, Wide, Chips, Rule, NameList, LineList, RankList, RefLineList {}
+    public sealed interface Block permits Cols, Wide, LegacyLine, Chips, Rule, NameList, LineList, RankList, RefLineList {}
 
     /**
      * One labelled value, optionally a link. {@code live} recomputes the text every frame, which is how
@@ -49,6 +49,9 @@ public class DetailScreen extends Screen {
     public record Cols(List<Col> cols) implements Block {}
     /** One value spanning the panel (board text, about, formatted name). */
     public record Wide(String label, String value) implements Block {}
+
+    /** A one-line value rendered as a styled {@link Text} (for the colour-formatted player name). */
+    public record LegacyLine(String label, Text value) implements Block {}
     /** Flag chips: filled when on, outlined when off. */
     public record Chips(List<String> labels, List<Boolean> states) implements Block {}
     public record Rule() implements Block {}
@@ -169,6 +172,17 @@ public class DetailScreen extends Screen {
 
     @Override
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
+        // UI Scale: shrink the whole panel around the screen centre; the mouse is un-scaled to match.
+        if (!UiScale.active()) { drawContent(ctx, mouseX, mouseY, delta); return; }
+        float cx = this.width / 2f, cy = this.height / 2f;
+        int mx = (int) Math.round(UiScale.unscale(mouseX, cx));
+        int my = (int) Math.round(UiScale.unscale(mouseY, cy));
+        UiScale.push(ctx, cx, cy);
+        try { drawContent(ctx, mx, my, delta); }
+        finally { UiScale.pop(ctx); }
+    }
+
+    private void drawContent(DrawContext ctx, int mouseX, int mouseY, float delta) {
         int right = panelLeft + panelWidth;
         // Hug the content: measured last frame, clamped to the screen. A short page no longer leaves the
         // footer stranded at the bottom of a mostly-empty full-height panel.
@@ -188,6 +202,11 @@ public class DetailScreen extends Screen {
 
         String title = page != null ? page.title() : pendingTitle;
         ctx.drawText(this.textRenderer, title, cLeft, PANEL_TOP + 9, 0xFFFFFFFF, false);
+        if (page != null && page.kind() == Kind.PLAYER) {   // player head in the top-right corner
+            int hs = 18;
+            net.townymap.render.PlayerHeadRenderer.drawMenuHead(ctx, page.title(),
+                    right - 10 - hs / 2, PANEL_TOP + 2 + hs / 2, hs);
+        }
         String sub = page != null ? page.subtitle() : (failed ? "not found" : "loading…");
         if (sub != null && !sub.isBlank()) {
             ctx.drawText(this.textRenderer, sub,
@@ -252,6 +271,11 @@ public class DetailScreen extends Screen {
                     y += LINE;
                 }
                 y += 3;
+            } else if (b instanceof LegacyLine ll) {
+                ctx.drawText(this.textRenderer, ll.label(), cLeft, y, LABEL, false);
+                y += LINE;
+                ctx.drawText(this.textRenderer, ll.value(), cLeft, y, VALUE, false);   // styled Text (real colours)
+                y += LINE + 3;
             } else if (b instanceof Cols c) {
                 int n = Math.max(1, c.cols().size());
                 int colW = (cRight - cLeft - GAP * (n - 1)) / n;
@@ -375,6 +399,7 @@ public class DetailScreen extends Screen {
 
     @Override
     public boolean mouseClicked(Click click, boolean doubled) {
+        if (UiScale.active()) click = UiScale.unscaleClick(click, this.width / 2.0, this.height / 2.0);
         double mx = click.x(), my = click.y();
 
         // Click-away dismiss. Anything outside the panel closes it — and closes the whole stack, not one
@@ -403,6 +428,10 @@ public class DetailScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double horizontal, double vertical) {
+        if (UiScale.active()) {
+            mouseX = UiScale.unscale(mouseX, this.width / 2.0);
+            mouseY = UiScale.unscale(mouseY, this.height / 2.0);
+        }
         int max = maxScroll();
         if (max <= 0) return super.mouseScrolled(mouseX, mouseY, horizontal, vertical);
         scroll = Math.max(0, Math.min(max, scroll - (int) Math.round(vertical * 18.0)));

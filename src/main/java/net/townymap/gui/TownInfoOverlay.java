@@ -7,9 +7,11 @@ import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.text.Style;
 import net.minecraft.text.Text;
 import net.minecraft.util.Util;
+import net.townymap.TownyMapMod;
 import net.townymap.model.EarthMcNationData;
 import net.townymap.model.TownPopupData;
 import net.townymap.util.DiscordUrl;
+import org.joml.Matrix3x2fStack;
 
 import java.net.URI;
 import java.util.ArrayList;
@@ -31,6 +33,8 @@ public final class TownInfoOverlay {
     private static final int BUTTON_HEIGHT = 20;
     private static final int STAR_HITBOX = 18;
     private static final long DISPLAY_MS = 12_000;
+    private static final int BOARD_MAX_WIDTH = 200;   // px (unscaled): wrap the board so it can't blow out the box
+    private static final int BOARD_MAX_LINES = 4;     // and cap it so a rambling board can't make a giant popup
 
     private static final int BG_COLOR     = 0xD8101010;
     private static final int BORDER_COLOR = 0xFF333333;
@@ -49,6 +53,10 @@ public final class TownInfoOverlay {
     private static int discordX1, discordY1, discordX2, discordY2;
     private static int routeX1, routeY1, routeX2, routeY2;
     private static boolean hasButtons;
+    // The popup is drawn in its own 0..boxW/0..boxH space via a scaled matrix; these publish that transform
+    // so click/hit-tests (which get screen-space mouse coords) can map back into the popup's local space.
+    private static float renderScale = 1f;
+    private static int originX, originY;
 
     private TownInfoOverlay() {}
 
@@ -103,7 +111,7 @@ public final class TownInfoOverlay {
         MinecraftClient mc = MinecraftClient.getInstance();
         TextRenderer tr = mc.textRenderer;
 
-        List<InfoRow> lines = buildLines(nationDetails);
+        List<InfoRow> lines = buildLines(tr, nationDetails);
         if (lines.isEmpty()) return;
 
         // Measure rendered text width and add more breathing room for long names.
@@ -125,43 +133,75 @@ public final class TownInfoOverlay {
         int buttonRowHeight = showButtons ? BUTTON_HEIGHT + 6 : 0;
         int boxH = lines.size() * LINE_HEIGHT + PADDING * 2 - 1 + buttonRowHeight;
 
-        // Keep right-click town details in the same right-side area as search result details.
-        int bx = Math.max(8, sw - boxW - 12);
-        int by = Math.max(36, Math.min(sh - boxH - 36, sh / 2 - boxH / 2));
+        // Shrink the whole popup on small windows (and always enough to fit), then place it right-aligned and
+        // vertically centred using the SCALED footprint.
+        float scale = uiScale(sw, sh, boxW, boxH);
+        int scaledW = Math.round(boxW * scale);
+        int scaledH = Math.round(boxH * scale);
+        int bx = Math.max(8, sw - scaledW - 12);
+        int hi = sh - scaledH - 8;
+        int by = hi < 8 ? Math.max(0, (sh - scaledH) / 2) : Math.max(8, Math.min(hi, sh / 2 - scaledH / 2));
+        renderScale = scale;
+        originX = bx;
+        originY = by;
 
-        // Background + border
-        ctx.fill(bx - 1, by - 1, bx + boxW + 1, by + boxH + 1, BORDER_COLOR);
-        ctx.fill(bx,     by,     bx + boxW,     by + boxH,     BG_COLOR);
-        if (showButtons) {
-            drawFavoriteStar(ctx, tr, bx, by, boxW, favorite);
-        }
+        // Everything below is drawn in the popup's own 0..boxW/0..boxH space; the matrix translates+scales it
+        // onto the screen. The mouse is mapped into that same space so hover/hit-tests line up under the scale.
+        int mx = scale > 0 ? Math.round((scaledMouseX() - bx) / scale) : scaledMouseX();
+        int my = scale > 0 ? Math.round((scaledMouseY() - by) / scale) : scaledMouseY();
 
-        // Text — use the String overload (same path as player name labels).
-        // Link rows draw the label prefix, then the clickable name (yellow on
-        // hover), then any suffix; the name's bounds are recorded for handleClick.
-        int mx = scaledMouseX();
-        int my = scaledMouseY();
-        int ty = by + PADDING;
-        for (InfoRow row : lines) {
-            int px = bx + horizontalPadding;
-            ctx.drawText(tr, row.prefix(), px, ty, 0xFFFFFFFF, true);
-            if (row.hasLink()) {
-                int nameX = px + tr.getWidth(row.prefix());
-                int nameW = tr.getWidth(row.name());
-                boolean hover = mx >= nameX && mx <= nameX + nameW && my >= ty - 1 && my <= ty + 11;
-                ctx.drawText(tr, row.name(), nameX, ty, hover ? LINK_HOVER_COLOR : LINK_COLOR, true);
-                infoLinks.add(new InfoLink(nameX, ty - 1, nameW, 12, row.linkType(), row.name()));
-                if (!row.suffix().isEmpty()) {
-                    ctx.drawText(tr, row.suffix(), nameX + nameW, ty, 0xFFFFFFFF, true);
-                }
+        Matrix3x2fStack matrices = ctx.getMatrices();
+        matrices.pushMatrix();
+        matrices.translate(bx, by);
+        matrices.scale(scale, scale);
+        try {
+            // Background + border
+            ctx.fill(-1, -1, boxW + 1, boxH + 1, BORDER_COLOR);
+            ctx.fill(0,  0,  boxW,     boxH,     BG_COLOR);
+            if (showButtons) {
+                drawFavoriteStar(ctx, tr, 0, 0, boxW, favorite);
             }
-            ty += LINE_HEIGHT;
-        }
 
-        hasButtons = false;
-        if (showButtons) {
-            drawButtons(ctx, tr, bx, by + boxH - PADDING - BUTTON_HEIGHT + 2, boxW);
+            // Text — use the String overload (same path as player name labels). Link rows draw the label
+            // prefix, then the clickable name (yellow on hover), then any suffix; the name's local bounds are
+            // recorded for handleClick.
+            int ty = PADDING;
+            for (InfoRow row : lines) {
+                int px = horizontalPadding;
+                ctx.drawText(tr, row.prefix(), px, ty, 0xFFFFFFFF, true);
+                if (row.hasLink()) {
+                    int nameX = px + tr.getWidth(row.prefix());
+                    int nameW = tr.getWidth(row.name());
+                    boolean hover = mx >= nameX && mx <= nameX + nameW && my >= ty - 1 && my <= ty + 11;
+                    ctx.drawText(tr, row.name(), nameX, ty, hover ? LINK_HOVER_COLOR : LINK_COLOR, true);
+                    infoLinks.add(new InfoLink(nameX, ty - 1, nameW, 12, row.linkType(), row.name()));
+                    if (!row.suffix().isEmpty()) {
+                        ctx.drawText(tr, row.suffix(), nameX + nameW, ty, 0xFFFFFFFF, true);
+                    }
+                }
+                ty += LINE_HEIGHT;
+            }
+
+            hasButtons = false;
+            if (showButtons) {
+                drawButtons(ctx, tr, 0, boxH - PADDING - BUTTON_HEIGHT + 2, boxW, mx, my);
+            }
+        } finally {
+            matrices.popMatrix();
         }
+    }
+
+    /** Popup scale. The default (Info Panel Scale = 1.0) keeps the GUI-scale-aware auto sizing; a lower slider
+     *  value shrinks the whole popup — text and gaps — on top of that. Always kept small enough to fit. */
+    private static float uiScale(int sw, int sh, int boxW, int boxH) {
+        double area = (double) sw * sh;
+        double refArea = 550.0 * 300.0;   // above this, full size; below, shrink gently
+        float scale = area >= refArea ? 1.0f : Math.max(0.7f, (float) Math.sqrt(area / refArea));
+        scale *= Math.max(0.7f, Math.min(1.0f, TownyMapMod.infoPanelScale()));   // user "UI Scale" slider (70% floor)
+        // Hard fit: never let the popup exceed the window even after the shrink (long content, tiny window).
+        if (boxW * scale > sw - 16) scale = Math.min(scale, (sw - 16f) / boxW);
+        if (boxH * scale > sh - 16) scale = Math.min(scale, (sh - 16f) / boxH);
+        return Math.max(0.30f, Math.min(1.0f, scale));
     }
 
     private static int rowWidth(TextRenderer tr, InfoRow row) {
@@ -171,25 +211,28 @@ public final class TownInfoOverlay {
     }
 
     public static ActionResult handleClick(double mouseX, double mouseY) {
+        // Map the screen-space click into the popup's own (unscaled) coordinate space, where the hitboxes live.
+        double lx = renderScale > 0 ? (mouseX - originX) / renderScale : mouseX;
+        double ly = renderScale > 0 ? (mouseY - originY) / renderScale : mouseY;
         // Clickable names work whenever a real town is shown (even before buttons).
         if (currentData != null && currentData != TownPopupData.WILDERNESS) {
             for (InfoLink link : infoLinks) {
-                if (link.contains(mouseX, mouseY)) {
+                if (link.contains(lx, ly)) {
                     return ActionResult.search(link.type(), link.name());
                 }
             }
         }
         if (!hasButtons || currentData == null || currentData == TownPopupData.WILDERNESS) return ActionResult.none();
         String town = currentData.townName();
-        if (inside(mouseX, mouseY, favoriteX1, favoriteY1, favoriteX2, favoriteY2)) return ActionResult.favorite(town);
-        if (inside(mouseX, mouseY, discordX1, discordY1, discordX2, discordY2)) {
+        if (inside(lx, ly, favoriteX1, favoriteY1, favoriteX2, favoriteY2)) return ActionResult.favorite(town);
+        if (inside(lx, ly, discordX1, discordY1, discordX2, discordY2)) {
             return ActionResult.expand(town);
         }
-        if (inside(mouseX, mouseY, routeX1, routeY1, routeX2, routeY2)) return ActionResult.route(town);
+        if (inside(lx, ly, routeX1, routeY1, routeX2, routeY2)) return ActionResult.route(town);
         return ActionResult.none();
     }
 
-    private static List<InfoRow> buildLines(Map<String, EarthMcNationData> nationDetails) {
+    private static List<InfoRow> buildLines(TextRenderer tr, Map<String, EarthMcNationData> nationDetails) {
         List<InfoRow> lines = new ArrayList<>();
 
         if (loading) {
@@ -214,19 +257,29 @@ public final class TownInfoOverlay {
             lines.add(InfoRow.link("§f§l" + d.townName() + " §7§l(" + capPrefix, d.nationName(), "§7§l)", "nation"));
         }
 
-        // Board
+        // Board — wrapped to a sane width and capped, so a long board can't blow the popup out to the whole
+        // screen (as an unwrapped one-liner did).
         if (hasBoard(d.board())) {
-            lines.add(InfoRow.text("§7§o" + d.board()));
+            for (String boardLine : wrapBoard(tr, "§7§o", d.board(), BOARD_MAX_WIDTH, BOARD_MAX_LINES)) {
+                lines.add(InfoRow.text(boardLine));
+            }
         }
 
         // Spacer
         lines.add(InfoRow.text(""));
 
+        // In archive mode only show what the Wayback snapshot actually recorded; the rest (chunk size, open,
+        // gold) isn't in the archive, so it's omitted rather than shown as a misleading zero.
+        boolean archive = TownyMapMod.isArchiveMode();
+
         // Mayor name → clickable player search.
         lines.add(InfoRow.link("§7Mayor: §f§l", d.mayor(), "", "player"));
         // "claimed / max chunks" using EarthMC's own claim max (stats.maxTownBlocks), which already
         // accounts for residents + bonus blocks + nation bonus. Over-limit is highlighted in red.
-        if (d.maxChunks() > 0) {
+        if (archive) {
+            // The archive has no claim limit, but the claimed count is derived from the snapshot's claim polygon.
+            lines.add(InfoRow.text("§7Size: §f§l" + d.numChunks() + " chunks"));
+        } else if (d.maxChunks() > 0) {
             boolean overLimit = d.isOverClaimed() || d.numChunks() > d.maxChunks();
             String sizeColor = overLimit ? "§c§l" : "§f§l";
             lines.add(InfoRow.text("§7Size: " + sizeColor + d.numChunks() + " / " + d.maxChunks() + " chunks"));
@@ -236,14 +289,20 @@ public final class TownInfoOverlay {
         if (!d.founded().isEmpty()) {
             lines.add(InfoRow.text("§7Founded: §f§l" + d.founded()));
         }
-        lines.add(InfoRow.text("§7Open: §f§l"      + (d.isOpen()   ? "Yes" : "No")));
+        if (archive) {
+            lines.add(InfoRow.text("§7PVP: §f§l"   + (d.pvp() ? "Yes" : "No")));   // archive records PVP, not Open
+        } else {
+            lines.add(InfoRow.text("§7Open: §f§l"  + (d.isOpen() ? "Yes" : "No")));
+        }
         lines.add(InfoRow.text("§7Public: §f§l"    + (d.isPublic() ? "Yes" : "No")));
         String residentsLine = "§7Residents: §f§l" + d.residentCount();
         if (d.activeResidentCount() >= 0 && d.activeResidentCount() < d.residentCount()) {
             residentsLine += " §8(" + (d.residentCount() - d.activeResidentCount()) + " Inactive)";
         }
         lines.add(InfoRow.text(residentsLine));
-        lines.add(InfoRow.text("§7Gold: §f§l"      + formatGold(d.balance())));
+        if (!archive) {
+            lines.add(InfoRow.text("§7Gold: §f§l"  + formatGold(d.balance())));
+        }
 
         return lines;
     }
@@ -277,6 +336,45 @@ public final class TownInfoOverlay {
         if (residents >= 40) return 30;
         if (residents >= 20) return 10;
         return 0;
+    }
+
+    /** Word-wraps a board to {@code maxWidth} px over at most {@code maxLines}, ellipsising the overflow.
+     *  Each returned line is prefixed with {@code prefix} (the grey-italic style). */
+    private static List<String> wrapBoard(TextRenderer tr, String prefix, String board, int maxWidth, int maxLines) {
+        String text = stripFormatting(board).replaceAll("<[^>]*>", " ").replaceAll("\\s+", " ").trim();
+        List<String> wrapped = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        String[] words = text.split(" ");
+        int consumed = 0;
+        for (; consumed < words.length; consumed++) {
+            String word = words[consumed];
+            if (word.isEmpty()) continue;
+            String trial = cur.length() == 0 ? word : cur + " " + word;
+            if (cur.length() == 0 || tr.getWidth(trial) <= maxWidth) {
+                cur.setLength(0);
+                cur.append(trial);
+            } else {
+                wrapped.add(cur.toString());
+                cur.setLength(0);
+                cur.append(word);
+                if (wrapped.size() == maxLines) break;   // 'cur' now holds overflow beyond the cap
+            }
+        }
+        boolean overflow;
+        if (wrapped.size() < maxLines) {
+            if (cur.length() > 0) wrapped.add(cur.toString());
+            overflow = false;
+        } else {
+            overflow = cur.length() > 0 || consumed < words.length - 1;   // more text didn't fit
+        }
+        if (overflow && !wrapped.isEmpty()) {
+            String last = wrapped.get(wrapped.size() - 1);
+            while (!last.isEmpty() && tr.getWidth(last + "…") > maxWidth) last = last.substring(0, last.length() - 1);
+            wrapped.set(wrapped.size() - 1, last + "…");
+        }
+        List<String> out = new ArrayList<>(wrapped.size());
+        for (String line : wrapped) out.add(prefix + line);
+        return out;
     }
 
     private static boolean hasBoard(String board) {
@@ -315,7 +413,8 @@ public final class TownInfoOverlay {
         ctx.drawText(tr, star, textX, textY, color, false);
     }
 
-    private static void drawButtons(DrawContext ctx, TextRenderer tr, int bx, int by, int boxW) {
+    private static void drawButtons(DrawContext ctx, TextRenderer tr, int bx, int by, int boxW,
+                                    int mouseX, int mouseY) {
         int gap = 6;
         int available = boxW - PADDING * 2;
         int buttonW = Math.max(52, Math.min(82, (available - gap) / 2));
@@ -331,23 +430,22 @@ public final class TownInfoOverlay {
 
         // "Expand" replaces the old Discord button: the popup can only show a handful of fields, and the
         // full panel carries the Discord link itself. Always enabled — unlike Discord, every town has
-        // something to show.
-        drawButton(ctx, tr, discordX1, discordY1, discordX2, discordY2, "Expand", true);
-        drawButton(ctx, tr, routeX1, routeY1, routeX2, routeY2, "Route", true);
+        // something to show. Mouse coords are in the popup's local (scaled) space so hover matches.
+        drawButton(ctx, tr, discordX1, discordY1, discordX2, discordY2, "Expand", true, mouseX, mouseY);
+        drawButton(ctx, tr, routeX1, routeY1, routeX2, routeY2, "Route", true, mouseX, mouseY);
     }
 
     private static void drawButton(DrawContext ctx, TextRenderer tr, int x1, int y1, int x2, int y2,
-                                   String label, boolean active) {
+                                   String label, boolean active, int mouseX, int mouseY) {
         if (DarkButtons.enabled()) {
-            DarkButtons.draw(ctx, x1, y1, x2 - x1, y2 - y1, label, active,
-                    0xFFFFFFFF, scaledMouseX(), scaledMouseY());
+            DarkButtons.draw(ctx, x1, y1, x2 - x1, y2 - y1, label, active, 0xFFFFFFFF, mouseX, mouseY);
             return;
         }
         ButtonWidget button = ButtonWidget.builder(coloredText(label, active ? 0xFFFFFF : 0x777777), ignored -> {})
                 .dimensions(x1, y1, x2 - x1, y2 - y1)
                 .build();
         button.active = active;
-        button.render(ctx, scaledMouseX(), scaledMouseY(), 0.0F);
+        button.render(ctx, mouseX, mouseY, 0.0F);
     }
 
     private static String normalizeDiscordUrl(String discord) {

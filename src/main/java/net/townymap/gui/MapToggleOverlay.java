@@ -30,6 +30,9 @@ public final class MapToggleOverlay {
 
     public static void render(DrawContext ctx, int sh, TownyMapConfig config,
                               boolean squaremapLoading, boolean bordersLoading) {
+        boolean scaled = UiScale.active();
+        if (scaled) UiScale.push(ctx, LEFT, togglesTop(sh));   // shrink the button column around its top-left
+        try {
         TextRenderer tr = MinecraftClient.getInstance().textRenderer;
         int y = togglesTop(sh);
 
@@ -48,10 +51,14 @@ public final class MapToggleOverlay {
         }
 
         drawSettingsButton(ctx, tr, settingsTop(sh));
+        } finally {
+            if (scaled) UiScale.pop(ctx);
+        }
     }
 
     /** Returns true if a toggle was clicked (caller should NOT open settings). */
     public static boolean handleClick(double mouseX, double mouseY, int sh, TownyMapConfig config, boolean backward) {
+        if (UiScale.active()) { mouseX = UiScale.unscale(mouseX, LEFT); mouseY = UiScale.unscale(mouseY, togglesTop(sh)); }
         if (ChunkCounterOverlay.isMultiMode(config)) {
             int group = counterGroupAt(mouseX, mouseY, config);
             if (group >= 0) {
@@ -101,6 +108,7 @@ public final class MapToggleOverlay {
 
     /** Returns true if the ⚙ Settings button was clicked. */
     public static boolean handleSettingsClick(double mouseX, double mouseY, int sh) {
+        if (UiScale.active()) { mouseX = UiScale.unscale(mouseX, LEFT); mouseY = UiScale.unscale(mouseY, togglesTop(sh)); }
         if (mouseX < LEFT || mouseX > LEFT + WIDTH) return false;
         int sy = settingsTop(sh);
         return mouseY >= sy && mouseY <= sy + HEIGHT;
@@ -245,14 +253,17 @@ public final class MapToggleOverlay {
         return Text.literal(label).setStyle(Style.EMPTY.withColor(textColor & 0xFFFFFF));
     }
 
+    // Mouse in the column's own (unscaled) space, so button hover lines up under UI Scale.
     private static int scaledMouseX() {
         MinecraftClient mc = MinecraftClient.getInstance();
-        return (int) (mc.mouse.getX() * mc.getWindow().getScaledWidth() / mc.getWindow().getWidth());
+        double abs = mc.mouse.getX() * mc.getWindow().getScaledWidth() / mc.getWindow().getWidth();
+        return (int) Math.round(UiScale.unscale(abs, LEFT));
     }
 
     private static int scaledMouseY() {
         MinecraftClient mc = MinecraftClient.getInstance();
-        return (int) (mc.mouse.getY() * mc.getWindow().getScaledHeight() / mc.getWindow().getHeight());
+        double abs = mc.mouse.getY() * mc.getWindow().getScaledHeight() / mc.getWindow().getHeight();
+        return (int) Math.round(UiScale.unscale(abs, togglesTop(mc.getWindow().getScaledHeight())));
     }
 
     private static String borderModeLabel(int mode) {
@@ -268,8 +279,8 @@ public final class MapToggleOverlay {
             case 1 -> "Public";
             case 2 -> "Overclaim";
             case 3 -> "Open";
-            case 4 -> "For Sale";
-            case 5 -> "No Nation";
+            case 4 -> "Meganations";
+            case 5 -> "Alliances";
             default -> "None";
         };
     }

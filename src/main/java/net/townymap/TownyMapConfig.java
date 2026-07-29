@@ -73,6 +73,10 @@ public class TownyMapConfig {
     public List<Long> chunkCounterSelection = new ArrayList<>();
     public List<List<Long>> chunkCounterGroups = new ArrayList<>();
 
+    /** UI scale for the mod's GUIs: 1.0 keeps the current sizing; lower shrinks text and gaps. Range 0.7 – 1.0
+     *  (below 70% they get unreadable). */
+    public float infoPanelScale = 1.0f;
+
     // ── Visual (towns) ───────────────────────────────────────────────────────
     public int borderAlpha  = 220;
     public int fillAlpha    = 35;
@@ -86,6 +90,13 @@ public class TownyMapConfig {
     public boolean showPlayerNames = true;
     public double playerNameMinScale = 0.08;
     public double playerAffiliationMinScale = 0.108;
+    /** Player heads on the dots: 0 off, 1 world map, 2 minimap, 3 both. */
+    public int playerHeadMode = 3;   // heads on (world map + minimap) by default
+    /** Zoom threshold (world-map block scale) above which heads are drawn — chosen via a Near/Medium/Far
+     *  button. Larger = must be more zoomed in (Near); smaller = heads show from further out (Far). */
+    public double playerHeadMinScale = 0.06;
+    /** Keep showing players at their last-seen spot (in red) after they drop off the live feed. */
+    public boolean playerLastSeen = true;
 
     // ── Refresh intervals ────────────────────────────────────────────────────
     public int refreshTownsSecs   = 60;
@@ -169,6 +180,10 @@ public class TownyMapConfig {
         if (borderThicknessMultiplier < 0.1f || borderThicknessMultiplier > 3.0f
                 || Float.isNaN(borderThicknessMultiplier)) {
             borderThicknessMultiplier = 0.5f;
+            changed = true;
+        }
+        if (infoPanelScale < 0.7f || infoPanelScale > 1.0f || Float.isNaN(infoPanelScale)) {
+            infoPanelScale = Float.isNaN(infoPanelScale) ? 1.0f : Math.max(0.7f, Math.min(1.0f, infoPanelScale));
             changed = true;
         }
         if (favoriteTowns == null) {

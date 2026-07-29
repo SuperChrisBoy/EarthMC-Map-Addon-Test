@@ -152,6 +152,7 @@ public abstract class MixinGuiMap {
             TownyMapMod.renderTownInfo(ctx, w, h);
             TownyMapMod.renderMapToggles(ctx, h);
             TownyMapMod.renderTownSearch(ctx, w, h);
+            TownyMapMod.renderArchiveBanner(ctx, w);
         } catch (Exception e) {
             logOnce(RENDER_ERROR_LOGGED, "Failed to render Xaero world-map overlay", e);
         }
@@ -296,6 +297,38 @@ public abstract class MixinGuiMap {
             }
 
             if (button == 0 && TownyMapMod.onMapToggleClick(click.x(), click.y(), sh)) {
+                cir.setReturnValue(true);
+                return;
+            }
+
+            // Left-click a date-step arrow under the archive banner (±1 / ±10 days).
+            if (button == 0 && TownyMapMod.onArchiveNavClick(click.x(), click.y())) {
+                cir.setReturnValue(true);
+                return;
+            }
+
+            // Left-click the archive banner exits archive mode.
+            if (button == 0 && TownyMapMod.onArchiveBannerClick(click.x(), click.y())) {
+                cir.setReturnValue(true);
+                return;
+            }
+
+            // Left-click a player dot/head → open the small player info panel (which has Expand). Uses the
+            // overlay's own camera + scale so the hit-test matches exactly where the markers were drawn.
+            if (button == 0) {
+                double dimMul = TownyMapMod.worldMapOverlayScale();
+                double guiScale = (screenScale > 0) ? scale / screenScale : scale;
+                if (dimMul > 0.0 && guiScale > 0.0
+                        && TownyMapMod.onMapPlayerClick(click.x(), click.y(),
+                                cameraX * dimMul, cameraZ * dimMul, guiScale / dimMul, sw, sh)) {
+                    cir.setReturnValue(true);
+                    return;
+                }
+            }
+
+            // Left-click a nation capital star → open the small nation info panel (which has Expand). The
+            // star screen positions are recorded as drawn, so this is a direct screen-space hit-test.
+            if (button == 0 && TownyMapMod.onMapNationStarClick(click.x(), click.y())) {
                 cir.setReturnValue(true);
                 return;
             }

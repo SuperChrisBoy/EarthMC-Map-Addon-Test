@@ -16,6 +16,7 @@ import net.minecraft.util.Formatting;
 import net.townymap.TownyMapConfig;
 import net.townymap.TownyMapMod;
 import net.townymap.mixin.CyclingButtonWidgetAccessor;
+import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,8 +34,6 @@ import java.util.function.IntConsumer;
  */
 public class TownyMapConfigScreen extends Screen {
 
-    private static final double PLAYER_NAME_SCALE_MIN = 0.01;
-    private static final double PLAYER_NAME_SCALE_MAX = 0.30;
 
     // ── Layout metrics ────────────────────────────────────────────────────────
     private static final int ROW_H = 24;
@@ -99,8 +98,20 @@ public class TownyMapConfigScreen extends Screen {
                     "Load your own GeoJSON overlays from the config folder."),
             Map.entry("Chunk Grid",
                     "Draw chunk boundaries on the minimap."),
+            Map.entry("Player Heads",
+                    "Show player skins on their map dots. Choose the world map, the minimap, both or off."),
+            Map.entry("Head Range",
+                    "How zoomed in you must be for heads to appear. Near = only up close, Far = from further out."),
+            Map.entry("Last Seen Positions",
+                    "Keep players on the map in red at their last spot after they go offline or hidden, re-checked every few seconds."),
             Map.entry("Nation Capital Stars",
-                    "Mark each nation's capital with a star on the world map."));
+                    "Mark each nation's capital with a star on the world map."),
+            Map.entry("UI Scale",
+                    "Scales all of this mod's GUIs — buttons, panels, this settings screen — smaller. 100% keeps "
+                    + "the current sizing; lower shrinks the text and the gaps, independent of your Minecraft GUI scale."),
+            Map.entry("View Archive",
+                    "Type a date (dd/mm/yyyy) and press Enter to view the historical map from that day. "
+                    + "You can also do this from the world-map search bar, using . , or / (e.g. 17/4/2026)."));
 
     /** Field-initialised defaults, used to drive the per-row Reset buttons. */
     private static final TownyMapConfig DEFAULTS = new TownyMapConfig();
@@ -109,6 +120,7 @@ public class TownyMapConfigScreen extends Screen {
     private final List<Row> rows = new ArrayList<>();
     private TownyMapConfig cfg;
     private TextFieldWidget searchField;
+    private TextFieldWidget archiveField;   // Advanced → type a dd/mm/yyyy date + Enter to open the archive
     private String searchQuery = "";
     private int scrollOffset;
     private int contentHeight;
@@ -215,7 +227,8 @@ public class TownyMapConfigScreen extends Screen {
                         TownyMapConfigScreen::borderModeText, v -> cfg.borderOverlayMode = v),
                 () -> cfg.borderOverlayMode == DEFAULTS.borderOverlayMode,
                 () -> cfg.borderOverlayMode = DEFAULTS.borderOverlayMode);
-        option("Border Thickness", new BorderThicknessSlider(ctrlX, 0, CTRL_W, 20, cfg),
+        option("Border Thickness", presets(cfg.borderThicknessMultiplier, THICKNESSES, THIN_MED_THICK,
+                        v -> cfg.borderThicknessMultiplier = (float) v),
                 () -> cfg.borderThicknessMultiplier == DEFAULTS.borderThicknessMultiplier,
                 () -> cfg.borderThicknessMultiplier = DEFAULTS.borderThicknessMultiplier);
         option("Map Mode RGB", onOff(cfg.statusHighlightRainbow, v -> cfg.statusHighlightRainbow = v),
@@ -229,13 +242,26 @@ public class TownyMapConfigScreen extends Screen {
         option("Online Players", onOff(cfg.playersEnabled, v -> cfg.playersEnabled = v),
                 () -> cfg.playersEnabled == DEFAULTS.playersEnabled,
                 () -> cfg.playersEnabled = DEFAULTS.playersEnabled);
+        option("Player Heads", cycle(cfg.playerHeadMode, new int[]{0, 1, 2, 3},
+                        TownyMapConfigScreen::playerHeadModeText, v -> cfg.playerHeadMode = v),
+                () -> cfg.playerHeadMode == DEFAULTS.playerHeadMode,
+                () -> cfg.playerHeadMode = DEFAULTS.playerHeadMode);
+        option("Head Range", presets(cfg.playerHeadMinScale, HEAD_RANGES, NEAR_MED_FAR,
+                        v -> cfg.playerHeadMinScale = v),
+                () -> cfg.playerHeadMinScale == DEFAULTS.playerHeadMinScale,
+                () -> cfg.playerHeadMinScale = DEFAULTS.playerHeadMinScale);
+        option("Last Seen Positions", onOff(cfg.playerLastSeen, v -> cfg.playerLastSeen = v),
+                () -> cfg.playerLastSeen == DEFAULTS.playerLastSeen,
+                () -> cfg.playerLastSeen = DEFAULTS.playerLastSeen);
         option("Player Names", onOff(cfg.showPlayerNames, v -> cfg.showPlayerNames = v),
                 () -> cfg.showPlayerNames == DEFAULTS.showPlayerNames,
                 () -> cfg.showPlayerNames = DEFAULTS.showPlayerNames);
-        option("Player Name Range", new PlayerNameRangeSlider(ctrlX, 0, CTRL_W, 20, cfg),
+        option("Player Name Range", presets(cfg.playerNameMinScale, NAME_RANGES, NEAR_MED_FAR,
+                        v -> cfg.playerNameMinScale = v),
                 () -> cfg.playerNameMinScale == DEFAULTS.playerNameMinScale,
                 () -> cfg.playerNameMinScale = DEFAULTS.playerNameMinScale);
-        option("Town/Nation Range", new PlayerAffiliationRangeSlider(ctrlX, 0, CTRL_W, 20, cfg),
+        option("Town/Nation Range", presets(cfg.playerAffiliationMinScale, AFFIL_RANGES, NEAR_MED_FAR,
+                        v -> cfg.playerAffiliationMinScale = v),
                 () -> cfg.playerAffiliationMinScale == DEFAULTS.playerAffiliationMinScale,
                 () -> cfg.playerAffiliationMinScale = DEFAULTS.playerAffiliationMinScale);
 
@@ -251,6 +277,9 @@ public class TownyMapConfigScreen extends Screen {
                 () -> cfg.infoDisplayNearestTownEnabled = DEFAULTS.infoDisplayNearestTownEnabled);
 
         section("Advanced");
+        option("UI Scale", new PanelScaleSlider(ctrlX, 0, CTRL_W, 20, cfg),
+                () -> cfg.infoPanelScale == DEFAULTS.infoPanelScale,
+                () -> cfg.infoPanelScale = DEFAULTS.infoPanelScale);
         option("Custom Overlays", onOff(cfg.customOverlaysEnabled, v -> {
                     cfg.customOverlaysEnabled = v;
                     if (v) net.townymap.integration.CustomOverlayManager.reload();
@@ -259,6 +288,11 @@ public class TownyMapConfigScreen extends Screen {
                 () -> cfg.customOverlaysEnabled = DEFAULTS.customOverlaysEnabled);
         action("Open Overlays Folder", () -> net.townymap.integration.CustomOverlayManager.openFolder());
         action("Reload Overlays", () -> net.townymap.integration.CustomOverlayManager.reload());
+
+        archiveField = new TextFieldWidget(this.textRenderer, ctrlX, 0, CTRL_W, 20, Text.literal("dd/mm/yyyy"));
+        archiveField.setPlaceholder(Text.literal("dd/mm/yyyy"));
+        archiveField.setMaxLength(14);
+        inputRow("View Archive", archiveField);
 
         this.addDrawableChild(
                 ButtonWidget.builder(Text.literal("Reset All"), b -> {
@@ -293,6 +327,12 @@ public class TownyMapConfigScreen extends Screen {
         this.addDrawableChild(reset);
     }
 
+    /** A label + input control row with no Reset button (for the archive-date field). */
+    private void inputRow(String label, ClickableWidget control) {
+        rows.add(new Row(label, control, null, false, null, currentCategory));
+        this.addDrawableChild(control);
+    }
+
     private void action(String label, Runnable onClick) {
         ButtonWidget b = ButtonWidget.builder(Text.literal(label), x -> onClick.run())
                 .dimensions(contentLeft, 0, Math.max(40, contentRight - contentLeft), 20).build();
@@ -310,6 +350,36 @@ public class TownyMapConfigScreen extends Screen {
         for (int i = 0; i < values.length; i++) boxed[i] = values[i];
         return CyclingButtonWidget.builder(toText, value).values(boxed).omitKeyText()
                 .build(ctrlX, 0, CTRL_W, 20, Text.empty(), (btn, val) -> { setter.accept(val); cfg.save(); });
+    }
+
+    // ── Preset "adjusters": a few labelled steps instead of a slider ──────────────
+    private static final String[] NEAR_MED_FAR = {"Near", "Medium", "Far"};
+    // Range presets are world-map block-scale thresholds: bigger = must be more zoomed in (Near),
+    // smaller = shows from further out (Far).
+    static final double[] NAME_RANGES = {0.15, 0.08, 0.035};
+    static final double[] AFFIL_RANGES = {0.18, 0.108, 0.05};
+    static final double[] HEAD_RANGES = {0.12, 0.06, 0.025};
+    private static final String[] THIN_MED_THICK = {"Thin", "Medium", "Thick"};
+    static final double[] THICKNESSES = {0.5f, 1.5f, 3.0f};
+
+    /** A cycling button over a few preset values, so an adjuster is a few clear steps rather than a slider.
+     *  The shown step is whichever preset the stored value is closest to. */
+    private CyclingButtonWidget<Integer> presets(double current, double[] values, String[] labels,
+                                                 java.util.function.DoubleConsumer setter) {
+        int[] idx = new int[values.length];
+        for (int i = 0; i < idx.length; i++) idx[i] = i;
+        return cycle(nearestPreset(current, values), idx, i -> Text.literal(labels[i]),
+                i -> setter.accept(values[i]));
+    }
+
+    private static int nearestPreset(double current, double[] values) {
+        int best = 0;
+        double bestD = Double.MAX_VALUE;
+        for (int i = 0; i < values.length; i++) {
+            double d = Math.abs(current - values[i]);
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
     }
 
     // ── Layout / filtering ──────────────────────────────────────────────────────
@@ -391,6 +461,8 @@ public class TownyMapConfigScreen extends Screen {
 
     @Override
     public boolean mouseClicked(Click click, boolean doubled) {
+        // Un-scale the click so it matches the UI-Scale-shrunk layout.
+        if (UiScale.active()) click = UiScale.unscaleClick(click, this.width / 2.0, this.height / 2.0);
         // Right-click a cycling control to step it backward (mirrors the in-game map buttons).
         // Category rail
         if (click.button() == 0 && searchQuery.isBlank()
@@ -428,6 +500,10 @@ public class TownyMapConfigScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
+        if (UiScale.active()) {
+            mouseX = UiScale.unscale(mouseX, this.width / 2.0);
+            mouseY = UiScale.unscale(mouseY, this.height / 2.0);
+        }
         int maxScroll = maxScroll();
         if (maxScroll <= 0) return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
         scrollOffset = Math.max(0, Math.min(maxScroll, scrollOffset - (int) Math.round(verticalAmount * 24.0)));
@@ -435,10 +511,43 @@ public class TownyMapConfigScreen extends Screen {
         return true;
     }
 
+    @Override
+    public boolean keyPressed(net.minecraft.client.input.KeyInput input) {
+        // Enter in the archive-date field opens that day's archive and closes settings.
+        if (archiveField != null && archiveField.isFocused()
+                && (input.key() == GLFW.GLFW_KEY_ENTER || input.key() == GLFW.GLFW_KEY_KP_ENTER)) {
+            submitArchive();
+            return true;
+        }
+        return super.keyPressed(input);
+    }
+
+    private void submitArchive() {
+        int date = TownSearchOverlay.parseArchiveDate(archiveField.getText());
+        if (date > 0) {
+            TownyMapMod.enterArchive(date);
+            this.close();
+        } else {
+            archiveField.setText("");   // reject malformed / pre-17-Apr-2026 input; placeholder re-guides
+        }
+    }
+
     // ── Rendering ─────────────────────────────────────────────────────────────────
 
     @Override
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
+        // UI Scale: shrink the whole screen around its centre; the mouse is un-scaled to match so hover/clicks
+        // still line up (mouseClicked/mouseScrolled un-scale the same way).
+        if (!UiScale.active()) { drawContent(ctx, mouseX, mouseY, delta); return; }
+        float cx = this.width / 2f, cy = this.height / 2f;
+        int mx = (int) Math.round(UiScale.unscale(mouseX, cx));
+        int my = (int) Math.round(UiScale.unscale(mouseY, cy));
+        UiScale.push(ctx, cx, cy);
+        try { drawContent(ctx, mx, my, delta); }
+        finally { UiScale.pop(ctx); }
+    }
+
+    private void drawContent(DrawContext ctx, int mouseX, int mouseY, float delta) {
         renderPanel(ctx);
         refreshResetStates();
         // Highlight before the widgets so the tint sits under the controls, not over them.
@@ -620,6 +729,15 @@ public class TownyMapConfigScreen extends Screen {
         });
     }
 
+    private static Text playerHeadModeText(Integer mode) {
+        return Text.literal(switch (mode) {
+            case 1 -> "World Map";
+            case 2 -> "Minimap";
+            case 3 -> "Both";
+            default -> "Off";
+        });
+    }
+
     private static Text netherModeText(Integer mode) {
         return Text.literal(mode == 2 ? "Overworld Coords" : "Hidden");
     }
@@ -671,41 +789,26 @@ public class TownyMapConfigScreen extends Screen {
         }
     }
 
-    private static final class PlayerNameRangeSlider extends SliderWidget {
+    /** Info-panel scale slider: maps the widget's 0–1 value onto 50–100%. */
+    private static final class PanelScaleSlider extends SliderWidget {
+        private static final float MIN = 0.7f, MAX = 1.0f;   // below 70% the GUIs get unreadable
         private final TownyMapConfig config;
 
-        private PlayerNameRangeSlider(int x, int y, int width, int height, TownyMapConfig config) {
-            super(x, y, width, height, Text.empty(), sliderValue(config.playerNameMinScale));
+        private PanelScaleSlider(int x, int y, int width, int height, TownyMapConfig config) {
+            super(x, y, width, height, Text.empty(), (config.infoPanelScale - MIN) / (MAX - MIN));
             this.config = config;
             updateMessage();
         }
 
         @Override
         protected void updateMessage() {
-            this.setMessage(Text.literal(rangeLabel(value)));
+            setMessage(Text.literal(Math.round(config.infoPanelScale * 100) + "%"));
         }
 
         @Override
         protected void applyValue() {
-            config.playerNameMinScale = scaleValue(value);
+            config.infoPanelScale = MIN + (float) value * (MAX - MIN);
             config.save();
-        }
-
-        private static double sliderValue(double scale) {
-            double clamped = Math.max(PLAYER_NAME_SCALE_MIN, Math.min(PLAYER_NAME_SCALE_MAX, scale));
-            return 1.0 - ((clamped - PLAYER_NAME_SCALE_MIN) / (PLAYER_NAME_SCALE_MAX - PLAYER_NAME_SCALE_MIN));
-        }
-
-        private static double scaleValue(double sliderValue) {
-            return PLAYER_NAME_SCALE_MIN + (1.0 - sliderValue) * (PLAYER_NAME_SCALE_MAX - PLAYER_NAME_SCALE_MIN);
-        }
-
-        private static String rangeLabel(double sliderValue) {
-            double scale = scaleValue(sliderValue);
-            if (scale <= 0.04) return "Very Far";
-            if (scale <= 0.08) return "Far";
-            if (scale <= 0.16) return "Normal";
-            return "Near";
         }
     }
 
@@ -771,77 +874,5 @@ public class TownyMapConfigScreen extends Screen {
         }
     }
 
-    private static final class PlayerAffiliationRangeSlider extends SliderWidget {
-        private final TownyMapConfig config;
-
-        private PlayerAffiliationRangeSlider(int x, int y, int width, int height, TownyMapConfig config) {
-            super(x, y, width, height, Text.empty(), sliderValue(config.playerAffiliationMinScale));
-            this.config = config;
-            updateMessage();
-        }
-
-        @Override
-        protected void updateMessage() {
-            this.setMessage(Text.literal(rangeLabel(value)));
-        }
-
-        @Override
-        protected void applyValue() {
-            config.playerAffiliationMinScale = scaleValue(value);
-            config.save();
-        }
-
-        private static double sliderValue(double scale) {
-            double clamped = Math.max(PLAYER_NAME_SCALE_MIN, Math.min(PLAYER_NAME_SCALE_MAX, scale));
-            return 1.0 - ((clamped - PLAYER_NAME_SCALE_MIN) / (PLAYER_NAME_SCALE_MAX - PLAYER_NAME_SCALE_MIN));
-        }
-
-        private static double scaleValue(double sliderValue) {
-            return PLAYER_NAME_SCALE_MIN + (1.0 - sliderValue) * (PLAYER_NAME_SCALE_MAX - PLAYER_NAME_SCALE_MIN);
-        }
-
-        private static String rangeLabel(double sliderValue) {
-            double scale = scaleValue(sliderValue);
-            if (scale <= 0.04) return "Very Far";
-            if (scale <= 0.08) return "Far";
-            if (scale <= 0.16) return "Normal";
-            return "Near";
-        }
-    }
-
     /** Slider for border line thickness — range 0.1× to 3.0×, snaps to 0.05 steps. */
-    private static final class BorderThicknessSlider extends SliderWidget {
-
-        private static final double MIN = 0.1;
-        private static final double MAX = 3.0;
-
-        private final TownyMapConfig config;
-
-        private BorderThicknessSlider(int x, int y, int width, int height, TownyMapConfig config) {
-            super(x, y, width, height, Text.empty(), toSlider(config.borderThicknessMultiplier));
-            this.config = config;
-            updateMessage();
-        }
-
-        @Override
-        protected void updateMessage() {
-            setMessage(Text.literal(String.format("%.2f×", snapped(value))));
-        }
-
-        @Override
-        protected void applyValue() {
-            config.borderThicknessMultiplier = (float) snapped(value);
-            config.save();
-        }
-
-        private static double snapped(double sliderValue) {
-            double raw = MIN + sliderValue * (MAX - MIN);
-            return Math.round(raw * 20) / 20.0;
-        }
-
-        private static double toSlider(double multiplier) {
-            double clamped = Math.max(MIN, Math.min(MAX, multiplier));
-            return (clamped - MIN) / (MAX - MIN);
-        }
-    }
 }

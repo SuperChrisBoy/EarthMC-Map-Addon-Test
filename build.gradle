@@ -10,7 +10,12 @@ base { archivesName = "${project.archives_base_name}-${project.minecraft_version
 repositories {
     maven { url 'https://maven.fabricmc.net/' }
     maven { url 'https://maven.terraformersmc.com/releases/' }
-    // Xaero's mods — place the Fabric 1.21.x JARs into libs/
+    // Xaero's own Maven, for the minimap + world-map compile-only dependencies below.
+    maven {
+        name = "Xaero's Maven"
+        url = 'https://chocolateminecraft.com/maven/'
+    }
+    // Fallback: a Fabric Xaero JAR dropped into libs/ still resolves (e.g. offline, or a version not on the Maven).
     flatDir { dirs 'libs' }
 }
 
@@ -23,8 +28,10 @@ dependencies {
     // Optional: ModMenu for in-game config screen. Adjust version to match your MC version.
     modCompileOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
 
-    // Compile-only: users must have Xaero's mods installed at runtime.
-    modCompileOnly fileTree(dir: 'libs', include: ['*.jar'])
+    // Compile-only: users must have Xaero's mods installed at runtime. Pulled from Xaero's Maven so no
+    // manual libs/ JARs are needed (CI can build cleanly).
+    modCompileOnly "xaero.minimap:xaerominimap-fabric-${project.minecraft_version}:${project.xaerominimap_version}"
+    modCompileOnly "xaero.map:xaeroworldmap-fabric-${project.minecraft_version}:${project.xaeroworldmap_version}"
 }
 
 processResources {

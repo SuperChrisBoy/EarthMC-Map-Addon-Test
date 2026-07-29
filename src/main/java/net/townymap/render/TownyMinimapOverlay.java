@@ -278,7 +278,8 @@ public final class TownyMinimapOverlay {
             ctx.disableScissor();
         }
 
-        if (!performanceShed && config.playersEnabled && config.minimapPlayersEnabled) {
+        if (!performanceShed && config.playersEnabled && config.minimapPlayersEnabled
+                && !TownyMapMod.isArchiveMode()) {   // archived snapshots have no live players
             renderPlayerDots(ctx, api.getPlayers(), player.getName().getString(),
                     mapX, mapY, size, playerX, playerZ, pixelsPerBlock, sin, cos,
                     clip);
@@ -1481,13 +1482,35 @@ public final class TownyMinimapOverlay {
                                          double playerX, double playerZ, double pixelsPerBlock,
                                          double sin, double cos,
                                          MinimapClip clip) {
-        if (players.isEmpty()) return;
         double centerX = mapX + size / 2.0;
         double centerY = mapY + size / 2.0;
         int radius = 1;
+        TownyMapConfig cfg = TownyMapMod.getConfig();
+        boolean heads = cfg != null && (cfg.playerHeadMode & 2) != 0;   // bit 1 = minimap
+        List<TownyMapMod.GhostMarker> ghosts =
+                (cfg != null && cfg.playerLastSeen) ? TownyMapMod.lastSeenGhosts() : java.util.List.of();
+        if (players.isEmpty() && ghosts.isEmpty()) return;
 
         ctx.enableScissor(clip.left(), clip.top(), clip.right() + 1, clip.bottom() + 1);
         try {
+            // Last-seen ghosts first, so live players draw over them. Same last-seen positions as the world
+            // map: a player off the map feed but still online (Nether/hidden) shows red at where they were.
+            for (TownyMapMod.GhostMarker g : ghosts) {
+                if (g.name().equalsIgnoreCase(selfName)) continue;
+                double dx = g.x() - playerX, dz = g.z() - playerZ;
+                int gx = (int) Math.round(centerX + (dx * cos - dz * sin) * pixelsPerBlock);
+                int gy = (int) Math.round(centerY + (dx * sin + dz * cos) * pixelsPerBlock);
+                if (gx < clip.left() + radius || gx > clip.right() - radius
+                        || gy < clip.top() + radius || gy > clip.bottom() - radius) continue;
+                if (!clip.containsPoint(gx, gy, radius + 0.5)) continue;
+                int red = (g.alpha() << 24) | 0xE23B3B;
+                if (heads) {
+                    net.townymap.render.PlayerHeadRenderer.draw(ctx, g.uuid(), g.name(), gx, gy, 8, red);
+                } else {
+                    ctx.fill(gx - radius, gy - radius, gx + radius + 1, gy + radius + 1, red);
+                }
+            }
+
             for (PlayerMarker marker : players) {
                 if (marker.name() == null || marker.name().equalsIgnoreCase(selfName)) continue;
                 double dx = marker.x() - playerX;
@@ -1500,7 +1523,12 @@ public final class TownyMinimapOverlay {
 
                 int color = TownyMapMod.minimapPlayerDotColor(marker.name());
                 if ((color >>> 24) == 0) continue;
-                ctx.fill(x - radius, y - radius, x + radius + 1, y + radius + 1, color);
+                if (heads) {
+                    net.townymap.render.PlayerHeadRenderer.draw(ctx, marker.uuid(), marker.name(),
+                            x, y, 8, color);
+                } else {
+                    ctx.fill(x - radius, y - radius, x + radius + 1, y + radius + 1, color);
+                }
             }
         } finally {
             ctx.disableScissor();
