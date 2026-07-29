@@ -52,12 +52,15 @@ public final class TownHoverOverlay {
         if (x < 4) x = 4;
         if (y < 4) y = 4;
 
+        boolean scaled = UiScale.active();
+        if (scaled) UiScale.push(ctx, x, y);   // non-interactive tooltip: just shrink it around its corner
         ctx.fill(x - 1, y - 1, x + boxW + 1, y + boxH + 1, BORDER);
         ctx.fill(x, y, x + boxW, y + boxH, BG);
         int textY = y + PADDING;
         for (int i = 0; i < lines.size(); i++) {
             ctx.text(tr, lines.get(i), x + PADDING, textY + LINE_HEIGHT * i, 0xFFFFFFFF, true);
         }
+        if (scaled) UiScale.pop(ctx);
     }
 
     public static TownData townAt(double worldX, double worldZ, List<TownData> towns) {

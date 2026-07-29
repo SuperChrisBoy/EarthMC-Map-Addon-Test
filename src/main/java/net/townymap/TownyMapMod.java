@@ -32,6 +32,7 @@ import net.townymap.model.MapJumpTarget;
 import net.townymap.model.NationBonusProjection;
 import net.townymap.model.NationResidentStats;
 import net.townymap.model.OptimisticClaimChunk;
+import net.townymap.model.PlayerMarker;
 import net.townymap.model.TownData;
 import net.townymap.model.TownPopupData;
 import net.townymap.render.TownyMinimapOverlay;
@@ -425,10 +426,118 @@ public class TownyMapMod implements ClientModInitializer {
             case 1 -> "Public";
             case 2 -> "Overclaim";
             case 3 -> "Open";
-            case 4 -> "For Sale";
-            case 5 -> "No Nation";
+            case 4 -> "Meganations";
+            case 5 -> "Alliances";
             default -> "None";
         };
+    }
+
+    // ── Meganation / Alliance map layers ─────────────────────────────────────
+    // Modes 4 (Meganations) and 5 (Alliances) recolour each town by the alliance its nation belongs to,
+    // using data from emcstats.bot.nu. Unlike the single-colour highlight modes (1–3), every alliance has
+    // its own colour, so the recolour is applied to the town SOURCE and flows through the whole tile bake.
+    private static final net.townymap.api.AllianceClient allianceClient = new net.townymap.api.AllianceClient();
+    private static volatile boolean allianceLoading = false;
+    private static volatile long allianceLoadedMs = 0;
+    private static volatile int allianceDataVersion = 0;
+    private static volatile Map<String, int[]> megaByNation = Map.of();       // nation(lower) → {outline,fill}
+    private static volatile Map<String, int[]> allianceByNation = Map.of();
+    private static volatile Map<String, List<String>> megaNamesByNation = Map.of();     // nation → meganation labels
+    private static volatile Map<String, List<String>> allianceNamesByNation = Map.of(); // nation → alliance labels
+
+    /** Bumps whenever the alliance colour maps change, so the renderer knows to re-bake. */
+    public static int allianceDataVersion() { return allianceDataVersion; }
+
+    /** Meganation names the given nation belongs to (usually 0 or 1), or empty. */
+    public static List<String> meganationsForNation(String nationBare) {
+        if (nationBare == null || nationBare.isBlank()) return List.of();
+        List<String> l = megaNamesByNation.get(nationBare.toLowerCase(Locale.ROOT));
+        return l == null ? List.of() : l;
+    }
+
+    /** Alliance names the given nation belongs to, or empty. */
+    public static List<String> alliancesForNation(String nationBare) {
+        if (nationBare == null || nationBare.isBlank()) return List.of();
+        List<String> l = allianceNamesByNation.get(nationBare.toLowerCase(Locale.ROOT));
+        return l == null ? List.of() : l;
+    }
+
+    /** Compact membership tag for the search results, e.g. "Meganation: X" / "Alliance: Y" / "" if none. */
+    public static String allianceTagForNation(String nationBare) {
+        List<String> m = meganationsForNation(nationBare);
+        List<String> a = alliancesForNation(nationBare);
+        StringBuilder sb = new StringBuilder();
+        if (!m.isEmpty()) sb.append(m.size() > 1 ? "Meganations: " : "Meganation: ").append(String.join(", ", m));
+        if (!a.isEmpty()) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append(a.size() > 1 ? "Alliances: " : "Alliance: ").append(String.join(", ", a));
+        }
+        return sb.toString();
+    }
+
+    public static boolean isAllianceMapMode() {
+        return config != null && (config.townStatusOverlayMode == 4 || config.townStatusOverlayMode == 5);
+    }
+
+    /** Outline+fill RGB for a nation in the active alliance layer, or null if that nation is in none. */
+    public static int[] allianceColorsForNation(String nationBare, boolean mega) {
+        if (nationBare == null || nationBare.isBlank()) return null;
+        Map<String, int[]> m = mega ? megaByNation : allianceByNation;
+        return m.get(nationBare.toLowerCase(Locale.ROOT));
+    }
+
+    /** A town's nation name with any "Capital of " prefix stripped, for matching against alliance rosters. */
+    public static String bareTownNation(String townName) {
+        if (apiClient == null || townName == null) return null;
+        String n = apiClient.getTownNation(townKey(townName));
+        if (n == null) return null;
+        if (n.regionMatches(true, 0, "Capital of ", 0, 11)) n = n.substring(11);
+        return n.trim();
+    }
+
+    /** Loads the alliance/meganation data if the cache is missing or stale (5 min). Called every frame the
+     *  map is open so the map modes, town menus and nation search always have it; self-throttles. */
+    public static void ensureAllianceData() {
+        if (allianceLoading) return;
+        if (allianceDataVersion > 0 && System.currentTimeMillis() - allianceLoadedMs < 300_000L) return;
+        allianceLoading = true;
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            List<net.townymap.api.AllianceClient.Alliance> list = allianceClient.fetch();
+            Minecraft client = Minecraft.getInstance();
+            Runnable apply = () -> {
+                allianceLoading = false;
+                allianceLoadedMs = System.currentTimeMillis();
+                if (list.isEmpty()) return;
+                Map<String, int[]> mega = new java.util.HashMap<>(), alli = new java.util.HashMap<>();
+                Map<String, List<String>> megaNames = new java.util.HashMap<>(), alliNames = new java.util.HashMap<>();
+                for (net.townymap.api.AllianceClient.Alliance a : list) {
+                    boolean m = a.mega();
+                    Map<String, int[]> colTarget = m ? mega : alli;
+                    Map<String, List<String>> nameTarget = m ? megaNames : alliNames;
+                    int[] cols = {a.outlineRgb(), a.fillRgb()};
+                    String label = a.label() == null || a.label().isBlank() ? a.identifier() : a.label();
+                    for (String n : a.nationsLower()) {
+                        colTarget.putIfAbsent(n, cols);   // first alliance's colour wins (a town is one colour)
+                        List<String> names = nameTarget.computeIfAbsent(n, k -> new java.util.ArrayList<>());
+                        if (!names.contains(label)) names.add(label);   // but list every bloc it's part of
+                    }
+                }
+                megaByNation = Map.copyOf(mega);
+                allianceByNation = Map.copyOf(alli);
+                megaNamesByNation = freezeLists(megaNames);
+                allianceNamesByNation = freezeLists(alliNames);
+                allianceDataVersion++;
+                if (renderer != null) renderer.invalidateTownCaches();   // re-bake tiles in alliance colours
+                net.townymap.gui.TownSearchOverlay.invalidateResults();  // refresh nation labels with tags
+            };
+            if (client != null) client.execute(apply); else apply.run();
+        });
+    }
+
+    private static Map<String, List<String>> freezeLists(Map<String, List<String>> m) {
+        Map<String, List<String>> out = new java.util.HashMap<>(m.size());
+        for (Map.Entry<String, List<String>> e : m.entrySet()) out.put(e.getKey(), List.copyOf(e.getValue()));
+        return Map.copyOf(out);
     }
 
     public static void onTownMarkersUpdated() {
@@ -469,6 +578,59 @@ public class TownyMapMod implements ClientModInitializer {
         config.chunkCounterGroups = groups;
         config.activeChunkCounterGroup = Math.max(0, Math.min(6, activeGroup));
         config.save();
+    }
+
+    // ── Last-seen player ghosts ──────────────────────────────────────────────
+    /** A player at their last-seen spot after they dropped off the live map feed. */
+    public record GhostMarker(String name, String uuid, int x, int z, int alpha) {}
+
+    private static final long GHOST_MAX_AGE_MS = 5 * 60_000L;   // stop showing a ghost 5 min after it vanished
+    private static volatile List<GhostMarker> cachedGhosts = List.of();
+    private static volatile long cachedGhostsAt;
+    private static final long GHOST_RECOMPUTE_MS = 500L;   // ghosts move slowly; no need to rebuild per frame
+
+    /**
+     * Players to draw at their last-seen position, for the "last seen" toggle.
+     *
+     * <p>A player in the live map feed is never a ghost. Dropping off the feed does not mean offline —
+     * EarthMC hides players who are in the Nether/End — so the client's own player list is used as the
+     * online oracle: it holds every player online on the server, across dimensions. Still in the list but
+     * off the feed = online but off-map (Nether/hidden) → show them, with their real head. Gone from the
+     * list = logged off → drop them, so a logged-off player is removed rather than left as a headless dot.
+     */
+    public static List<GhostMarker> lastSeenGhosts() {
+        if (config == null || !config.playerLastSeen || apiClient == null || !isActiveOnCurrentServer()) {
+            return List.of();
+        }
+        // Recompute a few times a second, not every frame: the set of ghosts and their fixed positions
+        // change slowly, so rebuilding the feed set and scanning history at 60fps was pure waste.
+        long sinceRecompute = System.currentTimeMillis() - cachedGhostsAt;
+        if (sinceRecompute >= 0 && sinceRecompute < GHOST_RECOMPUTE_MS) return cachedGhosts;
+
+        Minecraft client = Minecraft.getInstance();
+        var handler = client == null ? null : client.getConnection();
+        if (handler == null) return List.of();
+
+        long now = System.currentTimeMillis();
+        Set<String> feed = new java.util.HashSet<>();
+        for (PlayerMarker m : apiClient.getPlayers()) {
+            if (m.name() != null) feed.add(m.name().toLowerCase(Locale.ROOT));
+        }
+        Map<String, net.townymap.model.PlayerHistoryEntry> history = apiClient.getPlayerHistory();
+
+        List<GhostMarker> out = new ArrayList<>();
+        for (var e : history.entrySet()) {
+            if (feed.contains(e.getKey())) continue;       // still on the map → not a ghost
+            var h = e.getValue();
+            long age = now - h.lastSeenMs();
+            if (age < 0 || age > GHOST_MAX_AGE_MS) continue;
+            if (handler.getPlayerInfo(h.name()) == null) continue;   // logged off → remove
+            out.add(new GhostMarker(h.name(), h.uuid(), h.x(), h.z(), 0xFF));
+        }
+
+        cachedGhosts = out;
+        cachedGhostsAt = now;
+        return out;
     }
 
     public static List<OptimisticClaimChunk> optimisticClaimChunks() {
@@ -584,8 +746,9 @@ public class TownyMapMod implements ClientModInitializer {
             requestNationCapitalDetails();
             requestVisibleTownDetails(cameraX, cameraZ, scale, screenW, screenH);
             requestVisiblePlayerDetails(cameraX, cameraZ, scale, screenW, screenH);
+            ensureAllianceData();   // keep the alliance/meganation data warm for the map modes, town menus & search
             renderer.render(ctx, cameraX, cameraZ, scale, screenW, screenH,
-                    townDetailsCache, playerDetailsCache, nationDetailsCache);
+                    townDetailsCache, playerDetailsCache, activeNationDetails());
             if (config.customOverlaysEnabled) {
                 net.townymap.integration.CustomOverlayManager.render(ctx, cameraX, cameraZ, scale, screenW, screenH);
             }
@@ -770,8 +933,6 @@ public class TownyMapMod implements ClientModInitializer {
         }
     }
 
-    // Name → {lastX, lastZ, lastSeenMs} for players who were recently nearby (info-panel red tracking).
-    private static final java.util.Map<String, double[]> nearbyLastKnown = new java.util.HashMap<>();
 
     // Scale for our minimap text so it matches Xaero's own info/coordinate text. Xaero draws that
     // text inside its 1/xaeroScale matrix, i.e. at minimapScale/screenScale of the base font; ours
@@ -788,9 +949,8 @@ public class TownyMapMod implements ClientModInitializer {
 
     /**
      * Renders our info lines centred under the minimap: current town + nation, nearby players
-     * (within 100 blocks, with distance), and nearest town when in the wilderness. A player who was
-     * nearby but is no longer visible stays listed in red with their last-known distance until you
-     * are 100 blocks from that spot or one minute passes. Per-line config toggles.
+     * (within 100 blocks, with distance, straight off the live squaremap feed), and nearest town when
+     * in the wilderness. Per-line config toggles.
      */
     public static int renderMinimapInfoLines(GuiGraphicsExtractor ctx, int mapCenterX, int mapTop, int mapBottom) {
         if (!isActiveOnCurrentServer() || config == null || apiClient == null) return 0;
@@ -826,30 +986,27 @@ public class TownyMapMod implements ClientModInitializer {
             // and de-duped, so calling it here is cheap and won't double-fetch.
             apiClient.tickPlayers();
             String self = client.getUser().getName();
-            java.util.Map<String, Double> current = new java.util.HashMap<>();
-            for (var m : apiClient.getPlayers()) {
+            // Live players come straight off the feed (yellow); recently-departed ones are read from the same
+            // last-seen ghost data the minimap uses (red). Using the ghost source rather than an ad-hoc
+            // retention buffer means the list self-corrects within a refresh and honours the Last Seen toggle.
+            record Nearby(String name, double dist, boolean ghost) {}
+            java.util.List<Nearby> near = new java.util.ArrayList<>();
+            for (PlayerMarker m : apiClient.getPlayers()) {
                 if (m.name() == null || m.name().equalsIgnoreCase(self)) continue;
                 double d = Math.hypot(m.x() - px, m.z() - pz);
-                if (d <= 100.0) {
-                    current.put(m.name(), d);
-                    nearbyLastKnown.put(m.name(), new double[]{m.x(), m.z(), now});
-                }
+                if (d <= 100.0) near.add(new Nearby(m.name(), d, false));
             }
+            // Recently-departed players at their last-seen position (red), exactly the minimap's ghost data —
+            // so you can still see roughly where someone was after they drop off the live feed.
+            for (GhostMarker g : lastSeenGhosts()) {
+                if (g.name() == null || g.name().equalsIgnoreCase(self)) continue;
+                double d = Math.hypot(g.x() - px, g.z() - pz);
+                if (d <= 100.0) near.add(new Nearby(g.name(), d, true));
+            }
+            near.sort(java.util.Comparator.comparingDouble(Nearby::dist));
             java.util.List<String> entries = new java.util.ArrayList<>();
-            current.entrySet().stream()
-                    .sorted(java.util.Map.Entry.comparingByValue())
-                    .forEach(e -> entries.add("§e" + e.getKey() + " §7(" + (int) Math.round(e.getValue()) + "m)"));
-            java.util.Iterator<java.util.Map.Entry<String, double[]>> it = nearbyLastKnown.entrySet().iterator();
-            while (it.hasNext()) {
-                java.util.Map.Entry<String, double[]> e = it.next();
-                if (current.containsKey(e.getKey())) continue;
-                double[] t = e.getValue();
-                double d = Math.hypot(t[0] - px, t[1] - pz);
-                if (d > 100.0 || now - (long) t[2] > 60_000L) {
-                    it.remove();
-                    continue;
-                }
-                entries.add("§c" + e.getKey() + " §7(~" + (int) Math.round(d) + "m)");
+            for (Nearby n : near) {
+                entries.add((n.ghost() ? "§c" : "§e") + n.name() + " §7(" + (int) Math.round(n.dist()) + "m)");
             }
             if (!entries.isEmpty()) {
                 // One player per line (a column); cap the list and summarise the rest.
@@ -903,12 +1060,15 @@ public class TownyMapMod implements ClientModInitializer {
         float blockCenterX = Math.max(pad + maxW / 2f,
                 Math.min((float) mapCenterX, screenW - pad - maxW / 2f));
 
+        boolean scaled = net.townymap.gui.UiScale.active();
+        if (scaled) net.townymap.gui.UiScale.push(ctx, blockCenterX, top);   // shrink around the block's top-centre
         float cy = top + lineH / 2f;
         for (String line : lines) {
             TownyMinimapOverlay.drawScaledLabelCentered(ctx, client.font, line, blockCenterX, cy,
                     0xFFFFFFFF, 0, true);
             cy += lineH;
         }
+        if (scaled) net.townymap.gui.UiScale.pop(ctx);
         return (int) Math.ceil(totalH);
     }
 
@@ -1104,6 +1264,18 @@ public class TownyMapMod implements ClientModInitializer {
         if (requestPlayerDetails(name)) minimapPlayerDetailRequests++;
     }
 
+    /**
+     * Ensures a map-marker player's town/nation is being fetched, for their label. Live players already
+     * get this via {@link #playerDotColor}, but a last-seen (red) player has a fixed colour and never went
+     * through that path — so without this its town/nation stayed blank. Rate-limited and de-duped, and
+     * keyed the same ({@link #townKey}) as the lookup the label does, so a fetched result is found.
+     */
+    public static void requestPlayerLabelDetails(String name) {
+        if (config != null && earthMcApi != null && isActiveOnCurrentServer()) {
+            requestMinimapPlayerDetails(name);
+        }
+    }
+
     public static void renderOnMinimap(GuiGraphicsExtractor ctx, Object session, int x, int y, int size) {
         if (!isActiveOnCurrentServer()) return;
         try {
@@ -1115,6 +1287,145 @@ public class TownyMapMod implements ClientModInitializer {
         }
     }
 
+    private static int archiveBannerX1, archiveBannerY1, archiveBannerX2, archiveBannerY2;
+    private static boolean archiveBannerVisible;
+    private static volatile long lastArchiveErrorMs;
+    private static final int ARCHIVE_BANNER_Y = 34;   // top offset, shared by the render and the click hit-test
+    // Date-step buttons drawn under the banner: jump the snapshot by ±1 / ±10 days (clamped to MIN_DATE..today).
+    private static final int[] ARCHIVE_NAV_DELTAS = {-10, -1, 1, 10};
+    private static final String[] ARCHIVE_NAV_LABELS = {"«10", "«1", "1»", "10»"};
+    private static final int[] archiveNavX1 = new int[4];
+    private static final int[] archiveNavX2 = new int[4];
+    private static final boolean[] archiveNavEnabled = new boolean[4];
+    private static int archiveNavY1, archiveNavY2;
+    private static boolean archiveNavVisible;
+
+    /** Top-centre banner: loading progress, the active-archive status (click to exit), or a recent error \u2014
+     *  the only feedback there is, since entry is via the search bar. */
+    public static void renderArchiveBanner(GuiGraphicsExtractor ctx, int screenW) {
+        archiveBannerVisible = false;
+        archiveNavVisible = false;
+        Minecraft client = Minecraft.getInstance();
+        if (client == null) return;
+
+        boolean errorFresh = lastArchiveError != null && !lastArchiveError.isBlank()
+                && System.currentTimeMillis() - lastArchiveErrorMs < 8_000L;
+        String text;
+        int accent, fg;
+        boolean active = false;   // the "click to exit" banner (not loading / error) \u2192 shows the date arrows
+        if (archiveLoading) {
+            text = "Loading archive\u2026"; accent = 0xFFC79A3A; fg = 0xFFF3E0B0;
+        } else if (isArchiveMode()) {
+            text = archiveStatus; accent = 0xFFB8474A; fg = 0xFFF3C0C0; active = true;
+        } else if (errorFresh) {
+            text = "Archive: " + lastArchiveError; accent = 0xFFB8474A; fg = 0xFFF3C0C0;
+        } else {
+            return;
+        }
+        if (text == null || text.isBlank()) return;
+
+        int w = client.font.width(text);
+        int x = (screenW - w) / 2;
+        int y = ARCHIVE_BANNER_Y;   // below Xaero's top-centre coordinate readout so they don't overlap
+        archiveBannerX1 = x - 8; archiveBannerY1 = y - 4; archiveBannerX2 = x + w + 8; archiveBannerY2 = y + 11;
+        archiveBannerVisible = isArchiveMode();
+        boolean scaled = net.townymap.gui.UiScale.active();
+        if (scaled) net.townymap.gui.UiScale.push(ctx, screenW / 2f, ARCHIVE_BANNER_Y - 4);   // shrink around top-centre
+        ctx.fill(archiveBannerX1, archiveBannerY1, archiveBannerX2, archiveBannerY2, 0xE0141414);
+        ctx.fill(archiveBannerX1, archiveBannerY1, archiveBannerX2, archiveBannerY1 + 1, accent);
+        ctx.text(client.font, text, x, y, fg, false);
+        if (active) renderArchiveNav(ctx, client, screenW);
+        if (scaled) net.townymap.gui.UiScale.pop(ctx);
+    }
+
+    /** The \u00b11 / \u00b110 day buttons under the banner. Left arrows disable at MIN_DATE, right arrows at today. */
+    private static void renderArchiveNav(GuiGraphicsExtractor ctx, Minecraft client, int screenW) {
+        net.minecraft.client.gui.Font tr = client.font;
+        int req = archiveRequestedDate > 0 ? archiveRequestedDate : archiveActualDate;
+        boolean atMin = req <= net.townymap.api.ArchiveClient.MIN_DATE;
+        boolean atMax = req >= todayInt();
+
+        int padX = 6, gap = 4, h = 13, y = archiveBannerY2 + 3;
+        int[] widths = new int[4];
+        int total = gap * 3;
+        for (int i = 0; i < 4; i++) { widths[i] = tr.width(ARCHIVE_NAV_LABELS[i]) + padX * 2; total += widths[i]; }
+        int mouseX = (int) (client.mouseHandler.xpos() * screenW / client.getWindow().getWidth());
+        int mouseY = (int) (client.mouseHandler.ypos() * client.getWindow().getGuiScaledHeight() / client.getWindow().getHeight());
+
+        archiveNavY1 = y - 1; archiveNavY2 = y + h; archiveNavVisible = true;
+        int cx = (screenW - total) / 2;
+        for (int i = 0; i < 4; i++) {
+            boolean enabled = ARCHIVE_NAV_DELTAS[i] < 0 ? !atMin : !atMax;
+            archiveNavEnabled[i] = enabled;
+            archiveNavX1[i] = cx; archiveNavX2[i] = cx + widths[i];
+            boolean hover = enabled && mouseX >= cx && mouseX <= cx + widths[i] && mouseY >= archiveNavY1 && mouseY <= archiveNavY2;
+            int bg = !enabled ? 0x90141414 : hover ? 0xF0343036 : 0xE0141414;
+            int fg = !enabled ? 0xFF5A5A5A : 0xFFF3C0C0;
+            ctx.fill(cx, archiveNavY1, cx + widths[i], archiveNavY2, bg);
+            ctx.text(tr, ARCHIVE_NAV_LABELS[i], cx + padX, y + 2, fg, false);
+            cx += widths[i] + gap;
+        }
+    }
+
+    /** Left-click a date-step arrow. Returns true if it consumed the click. */
+    public static boolean onArchiveNavClick(double mx, double my) {
+        if (!archiveNavVisible || !isArchiveMode()) return false;
+        if (net.townymap.gui.UiScale.active()) {
+            Minecraft c = Minecraft.getInstance();
+            if (c != null) mx = net.townymap.gui.UiScale.unscale(mx, c.getWindow().getGuiScaledWidth() / 2.0);
+            my = net.townymap.gui.UiScale.unscale(my, ARCHIVE_BANNER_Y - 4);
+        }
+        if (my < archiveNavY1 || my > archiveNavY2) return false;
+        for (int i = 0; i < 4; i++) {
+            if (archiveNavEnabled[i] && mx >= archiveNavX1[i] && mx <= archiveNavX2[i]) {
+                shiftArchive(ARCHIVE_NAV_DELTAS[i]);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Today's date as yyyymmdd \u2014 the upper bound for archive navigation (no future snapshots exist). */
+    private static int todayInt() {
+        java.time.LocalDate d = java.time.LocalDate.now();
+        return d.getYear() * 10000 + d.getMonthValue() * 100 + d.getDayOfMonth();
+    }
+
+    /** Re-enters archive at the current requested date shifted by {@code deltaDays}, clamped to MIN_DATE..today. */
+    public static void shiftArchive(int deltaDays) {
+        if (!isArchiveMode() || archiveLoading) return;
+        int base = archiveRequestedDate > 0 ? archiveRequestedDate : archiveActualDate;
+        if (base <= 0) return;
+        java.time.LocalDate d = java.time.LocalDate.of(base / 10000, (base / 100) % 100, base % 100).plusDays(deltaDays);
+        int target = d.getYear() * 10000 + d.getMonthValue() * 100 + d.getDayOfMonth();
+        target = Math.max(net.townymap.api.ArchiveClient.MIN_DATE, Math.min(todayInt(), target));
+        if (target == base) return;   // already at the clamp bound in that direction
+        enterArchive(target);
+    }
+
+    /**
+     * Left-click on the archive banner exits archive mode. Returns true if it consumed the click.
+     * Self-contained (recomputes the banner box from the current state) so it still works even if the banner
+     * render was skipped for a frame — the earlier bug where exiting archive appeared to do nothing.
+     */
+    public static boolean onArchiveBannerClick(double mx, double my) {
+        if (!isArchiveMode()) return false;                 // only the active "click to exit" banner is clickable
+        Minecraft client = Minecraft.getInstance();
+        if (client == null || archiveStatus == null || archiveStatus.isBlank()) return false;
+        int w = client.font.width(archiveStatus);
+        int screenW = client.getWindow().getGuiScaledWidth();
+        int x = (screenW - w) / 2;
+        if (net.townymap.gui.UiScale.active()) {
+            mx = net.townymap.gui.UiScale.unscale(mx, screenW / 2.0);
+            my = net.townymap.gui.UiScale.unscale(my, ARCHIVE_BANNER_Y - 4);
+        }
+        if (mx < x - 8 || mx > x + w + 8 || my < ARCHIVE_BANNER_Y - 4 || my > ARCHIVE_BANNER_Y + 11) {
+            return false;
+        }
+        exitArchive();
+        return true;
+    }
+
     public static void renderTownSearch(GuiGraphicsExtractor ctx, int screenW, int screenH) {
         if (!isActiveOnCurrentServer()) return;
         if (apiClient != null) {
@@ -1124,7 +1435,7 @@ public class TownyMapMod implements ClientModInitializer {
             requestSearchDetailsIfNeeded();
             TownSearchOverlay.render(ctx, screenW, screenH, apiClient.getTowns(), apiClient.getPlayers(),
                     townDetailsCache, apiPlayers, playerDetailsCache, apiClient.getPlayerHistory(),
-                    apiNations, nationDetailsCache, config.favoriteTowns);
+                    activeNationList(), activeNationDetails(), config.favoriteTowns);
         }
     }
 
@@ -1138,7 +1449,7 @@ public class TownyMapMod implements ClientModInitializer {
             }
         }
         TownInfoOverlay.render(ctx, screenW, screenH,
-                data != null && isFavorite(data.townName()), nationDetailsCache);
+                data != null && isFavorite(data.townName()), activeNationDetails());
     }
 
     public static void renderTownHover(GuiGraphicsExtractor ctx, int mouseX, int mouseY,
@@ -1152,8 +1463,12 @@ public class TownyMapMod implements ClientModInitializer {
             String key = townKey(town.name());
             TownPopupData details = townDetailsCache.get(key);
             requestTownDetails(town.name(), key);
+            // In archive mode the live markers' mayor/nation are today's, not that date's — pass null so the
+            // hover uses only the archived popup detail (which carries the historical mayor/nation).
+            boolean arch = isArchiveMode();
             TownHoverOverlay.render(ctx, mouseX, mouseY, screenW, screenH, town, details,
-                    apiClient.getTownMayor(key), apiClient.getTownNation(key));
+                    arch ? null : apiClient.getTownMayor(key),
+                    arch ? archiveNationLabel(town, details) : apiClient.getTownNation(key));
         }
     }
 
@@ -1192,7 +1507,8 @@ public class TownyMapMod implements ClientModInitializer {
         if (!isActiveOnCurrentServer()) return TownSearchOverlay.ClickResult.none();
         if (apiClient == null) return TownSearchOverlay.ClickResult.none();
         return TownSearchOverlay.click(mouseX, mouseY, screenW, apiClient.getTowns(), apiClient.getPlayers(),
-                townDetailsCache, apiPlayers, playerDetailsCache, apiClient.getPlayerHistory(), apiNations, nationDetailsCache,
+                townDetailsCache, apiPlayers, playerDetailsCache, apiClient.getPlayerHistory(),
+                activeNationList(), activeNationDetails(),
                 config != null ? config.favoriteTowns : List.of());
     }
 
@@ -1200,12 +1516,18 @@ public class TownyMapMod implements ClientModInitializer {
         if (!isActiveOnCurrentServer()) return TownSearchOverlay.ClickResult.none();
         if (apiClient == null) return TownSearchOverlay.ClickResult.none();
         return TownSearchOverlay.keyPressed(keyCode, apiClient.getTowns(), apiClient.getPlayers(),
-                townDetailsCache, apiPlayers, playerDetailsCache, apiClient.getPlayerHistory(), apiNations, nationDetailsCache);
+                townDetailsCache, apiPlayers, playerDetailsCache, apiClient.getPlayerHistory(),
+                activeNationList(), activeNationDetails());
     }
 
     public static boolean onTownSearchCharTyped(char chr) {
         if (!isActiveOnCurrentServer()) return false;
         return TownSearchOverlay.charTyped(chr);
+    }
+
+    /** The user's info-panel scale multiplier (1.0 = current sizing), for the town popup's own scaling. */
+    public static float infoPanelScale() {
+        return config == null ? 1.0f : config.infoPanelScale;
     }
 
     public static TownInfoOverlay.ActionResult onTownInfoClick(double mouseX, double mouseY) {
@@ -1237,7 +1559,15 @@ public class TownyMapMod implements ClientModInitializer {
      */
     public static void openDetail(net.townymap.gui.DetailScreen.Kind kind, String name,
                                   net.minecraft.client.gui.screens.Screen parent) {
-        if (earthMcApi == null || name == null || name.isBlank()) return;
+        if (name == null || name.isBlank()) return;
+        // Archive mode: towns, nations AND players are built from the snapshot instead of fetched live, so
+        // following any link stays in that date's data (a player shows only what residency the archive knows).
+        if (isArchiveMode()) {
+            if (kind == net.townymap.gui.DetailScreen.Kind.TOWN) { openArchiveTownDetail(name, parent); return; }
+            if (kind == net.townymap.gui.DetailScreen.Kind.NATION) { openArchiveNationDetail(name, parent); return; }
+            if (kind == net.townymap.gui.DetailScreen.Kind.PLAYER) { openArchivePlayerDetail(name, parent); return; }
+        }
+        if (earthMcApi == null) return;
         Minecraft client = Minecraft.getInstance();
         if (client == null) return;
         net.minecraft.client.gui.screens.Screen from =
@@ -1268,10 +1598,264 @@ public class TownyMapMod implements ClientModInitializer {
         openDetail(net.townymap.gui.DetailScreen.Kind.TOWN, townName, null);
     }
 
+    /** Expand for an archived town: build the panel straight from the snapshot's data (no live fetch), so it
+     *  shows that date's residents/councillors/etc. and omits every field the archive doesn't record. */
+    private static void openArchiveTownDetail(String townName, net.minecraft.client.gui.screens.Screen parent) {
+        Minecraft client = Minecraft.getInstance();
+        if (client == null || townName == null) return;
+        net.minecraft.client.gui.screens.Screen from = parent != null ? parent : client.screen;
+        net.townymap.gui.DetailScreen screen = new net.townymap.gui.DetailScreen(from, townName);
+        client.setScreen(screen);
+        net.townymap.api.ArchiveClient.ArchiveTown at = archiveTownDetails.get(townName.toLowerCase(Locale.ROOT));
+        if (at == null) screen.markFailed();
+        else screen.setPage(net.townymap.gui.DetailPages.archiveTown(at));
+    }
+
+    /**
+     * Expand for an archived nation: derived entirely from the snapshot's towns — its member towns AND their
+     * residents/chunks as they were on that date. Nation-level data the markers don't carry (king, founded,
+     * bank, allies, spawn, over-claim…) is omitted rather than guessed.
+     */
+    private static void openArchiveNationDetail(String nationName, net.minecraft.client.gui.screens.Screen parent) {
+        Minecraft client = Minecraft.getInstance();
+        if (client == null || nationName == null) return;
+        net.minecraft.client.gui.screens.Screen from = parent != null ? parent : client.screen;
+        net.townymap.gui.DetailScreen screen = new net.townymap.gui.DetailScreen(from, nationName);
+        client.setScreen(screen);
+
+        // Gather this nation's towns from the snapshot, in claim-size order (capital first), aggregating
+        // residents (each resident is in exactly one town) and chunks.
+        List<net.townymap.api.ArchiveClient.ArchiveTown> towns = new ArrayList<>();
+        String capital = "";
+        for (net.townymap.api.ArchiveClient.ArchiveTown t : archiveTownDetails.values()) {
+            if (nationName.equalsIgnoreCase(t.nation())) {
+                towns.add(t);
+                if (t.capital()) capital = t.name();
+            }
+        }
+        if (towns.isEmpty()) { screen.markFailed(); return; }
+        towns.sort((a, b) -> Integer.compare(b.chunks(), a.chunks()));
+
+        List<String> townNames = new ArrayList<>();
+        java.util.LinkedHashSet<String> residents = new java.util.LinkedHashSet<>();
+        int chunks = 0;
+        for (net.townymap.api.ArchiveClient.ArchiveTown t : towns) {
+            townNames.add(t.name());
+            residents.addAll(t.residents());
+            chunks += t.chunks();
+        }
+        screen.setPage(net.townymap.gui.DetailPages.archiveNation(
+                nationName, capital, townNames, new ArrayList<>(residents), chunks));
+    }
+
+    /** Expand for an archived player: only what the snapshot reveals — the town they resided in, its nation,
+     *  and their rank in it. Nothing live (last online, balance, registered date…) is shown. */
+    private static void openArchivePlayerDetail(String playerName, net.minecraft.client.gui.screens.Screen parent) {
+        Minecraft client = Minecraft.getInstance();
+        if (client == null || playerName == null) return;
+        net.minecraft.client.gui.screens.Screen from = parent != null ? parent : client.screen;
+        net.townymap.gui.DetailScreen screen = new net.townymap.gui.DetailScreen(from, playerName);
+        client.setScreen(screen);
+        ArchivePlayerInfo info = archivePlayerInfo(playerName);
+        if (info == null) screen.markFailed();   // not a resident of any town on that date
+        else screen.setPage(net.townymap.gui.DetailPages.archivePlayer(playerName, info.town(), info.nation(), info.role()));
+    }
+
     /**
      * Called by MixinGuiMap when the player right-clicks the map.
      * Shows a loading indicator immediately, then fills in data asynchronously.
      */
+    /** Screen-pixel radius within which a left-click counts as hitting a player marker. Covers both the
+     *  small dot and the larger head, with a little slack so the tiny dot is still easy to click. */
+    private static final double PLAYER_CLICK_RADIUS = 8.0;
+
+    /**
+     * Left-click hit-test against the player markers (live dots/heads and last-seen ghosts). On a hit it
+     * opens the small player info panel — which carries the Expand button to the full panel — and returns
+     * true so the click is consumed. {@code camXWorld/camZWorld} and {@code mapScale} are the overlay's
+     * own camera and scale, so the projection matches exactly where the markers were drawn.
+     */
+    public static boolean onMapPlayerClick(double screenX, double screenY,
+                                           double camXWorld, double camZWorld, double mapScale,
+                                           int sw, int sh) {
+        if (!isActiveOnCurrentServer() || config == null || apiClient == null
+                || !config.playersEnabled || mapScale <= 0 || isArchiveMode()) return false;
+        Minecraft client = Minecraft.getInstance();
+        if (client == null || client.getUser() == null) return false;
+        String selfName = client.getUser().getName();
+
+        double bestDist = PLAYER_CLICK_RADIUS + 1;
+        String bestName = null;
+        for (PlayerMarker m : apiClient.getPlayers()) {
+            if (m.name() == null || m.name().equalsIgnoreCase(selfName)) continue;
+            double d = markerScreenDist(m.x(), m.z(), camXWorld, camZWorld, mapScale, sw, sh, screenX, screenY);
+            if (d < bestDist) { bestDist = d; bestName = m.name(); }
+        }
+        if (config.playerLastSeen) {
+            for (GhostMarker g : lastSeenGhosts()) {
+                if (g.name().equalsIgnoreCase(selfName)) continue;
+                double d = markerScreenDist(g.x(), g.z(), camXWorld, camZWorld, mapScale, sw, sh, screenX, screenY);
+                if (d < bestDist) { bestDist = d; bestName = g.name(); }
+            }
+        }
+        if (bestName == null || bestDist > PLAYER_CLICK_RADIUS) return false;
+        TownSearchOverlay.openSearch("player", bestName);
+        return true;
+    }
+
+    /**
+     * Left-click hit-test against the nation capital stars. On a hit it opens the small nation info panel
+     * (which carries the Expand button), mirroring the player-dot behaviour. Star screen positions are
+     * recorded by the renderer as they're drawn, so the hit-test matches exactly and needs no re-projection.
+     */
+    public static boolean onMapNationStarClick(double screenX, double screenY) {
+        if (renderer == null || config == null || !config.nationStarsEnabled) return false;
+        String nation = renderer.nationStarAt(screenX, screenY);
+        if (nation == null || nation.isBlank()) return false;
+        TownSearchOverlay.openSearch("nation", nation);
+        return true;
+    }
+
+    private static double markerScreenDist(int worldX, int worldZ, double camXWorld, double camZWorld,
+                                           double mapScale, int sw, int sh, double screenX, double screenY) {
+        double mx = (worldX - camXWorld) * mapScale + sw / 2.0;
+        double my = (worldZ - camZWorld) * mapScale + sh / 2.0;
+        return Math.hypot(mx - screenX, my - screenY);
+    }
+
+    // ── Archive mode (Wayback Machine historical claims) ─────────────────────
+    private static final net.townymap.api.ArchiveClient archiveClient = new net.townymap.api.ArchiveClient();
+    private static volatile boolean archiveLoading = false;
+    private static volatile String archiveStatus = "";     // banner text while active/loading, else blank
+    private static volatile int archiveActualDate = 0;
+    private static volatile int archiveRequestedDate = 0;   // last date asked for; the ± arrows step from this
+    // Nations as they were on the archived date, synthesized from the snapshot's town tooltips. Swapped in
+    // for the live nation data while archive mode is active so stars/search/hover show that date's nations.
+    private static volatile Map<String, EarthMcNationData> archiveNations = null;
+    private static volatile List<EarthMcNationData> archiveNationList = List.of();
+    // Full archived town info (residents/councillors/etc. as they were), keyed lower-case, for the Expand panel.
+    private static volatile Map<String, net.townymap.api.ArchiveClient.ArchiveTown> archiveTownDetails = Map.of();
+    // Reverse index: player (lower-case) → the town they resided in on the snapshot date.
+    private static volatile Map<String, String> archivePlayerTowns = Map.of();
+
+    /** What the archive knows about a player on the snapshot date — all derived from town residencies. */
+    public record ArchivePlayerInfo(String town, String nation, String role) {}
+
+    /** The archived residency of a player, or null if they weren't a resident of any town on that date. */
+    public static ArchivePlayerInfo archivePlayerInfo(String name) {
+        if (name == null) return null;
+        String townName = archivePlayerTowns.get(name.toLowerCase(Locale.ROOT));
+        if (townName == null) return null;
+        net.townymap.api.ArchiveClient.ArchiveTown t = archiveTownDetails.get(townName.toLowerCase(Locale.ROOT));
+        if (t == null) return null;
+        String role = t.mayor() != null && t.mayor().equalsIgnoreCase(name) ? "Mayor"
+                : containsIgnoreCase(t.councillors(), name) ? "Councillor" : "Resident";
+        return new ArchivePlayerInfo(t.name(), t.nation() == null ? "" : t.nation(), role);
+    }
+
+    private static boolean containsIgnoreCase(List<String> list, String s) {
+        if (list == null) return false;
+        for (String e : list) if (e.equalsIgnoreCase(s)) return true;
+        return false;
+    }
+
+    private static Map<String, String> buildArchivePlayerTowns(
+            Map<String, net.townymap.api.ArchiveClient.ArchiveTown> towns) {
+        Map<String, String> out = new java.util.HashMap<>();
+        for (net.townymap.api.ArchiveClient.ArchiveTown t : towns.values()) {
+            for (String r : t.residents()) out.putIfAbsent(r.toLowerCase(Locale.ROOT), t.name());
+        }
+        return out;
+    }
+
+    /** The nation data the map should show right now — archived nations in archive mode, else live. */
+    private static Map<String, EarthMcNationData> activeNationDetails() {
+        return archiveNations != null ? archiveNations : nationDetailsCache;
+    }
+    private static List<EarthMcNationData> activeNationList() {
+        return archiveNations != null ? archiveNationList : apiNations;
+    }
+
+    /** The hover's nation label for an archived town: "Capital of X" if it was that nation's capital on the
+     *  snapshot date, else "X", or null when the town had no nation then (so the hover omits it entirely). */
+    private static String archiveNationLabel(TownData town, TownPopupData details) {
+        String nation = details == null ? null : details.nationName();
+        if (nation == null || nation.isBlank()) return null;
+        EarthMcNationData nd = archiveNations == null ? null : archiveNations.get(nation.toLowerCase(Locale.ROOT));
+        boolean capital = nd != null && town.name().equalsIgnoreCase(nd.capitalName());
+        return capital ? "Capital of " + nation : nation;
+    }
+
+    public static boolean isArchiveMode() { return apiClient != null && apiClient.isArchiveActive(); }
+    public static boolean isArchiveLoading() { return archiveLoading; }
+    public static String archiveStatus() { return archiveStatus; }
+
+    /**
+     * Loads the archived town claims nearest {@code yyyymmdd} (Terra Nostra) and switches the map to show
+     * them. Players and live refresh pause while archive mode is active. Fetched off-thread; the banner
+     * shows progress. {@code exitArchive} restores the live map.
+     */
+    public static void enterArchive(int yyyymmdd) {
+        if (apiClient == null || archiveLoading) return;
+        archiveLoading = true;
+        archiveStatus = "Loading archive…";
+        lastArchiveError = "";
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            var snap = archiveClient.fetchSnapshot(yyyymmdd);
+            Minecraft client = Minecraft.getInstance();
+            Runnable apply = () -> {
+                archiveLoading = false;
+                if (snap == null || snap.towns().isEmpty()) {
+                    if (!isArchiveMode()) archiveStatus = "";
+                    lastArchiveError = "No snapshot found near that date.";
+                    lastArchiveErrorMs = System.currentTimeMillis();
+                    return;
+                }
+                apiClient.setArchiveTowns(snap.towns());
+                // Seed the detail cache with the snapshot's own popup info, so clicking an archived town
+                // shows that date's mayor/residents/founded — not today's (live fetches are gated off above).
+                townDetailsCache.clear();
+                snap.details().forEach(townDetailsCache::put);
+                archiveNations = new java.util.HashMap<>(snap.nations());
+                archiveNationList = List.copyOf(snap.nations().values());
+                archiveTownDetails = new java.util.HashMap<>(snap.fullDetails());
+                archivePlayerTowns = buildArchivePlayerTowns(snap.fullDetails());
+                if (renderer != null) renderer.invalidateTownCaches();
+                archiveActualDate = snap.actualDate();
+                archiveRequestedDate = yyyymmdd;   // the ± arrows step from what we asked for, not what Wayback resolved
+                archiveStatus = "ARCHIVE · " + formatArchiveDate(snap.actualDate())
+                        + " · " + snap.towns().size() + " towns · click to exit";
+                lastArchiveError = "";
+            };
+            if (client != null) client.execute(apply); else apply.run();
+        });
+    }
+
+    public static void exitArchive() {
+        if (apiClient == null) return;
+        apiClient.clearArchive();
+        townDetailsCache.clear();   // drop the archived popups so live data re-fetches
+        archiveNations = null;      // fall back to live nation data for stars/search/hover
+        archiveNationList = List.of();
+        archiveTownDetails = Map.of();
+        archivePlayerTowns = Map.of();
+        if (renderer != null) renderer.invalidateTownCaches();
+        archiveStatus = "";
+        archiveActualDate = 0;
+        archiveRequestedDate = 0;
+        archiveLoading = false;
+    }
+
+    private static volatile String lastArchiveError = "";
+    public static String lastArchiveError() { return lastArchiveError; }
+
+    private static String formatArchiveDate(int yyyymmdd) {
+        if (yyyymmdd <= 0) return "?";
+        int y = yyyymmdd / 10000, m = (yyyymmdd / 100) % 100, d = yyyymmdd % 100;
+        String[] mon = {"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+        return d + " " + (m >= 1 && m <= 12 ? mon[m] : "?") + " " + y;
+    }
+
     public static void onMapRightClick(double worldX, double worldZ, int screenX, int screenY) {
         if (!isActiveOnCurrentServer()) return;
         if (earthMcApi == null) return;
@@ -1293,7 +1877,11 @@ public class TownyMapMod implements ClientModInitializer {
         long lookupId = townLookupId.incrementAndGet();
         if (fallback != null) {
             showLookupResult(fallback, screenX, screenY, worldX, worldZ, fallbackTarget);
-            if (isTownDetailsFresh(fallbackKey)) return;
+            // Archive: the live API doesn't know these historical towns — keep the snapshot popup, never fetch.
+            if (isArchiveMode() || isTownDetailsFresh(fallbackKey)) return;
+        } else if (isArchiveMode()) {
+            TownInfoOverlay.dismiss();   // archived town with no seeded detail — nothing live to fall back to
+            return;
         } else {
             TownInfoOverlay.showLoading(screenX, screenY);
         }
@@ -1355,7 +1943,10 @@ public class TownyMapMod implements ClientModInitializer {
         long lookupId = townLookupId.incrementAndGet();
         if (fallback != null) {
             showLookupResult(fallback, sx, sy, worldX, worldZ, fallbackTarget);
-            if (isTownDetailsFresh(fallbackKey)) return;
+            if (isArchiveMode() || isTownDetailsFresh(fallbackKey)) return;   // archive: keep the snapshot popup
+        } else if (isArchiveMode()) {
+            TownInfoOverlay.dismiss();
+            return;
         } else {
             TownInfoOverlay.showLoading(sx, sy);
         }
@@ -1410,7 +2001,9 @@ public class TownyMapMod implements ClientModInitializer {
                                          double clickedWorldX, double clickedWorldZ,
                                          MapJumpTarget fallbackTarget) {
         if (data != null) {
-            if (data != TownPopupData.WILDERNESS) {
+            // Don't persist archived popups into the live (disk-backed) details cache — that would leak
+            // historical data into the live map on the next session.
+            if (data != TownPopupData.WILDERNESS && !isArchiveMode()) {
                 cacheTownDetails(townKey(data.townName()), data);
                 scheduleTownDetailsCacheSave();
             }
@@ -1468,6 +2061,7 @@ public class TownyMapMod implements ClientModInitializer {
     // path (requestTownDetailsBulk); this is only ever called for one town at a time, so it needs no
     // concurrency cap of its own — the loading set just dedupes an in-flight request.
     private static void requestTownDetails(String townName, String key) {
+        if (isArchiveMode()) return;   // archive uses the snapshot's own popup data, never live
         long now = System.currentTimeMillis();
         if (earthMcApi == null || isTownDetailsFresh(key) || requestDeferred(townDetailsDeferredAt, key, now)) return;
         if (!townDetailsLoading.add(key)) return;
@@ -1534,6 +2128,7 @@ public class TownyMapMod implements ClientModInitializer {
     }
 
     private static void requestTownActiveResidents(String townName, String key) {
+        if (isArchiveMode()) return;
         if (earthMcApi == null || townName == null || townName.isBlank() || key == null || key.isBlank()) return;
         if (townActiveCache.containsKey(key) || !townActiveLoading.add(key)) return;
         earthMcApi.fetchTownActiveResidents(townName).whenComplete((count, error) -> {
@@ -1638,7 +2233,9 @@ public class TownyMapMod implements ClientModInitializer {
     private static void requestVisibleTownDetails(double cameraX, double cameraZ, double scale,
                                                   int screenW, int screenH) {
         if (earthMcApi == null || apiClient == null || renderer == null || config == null) return;
-        if (config.townStatusOverlayMode == 0) return;
+        // Only the highlight modes (Public/Overclaim/Open) read per-town details; the alliance layers get
+        // everything they need from the markers' nation, so skip the bulk /towns prefetch for them.
+        if (config.townStatusOverlayMode < 1 || config.townStatusOverlayMode > 3) return;
         if (scale <= 0) return;
         long now = System.currentTimeMillis();
         if (now - lastVisibleTownDetailsRequestMs < 500L) return;
@@ -1671,6 +2268,7 @@ public class TownyMapMod implements ClientModInitializer {
      * each town the API returns; towns it didn't return are deferred so they don't re-fire every cycle.
      */
     private static void requestTownDetailsBulk(List<String> names, List<String> keys) {
+        if (isArchiveMode()) return;   // archive uses the snapshot's own popup data, never live
         if (earthMcApi == null || names.isEmpty()) return;
         // Mark all in-flight up front so the next render cycle skips them.
         townDetailsLoading.addAll(keys);
@@ -1830,6 +2428,7 @@ public class TownyMapMod implements ClientModInitializer {
     }
 
     private static void requestNationDetailsForSearch() {
+        if (isArchiveMode()) return;   // archive nation data comes from the snapshot, not the live API
         if (earthMcApi == null) return;
         // Bulk-fetch details for the visible search nations in one /nations request. The active/projection
         // lookup is NOT fired here — it's on-demand for the selected nation only (nationBonusProjection).
@@ -1845,6 +2444,7 @@ public class TownyMapMod implements ClientModInitializer {
     }
 
     private static void requestNationCapitalDetails() {
+        if (isArchiveMode()) return;   // archive capital stars come from the snapshot, not the live API
         if (earthMcApi == null || apiNations.isEmpty()) return;
         long now = System.currentTimeMillis();
         if (now - lastNationCapitalDetailsRequestMs < 1_000L) return;
@@ -1895,6 +2495,7 @@ public class TownyMapMod implements ClientModInitializer {
     // Single-nation fetch for one town's nation (hover/selected town). The bulk path handles the stars and
     // search rows, so this only ever runs for one nation at a time and needs no concurrency cap of its own.
     private static boolean requestNationDetails(String name) {
+        if (isArchiveMode()) return false;   // don't overwrite archived nation info with today's
         if (earthMcApi == null || name == null || name.isBlank()) return false;
         String key = townKey(name);
         long now = System.currentTimeMillis();
