@@ -1000,6 +1000,26 @@ public final class TownSearchOverlay {
         int mx = scaled ? (int) Math.round(UiScale.unscale(scaledMouseX(), infoAnchorX)) : scaledMouseX();
         int my = scaled ? (int) Math.round(UiScale.unscale(scaledMouseY(), infoAnchorY)) : scaledMouseY();
 
+        // Star (favourite). Worked out before the range ring so the ring's hover label knows to clear it.
+        // On players it sits left of the head rather than over it.
+        infoStarVisible = false;
+        int starD = 13;
+        if ("nation".equals(selectedType) || "player".equals(selectedType)) {
+            infoStarVisible = true;
+            infoStarW = starD;
+            infoStarH = starD;
+            infoStarY = y + 5;
+            boolean nationRing = "nation".equals(selectedType)
+                    && TownyMapMod.getConfig().nationRangeEnabled;
+            if (nationRing) {
+                infoStarX = x + boxW - 6 - 13 - 4 - starD;      // left of the range ring
+            } else if ("player".equals(selectedType)) {
+                infoStarX = x + boxW - 5 - 16 - 4 - starD;      // left of the 16px head
+            } else {
+                infoStarX = x + boxW - 6 - starD;
+            }
+        }
+
         // Join-range toggle: a small ring in the top-right of a nation's panel. Labels itself on hover so the
         // icon doesn't need explaining, and stays lit while its zone is on the map.
         infoRangeVisible = false;
@@ -1019,27 +1039,20 @@ public final class TownSearchOverlay {
             if (hov) {   // left of the ring, so it never runs off the screen edge
                 String label = "Nation Range";
                 int lw = tr.getWidth(label);
-                int lx = infoRangeX - 4 - lw, ly = infoRangeY + 3;
+                int lx = (infoStarVisible ? infoStarX : infoRangeX) - 4 - lw, ly = infoRangeY + 3;
                 ctx.fill(lx - 3, ly - 3, lx + lw + 3, ly + 10, 0xE0101114);
                 ctx.drawText(tr, label, lx, ly, 0xFFFFFFFF, false);
             }
         }
         // Star: nations and players can be favourited too, not just towns. Sits left of the range ring
         // when there is one, otherwise takes the top-right corner itself.
-        infoStarVisible = false;
-        if ("nation".equals(selectedType) || "player".equals(selectedType)) {
-            int d = 13;
-            infoStarX = (infoRangeVisible ? infoRangeX - 4 - d : x + boxW - 6 - d);
-            infoStarY = y + 5;
-            infoStarW = d;
-            infoStarH = d;
-            infoStarVisible = true;
+        if (infoStarVisible) {
             boolean on = TownyMapMod.isFavoriteEntity(selectedType, selectedName);
-            boolean hov = inside(mx, my, infoStarX, infoStarY, d, d);
+            boolean hov = inside(mx, my, infoStarX, infoStarY, starD, starD);
             int col = on ? 0xFFFFD24A : hov ? 0xFFFFFFFF : 0xFF9AA0A8;
             String star = on ? "\u2605" : "\u2606";
             int swid = tr.getWidth(star);
-            ctx.drawText(tr, star, infoStarX + (d - swid) / 2, infoStarY + 3, col, false);
+            ctx.drawText(tr, star, infoStarX + (starD - swid) / 2, infoStarY + 3, col, false);
             if (hov) {
                 String label = on ? "Unfavourite" : "Favourite";
                 int lw = tr.getWidth(label);
@@ -1392,7 +1405,14 @@ public final class TownSearchOverlay {
                     favoritesOpen = false;
                     focused = false;
                     if (fav.town() != null) return ClickResult.jump(fav.town());
-                    openSearch(fav.type(), fav.name());   // nation/player: open their panel
+                    // Nations go to their capital, players to where they are — a favourite should take you
+                    // somewhere, the same way a favourite town does.
+                    MapJumpTarget target = favoriteTarget(fav, towns);
+                    if (target != null) {
+                        openSearch(fav.type(), fav.name());   // also show the panel for what we jumped to
+                        return ClickResult.jump(target);
+                    }
+                    openSearch(fav.type(), fav.name());
                     return ClickResult.consumedResult();
                 }
             }
@@ -1402,6 +1422,31 @@ public final class TownSearchOverlay {
 
     /** One row of the favourites dropdown. Towns jump straight to their claim; the other kinds open a panel. */
     private record FavEntry(String type, String name, TownData town) {}
+
+    /**
+     * Where a favourited nation or player lives on the map: a nation's capital, a player's current position.
+     * Falls back to their last-seen spot, so a player who has just gone offline (or hidden) still leads
+     * somewhere rather than doing nothing.
+     */
+    private static MapJumpTarget favoriteTarget(FavEntry fav, List<TownData> towns) {
+        if ("nation".equals(fav.type())) {
+            EarthMcNationData nd = TownyMapMod.nationDetails(fav.name());
+            if (nd != null && !nd.capitalName().isBlank()) {
+                TownData capital = townByName(towns, nd.capitalName());
+                if (capital != null) {
+                    return new MapJumpTarget(fav.name(), capital.centerX(), capital.centerZ());
+                }
+            }
+            if (nd != null && nd.hasSpawn()) {
+                return new MapJumpTarget(fav.name(), nd.spawnX(), nd.spawnZ());
+            }
+            return null;
+        }
+        if ("player".equals(fav.type())) {
+            return TownyMapMod.playerJumpTarget(fav.name());
+        }
+        return null;
+    }
 
     /** Towns, then nations, then players — each alphabetical, so the list is stable as it grows. */
     private static List<FavEntry> favoriteEntries(List<TownData> towns, List<String> favoriteNames) {

@@ -567,6 +567,25 @@ public class TownyMapMod implements ClientModInitializer {
         }
     }
 
+    /**
+     * Where a player is right now, for jumping to them. Live position first; if they aren't on the feed —
+     * offline, or hidden from the public map — their last-seen ghost, which is the last place we saw them.
+     */
+    public static net.townymap.model.MapJumpTarget playerJumpTarget(String name) {
+        if (name == null || name.isBlank() || apiClient == null) return null;
+        for (PlayerMarker m : apiClient.getPlayers()) {
+            if (m.name() != null && m.name().equalsIgnoreCase(name)) {
+                return new net.townymap.model.MapJumpTarget(m.name(), m.x(), m.z());
+            }
+        }
+        for (GhostMarker g : lastSeenGhosts()) {
+            if (g.name() != null && g.name().equalsIgnoreCase(name)) {
+                return new net.townymap.model.MapJumpTarget(g.name(), (int) g.x(), (int) g.z());
+            }
+        }
+        return null;
+    }
+
     /** Resident count for a town, parsed from its squaremap popup; -1 if unknown. */
     public static int townResidentsOf(String townKey) {
         return apiClient == null ? -1 : apiClient.getTownResidents(townKey);
