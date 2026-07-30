@@ -1,9 +1,5 @@
 package net.townymap.render;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.AddressMode;
@@ -28,7 +24,6 @@ import java.awt.image.BufferedImage;
 import java.awt.geom.Path2D;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -48,10 +43,10 @@ import java.util.concurrent.Executors;
 final class BorderOverlayRenderer {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("TownyMapAddon");
-    private static final String COUNTRIES =
-            "/assets/townymapaddon/borders/borders.nostra.countries.json";
-    private static final String STATES =
-            "/assets/townymapaddon/borders/borders.nostra.states-and-countries.json";
+    /** Compact border geometry, produced from the source JSONs by tools/EncodeBorders at build time. */
+    private static final String BORDERS_BIN = "/assets/townymapaddon/borders/borders.bin";
+    private static final byte LAYER_COUNTRY = 1;
+    private static final byte LAYER_STATE_ONLY = 2;
     private static final int TILE_PIXELS = 512;
     private static final int ATLAS_GRID = 4;
     private static final int ATLAS_PIXELS = TILE_PIXELS * ATLAS_GRID;
@@ -101,7 +96,6 @@ final class BorderOverlayRenderer {
     private volatile boolean prebuiltAtlasManifestLoaded;
 
     private List<BorderLine> countryLines;
-    private List<BorderLine> stateLines;
     private List<BorderLine> stateOnlyLines;
 
     BorderOverlayRenderer(TownyMapConfig config) {
@@ -605,82 +599,85 @@ final class BorderOverlayRenderer {
     }
 
     private List<BorderLine> countries() {
-        if (countryLines == null) countryLines = load(COUNTRIES);
+        ensureLoaded();
         return countryLines;
     }
 
-    private List<BorderLine> states() {
-        if (stateLines == null) stateLines = load(STATES);
-        return stateLines;
-    }
-
     private List<BorderLine> statesOnly() {
-        if (stateOnlyLines != null) return stateOnlyLines;
-
-        HashSet<LineFingerprint> countryFingerprints = new HashSet<>();
-        for (BorderLine line : countries()) {
-            countryFingerprints.add(line.fingerprint());
-        }
-
-        ArrayList<BorderLine> filtered = new ArrayList<>();
-        for (BorderLine line : states()) {
-            if (!countryFingerprints.contains(line.fingerprint())) filtered.add(line);
-        }
-
-        LOGGER.info("[TownyMap] Split {} state-only border lines from {} combined state/country lines",
-                filtered.size(), states().size());
-        stateOnlyLines = List.copyOf(filtered);
+        ensureLoaded();
         return stateOnlyLines;
     }
 
-    private List<BorderLine> load(String resource) {
-        List<BorderLine> lines = new ArrayList<>();
-        try (InputStream stream = BorderOverlayRenderer.class.getResourceAsStream(resource)) {
-            if (stream == null) {
-                LOGGER.warn("[TownyMap] Missing border resource {}", resource);
-                return lines;
-            }
+    /**
+     * Reads the packed border blob once. Each polyline carries its layer tag, so the country/state split is
+     * already decided here — the old path parsed 11 MB of JSON and then re-derived that split by
+     * fingerprinting every line on each startup.
+     */
+    private void ensureLoaded() {
+        if (countryLines != null && stateOnlyLines != null) return;
 
-            JsonObject root = JsonParser.parseReader(
-                    new InputStreamReader(stream, StandardCharsets.UTF_8)).getAsJsonObject();
-            for (JsonElement entry : root.asMap().values()) {
-                if (!entry.isJsonObject()) continue;
-                BorderLine line = parseLine(entry.getAsJsonObject());
-                if (line != null) lines.add(line);
+        ArrayList<BorderLine> countries = new ArrayList<>();
+        ArrayList<BorderLine> stateOnly = new ArrayList<>();
+        try (InputStream stream = BorderOverlayRenderer.class.getResourceAsStream(BORDERS_BIN)) {
+            if (stream == null) {
+                LOGGER.warn("[TownyMap] Missing border resource {}", BORDERS_BIN);
+            } else {
+                decode(stream.readAllBytes(), countries, stateOnly);
+                LOGGER.info("[TownyMap] Loaded {} country and {} state-only border lines",
+                        countries.size(), stateOnly.size());
             }
-            LOGGER.info("[TownyMap] Loaded {} border lines from {}", lines.size(), resource);
         } catch (Exception e) {
-            LOGGER.warn("[TownyMap] Failed to load border resource {}: {}", resource, e.getMessage());
+            LOGGER.warn("[TownyMap] Failed to load border resource {}: {}", BORDERS_BIN, e.toString());
         }
-        return List.copyOf(lines);
+        countryLines = List.copyOf(countries);
+        stateOnlyLines = List.copyOf(stateOnly);
     }
 
-    private BorderLine parseLine(JsonObject obj) {
-        JsonArray xs = obj.getAsJsonArray("x");
-        JsonArray zs = obj.getAsJsonArray("z");
-        if (xs == null || zs == null) return null;
-        int n = Math.min(xs.size(), zs.size());
-        if (n < 2) return null;
-
-        double[] x = new double[n];
-        double[] z = new double[n];
-        double minX = Double.POSITIVE_INFINITY;
-        double maxX = Double.NEGATIVE_INFINITY;
-        double minZ = Double.POSITIVE_INFINITY;
-        double maxZ = Double.NEGATIVE_INFINITY;
-
-        for (int i = 0; i < n; i++) {
-            x[i] = xs.get(i).getAsDouble();
-            z[i] = zs.get(i).getAsDouble();
-            minX = Math.min(minX, x[i]);
-            maxX = Math.max(maxX, x[i]);
-            minZ = Math.min(minZ, z[i]);
-            maxZ = Math.max(maxZ, z[i]);
+    /** See tools/EncodeBorders for the format: header, then per line a zigzag-varint delta point stream. */
+    private static void decode(byte[] data, List<BorderLine> countries, List<BorderLine> stateOnly) {
+        if (data.length < 6 || data[0] != 'T' || data[1] != 'M' || data[2] != 'B' || data[3] != 'L') {
+            throw new IllegalStateException("bad border blob header");
         }
+        int version = data[4] & 0xFF;
+        if (version != 1) throw new IllegalStateException("unsupported border blob version " + version);
+        double scale = data[5] & 0xFF;
 
-        return new BorderLine(x, z, minX, maxX, minZ, maxZ,
-                new LineFingerprint(n, java.util.Arrays.hashCode(x), java.util.Arrays.hashCode(z),
-                        minX, maxX, minZ, maxZ));
+        int[] pos = {6};
+        int lineCount = (int) readVarInt(data, pos);
+        for (int l = 0; l < lineCount; l++) {
+            int n = (int) readVarInt(data, pos);
+            int layer = data[pos[0]++] & 0xFF;
+            double[] x = new double[n];
+            double[] z = new double[n];
+            double minX = Double.POSITIVE_INFINITY, maxX = Double.NEGATIVE_INFINITY;
+            double minZ = Double.POSITIVE_INFINITY, maxZ = Double.NEGATIVE_INFINITY;
+            long px = 0, pz = 0;
+            for (int i = 0; i < n; i++) {
+                px += readVarInt(data, pos);
+                pz += readVarInt(data, pos);
+                x[i] = px / scale;
+                z[i] = pz / scale;
+                if (x[i] < minX) minX = x[i];
+                if (x[i] > maxX) maxX = x[i];
+                if (z[i] < minZ) minZ = z[i];
+                if (z[i] > maxZ) maxZ = z[i];
+            }
+            BorderLine line = new BorderLine(x, z, minX, maxX, minZ, maxZ);
+            if (layer == LAYER_COUNTRY) countries.add(line);
+            else if (layer == LAYER_STATE_ONLY) stateOnly.add(line);
+        }
+    }
+
+    private static long readVarInt(byte[] data, int[] pos) {
+        long raw = 0;
+        int shift = 0;
+        while (true) {
+            int b = data[pos[0]++] & 0xFF;
+            raw |= (long) (b & 0x7F) << shift;
+            if ((b & 0x80) == 0) break;
+            shift += 7;
+        }
+        return (raw >>> 1) ^ -(raw & 1);   // undo zigzag
     }
 
     private void evictOldTextures(MinecraftClient client) {
@@ -772,15 +769,12 @@ final class BorderOverlayRenderer {
     private record BorderLineIndex(Map<Long, List<BorderLine>> cells) {}
 
     private record BorderLine(double[] x, double[] z,
-                              double minX, double maxX, double minZ, double maxZ,
-                              LineFingerprint fingerprint) {
+                              double minX, double maxX, double minZ, double maxZ) {
         boolean intersects(double left, double right, double top, double bottom) {
             return maxX >= left && minX <= right && maxZ >= top && minZ <= bottom;
         }
     }
 
-    private record LineFingerprint(int points, int xHash, int zHash,
-                                   double minX, double maxX, double minZ, double maxZ) {}
 
     private static final class BorderTileTexture extends NativeImageBackedTexture {
         private BorderTileTexture(java.util.function.Supplier<String> name, NativeImage image) {

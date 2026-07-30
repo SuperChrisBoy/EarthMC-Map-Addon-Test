@@ -34,11 +34,17 @@ dependencies {
     modCompileOnly "xaero.map:xaeroworldmap-fabric-${project.minecraft_version}:${project.xaeroworldmap_version}"
 }
 
+// The border source JSONs live in tools/border-source and are NOT shipped: they are build inputs only.
+// encodeBorders turns them into one compact binary blob (~0.9 MB vs 11.3 MB of text) that the mod reads.
+def borderCountriesJson = 'tools/border-source/borders.nostra.countries.json'
+def borderStatesJson    = 'tools/border-source/borders.nostra.states-and-countries.json'
+
 processResources {
-    dependsOn 'prebuildBorderTiles'
+    dependsOn 'prebuildBorderTiles', 'encodeBorders'
     inputs.property "version", project.version
     filteringCharset 'UTF-8'
     from(layout.buildDirectory.dir("generated/resources/prebuiltBorders"))
+    from(layout.buildDirectory.dir("generated/resources/borders"))
     filesMatching("fabric.mod.json") {
         expand "version": project.version
     }
@@ -54,8 +60,8 @@ tasks.register('compilePrebuildBorderTiles', JavaCompile) {
 
 tasks.register('prebuildBorderTiles', JavaExec) {
     dependsOn 'compilePrebuildBorderTiles'
-    inputs.file 'src/main/resources/assets/townymapaddon/borders/borders.nostra.countries.json'
-    inputs.file 'src/main/resources/assets/townymapaddon/borders/borders.nostra.states-and-countries.json'
+    inputs.file borderCountriesJson
+    inputs.file borderStatesJson
     inputs.file 'tools/PrebuildBorderTiles.java'
     outputs.dir layout.buildDirectory.dir('generated/resources/prebuiltBorders/assets/townymapaddon/prebuilt-borders')
     classpath = files(layout.buildDirectory.dir('tools/classes'))
@@ -63,9 +69,33 @@ tasks.register('prebuildBorderTiles', JavaExec) {
     doFirst {
         delete layout.buildDirectory.dir('generated/resources/prebuiltBorders')
     }
-    args file('src/main/resources/assets/townymapaddon/borders/borders.nostra.countries.json').absolutePath,
-         file('src/main/resources/assets/townymapaddon/borders/borders.nostra.states-and-countries.json').absolutePath,
+    args file(borderCountriesJson).absolutePath,
+         file(borderStatesJson).absolutePath,
          layout.buildDirectory.dir('generated/resources/prebuiltBorders').get().asFile.absolutePath
+}
+
+tasks.register('compileEncodeBorders', JavaCompile) {
+    source = fileTree('tools') { include 'EncodeBorders.java' }
+    destinationDirectory = layout.buildDirectory.dir('tools/encoder-classes')
+    classpath = files()
+    sourceCompatibility = '21'
+    targetCompatibility = '21'
+}
+
+tasks.register('encodeBorders', JavaExec) {
+    dependsOn 'compileEncodeBorders'
+    inputs.file borderCountriesJson
+    inputs.file borderStatesJson
+    inputs.file 'tools/EncodeBorders.java'
+    outputs.dir layout.buildDirectory.dir('generated/resources/borders/assets/townymapaddon/borders')
+    classpath = files(layout.buildDirectory.dir('tools/encoder-classes'))
+    mainClass = 'EncodeBorders'
+    doFirst {
+        delete layout.buildDirectory.dir('generated/resources/borders')
+    }
+    args file(borderCountriesJson).absolutePath,
+         file(borderStatesJson).absolutePath,
+         layout.buildDirectory.dir('generated/resources/borders').get().asFile.absolutePath
 }
 
 java {
