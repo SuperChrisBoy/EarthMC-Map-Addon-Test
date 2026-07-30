@@ -446,6 +446,72 @@ public class TownyMapMod implements ClientModInitializer {
     private static volatile Map<String, int[]> allianceByNation = Map.of();
     private static volatile Map<String, List<String>> megaNamesByNation = Map.of();     // nation → meganation labels
     private static volatile Map<String, List<String>> allianceNamesByNation = Map.of(); // nation → alliance labels
+    // Full records keyed by label (lower-case), so a bloc's own panel can list its roster. Previously only
+    // the colours and labels survived the load and the rest of each record was thrown away.
+    private static volatile Map<String, net.townymap.api.AllianceClient.Alliance> allianceByName = Map.of();
+
+    /** The towns the map is currently drawing — used to roll a bloc's totals up without any new requests. */
+    public static List<TownData> currentTowns() {
+        return apiClient == null ? List.of() : apiClient.getTowns();
+    }
+
+    /** The nation a town belongs to (from the squaremap tooltips), or null if it is nationless. */
+    public static String townNationOf(String townKey) {
+        return apiClient == null ? null : apiClient.getTownNation(townKey);
+    }
+
+    // ── Clean map screenshot ─────────────────────────────────────────────────
+    // A plain F2 grabs the map with all of our chrome on top — buttons, search bar, panels — which is not
+    // what anyone wants to paste into Discord. Arming this hides our own UI for one frame and captures the
+    // map on its own; the countdown gives the frame time to render before the framebuffer is read.
+    private static volatile int cleanShotFrames = 0;
+
+    /** Arms a clean map screenshot: our overlays are hidden for the next frame, then the map is captured. */
+    public static void armMapScreenshot() {
+        cleanShotFrames = 2;
+    }
+
+    /** True while a clean shot is pending, so the map's own chrome is skipped this frame. */
+    public static boolean hideChromeForScreenshot() {
+        return cleanShotFrames > 0;
+    }
+
+    /** Called after the map has drawn: counts the armed frames down and captures on the last one. */
+    public static void captureMapScreenshotIfArmed() {
+        if (cleanShotFrames <= 0) return;
+        if (--cleanShotFrames > 0) return;   // let one frame render without our chrome first
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null) return;
+        try {
+            String name = "earthmc-map-"
+                    + java.time.LocalDateTime.now().format(
+                            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH.mm.ss"))
+                    + ".png";
+            net.minecraft.client.util.ScreenshotRecorder.saveScreenshot(
+                    client.runDirectory, name, client.getFramebuffer(), 1,
+                    text -> client.execute(() -> {
+                        if (client.inGameHud != null) client.inGameHud.getChatHud().addMessage(text);
+                    }));
+        } catch (Exception e) {
+            LOGGER.warn("[TownyMap] Map screenshot failed: {}", e.toString());
+        }
+    }
+
+    /** Resident count for a town, parsed from its squaremap popup; -1 if unknown. */
+    public static int townResidentsOf(String townKey) {
+        return apiClient == null ? -1 : apiClient.getTownResidents(townKey);
+    }
+
+    /** Cached nation record, or null if it hasn't been fetched yet. Honours archive mode. */
+    public static EarthMcNationData nationDetails(String nation) {
+        if (nation == null || nation.isBlank()) return null;
+        return activeNationDetails().get(nation.toLowerCase(Locale.ROOT));
+    }
+
+    /** The full record for an alliance/meganation by name, or null if the roster hasn't loaded it. */
+    public static net.townymap.api.AllianceClient.Alliance allianceByName(String name) {
+        return name == null ? null : allianceByName.get(name.toLowerCase(Locale.ROOT));
+    }
 
     /** Bumps whenever the alliance colour maps change, so the renderer knows to re-bake. */
     public static int allianceDataVersion() { return allianceDataVersion; }
@@ -524,6 +590,12 @@ public class TownyMapMod implements ClientModInitializer {
                         if (!names.contains(label)) names.add(label);   // but list every bloc it's part of
                     }
                 }
+                Map<String, net.townymap.api.AllianceClient.Alliance> byName = new java.util.HashMap<>();
+                for (net.townymap.api.AllianceClient.Alliance a : list) {
+                    String label = a.label() == null || a.label().isBlank() ? a.identifier() : a.label();
+                    byName.putIfAbsent(label.toLowerCase(Locale.ROOT), a);
+                }
+                allianceByName = Map.copyOf(byName);
                 megaByNation = Map.copyOf(mega);
                 allianceByNation = Map.copyOf(alli);
                 megaNamesByNation = freezeLists(megaNames);
@@ -1668,11 +1740,22 @@ public class TownyMapMod implements ClientModInitializer {
             if (kind == net.townymap.gui.DetailScreen.Kind.NATION) { openArchiveNationDetail(name, parent); return; }
             if (kind == net.townymap.gui.DetailScreen.Kind.PLAYER) { openArchivePlayerDetail(name, parent); return; }
         }
-        if (earthMcApi == null) return;
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null) return;
         net.minecraft.client.gui.screen.Screen from =
                 parent != null ? parent : client.currentScreen;
+
+        // Alliances are already in memory (the roster the map colours towns from), so open the panel
+        // directly rather than routing through a fetch that would have nothing to fetch.
+        if (kind == net.townymap.gui.DetailScreen.Kind.ALLIANCE) {
+            net.townymap.api.AllianceClient.Alliance a = allianceByName(name);
+            net.townymap.gui.DetailScreen screen = new net.townymap.gui.DetailScreen(from, name);
+            client.setScreen(screen);
+            if (a == null) screen.markFailed();
+            else screen.setPage(net.townymap.gui.DetailPages.alliance(a));
+            return;
+        }
+        if (earthMcApi == null) return;
 
         java.util.concurrent.CompletableFuture<net.townymap.gui.DetailScreen.Page> future = switch (kind) {
             case TOWN -> earthMcApi.fetchTownFull(name)
@@ -1681,6 +1764,7 @@ public class TownyMapMod implements ClientModInitializer {
                     .thenApply(d -> d == null ? null : net.townymap.gui.DetailPages.player(d));
             case NATION -> earthMcApi.fetchNationFull(name)
                     .thenApply(d -> d == null ? null : net.townymap.gui.DetailPages.nation(d));
+            case ALLIANCE -> throw new IllegalStateException("handled above, from cache");
         };
 
         // Show the panel immediately in a loading state. Waiting for the fetch before opening anything made

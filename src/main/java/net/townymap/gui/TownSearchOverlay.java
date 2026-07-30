@@ -27,6 +27,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.Map;
 import java.util.Set;
 
@@ -46,6 +48,9 @@ public final class TownSearchOverlay {
             DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.ENGLISH);
 
     private static boolean focused;
+
+    /** True while the search bar has keyboard focus (typing goes to it, not to map shortcuts). */
+    public static boolean isFocused() { return focused; }
     private static String query = "";
     private static int caret = 0;             // cursor position within query (0..length)
     private static int selAnchor = -1;        // other end of a selection; -1 = none. Selection = [lo, hi]
@@ -573,6 +578,12 @@ public final class TownSearchOverlay {
             return List.of(new Result("View archive: " + archiveDateLabel(archiveDate),
                     null, 0, "archive", String.valueOf(archiveDate)));
         }
+        // Filter query ("nationless", "residents>20", "chunks<10", "nation:Germany") — searches by property
+        // rather than by name. Everything it needs is already parsed from the squaremap markers, so filtering
+        // all 5,600 towns costs nothing extra.
+        Filters filters = Filters.parse(query);
+        if (filters != null) return filterTowns(towns, filters);
+
         if (needle.equals(cachedNeedle)
                 && cachedTownCount == towns.size()
                 && cachedTownDetailCount == townDetails.size()
@@ -1381,6 +1392,118 @@ public final class TownSearchOverlay {
     }
 
     private record Result(String label, MapJumpTarget target, int score, String type, String name) {}
+
+    // ── Property filters ─────────────────────────────────────────────────────
+
+    /**
+     * A property search over towns, e.g. {@code nationless}, {@code residents>20 nation:Germany}.
+     *
+     * <p>Every field here comes from the squaremap markers the map already downloads — the resident count is
+     * parsed out of the town popup — so a filter never triggers an API call, however many towns it scans.
+     */
+    private record Filters(boolean nationless, String nation,
+                           String residentsOp, int residentsVal,
+                           String chunksOp, int chunksVal, String text) {
+
+        private static final Pattern NUMERIC =
+                Pattern.compile("^(residents|chunks)(>=|<=|>|<|=)(\\d+)$", Pattern.CASE_INSENSITIVE);
+
+        /** Parses a query, or returns null if it holds no filter terms (so the normal name search runs). */
+        static Filters parse(String raw) {
+            if (raw == null || raw.isBlank()) return null;
+            boolean nationless = false;
+            String nation = null, rOp = null, cOp = null;
+            int rVal = 0, cVal = 0;
+            StringBuilder text = new StringBuilder();
+            boolean any = false;
+
+            for (String tok : raw.trim().split("\\s+")) {
+                String low = tok.toLowerCase(Locale.ROOT);
+                if (low.equals("nationless") || low.equals("noNation".toLowerCase(Locale.ROOT))) {
+                    nationless = true; any = true; continue;
+                }
+                if (low.startsWith("nation:") && low.length() > 7) {
+                    nation = tok.substring(7); any = true; continue;
+                }
+                Matcher m = NUMERIC.matcher(tok);
+                if (m.matches()) {
+                    String field = m.group(1).toLowerCase(Locale.ROOT);
+                    int v;
+                    try { v = Integer.parseInt(m.group(3)); } catch (NumberFormatException e) { continue; }
+                    if (field.equals("residents")) { rOp = m.group(2); rVal = v; }
+                    else { cOp = m.group(2); cVal = v; }
+                    any = true;
+                    continue;
+                }
+                if (!text.isEmpty()) text.append(' ');
+                text.append(low);
+            }
+            return any ? new Filters(nationless, nation, rOp, rVal, cOp, cVal, text.toString()) : null;
+        }
+
+        static boolean compare(int actual, String op, int target) {
+            return switch (op) {
+                case ">"  -> actual > target;
+                case "<"  -> actual < target;
+                case ">=" -> actual >= target;
+                case "<=" -> actual <= target;
+                default   -> actual == target;
+            };
+        }
+    }
+
+    /** Runs a property filter over every town, newest-largest first, and labels each hit with why it matched. */
+    private static List<Result> filterTowns(List<TownData> towns, Filters f) {
+        record Hit(Result result, int sortKey) {}
+        List<Hit> hits = new ArrayList<>();
+
+        for (TownData town : towns) {
+            String key = town.key();
+            String nation = TownyMapMod.townNationOf(key);
+            if (f.nationless() && nation != null) continue;
+            if (f.nation() != null
+                    && (nation == null || !nation.toLowerCase(Locale.ROOT)
+                            .contains(f.nation().toLowerCase(Locale.ROOT)))) continue;
+            if (!f.text().isEmpty() && !town.name().toLowerCase(Locale.ROOT).contains(f.text())) continue;
+
+            int residents = TownyMapMod.townResidentsOf(key);
+            if (f.residentsOp() != null
+                    && (residents < 0 || !Filters.compare(residents, f.residentsOp(), f.residentsVal()))) continue;
+
+            int chunks = town.approximateChunks();
+            if (f.chunksOp() != null && !Filters.compare(chunks, f.chunksOp(), f.chunksVal())) continue;
+
+            // Show whichever numbers the filter asked about, so a hit explains itself.
+            StringBuilder detail = new StringBuilder();
+            if (f.residentsOp() != null || residents >= 0) {
+                detail.append(residents < 0 ? "?" : residents).append(residents == 1 ? " resident" : " residents");
+            }
+            if (f.chunksOp() != null) {
+                if (!detail.isEmpty()) detail.append(", ");
+                detail.append(chunks).append(" chunks");
+            }
+            if (nation == null) {
+                if (!detail.isEmpty()) detail.append(", ");
+                detail.append("nationless");
+            }
+
+            String label = "Town: " + town.name() + (detail.isEmpty() ? "" : "  (" + detail + ")");
+            hits.add(new Hit(new Result(label,
+                    new MapJumpTarget(town.name(), town.centerX(), town.centerZ()),
+                    0, "town", town.name()),
+                    f.chunksOp() != null ? chunks : Math.max(residents, 0)));
+        }
+
+        // Biggest first — when you filter by a number, the extremes are what you were looking for.
+        hits.sort(Comparator.comparingInt(Hit::sortKey).reversed()
+                .thenComparing(h -> h.result().name(), String.CASE_INSENSITIVE_ORDER));
+        List<Result> out = new ArrayList<>(Math.min(MAX_RESULTS, hits.size()));
+        for (Hit h : hits) {
+            if (out.size() >= MAX_RESULTS) break;
+            out.add(h.result());
+        }
+        return out;
+    }
 
     /** A clickable name span in the info panel: bounds + what to search for. */
     private record InfoLink(int x, int y, int w, int h, String type, String name) {

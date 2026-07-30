@@ -145,15 +145,19 @@ public abstract class MixinGuiMap {
                 double mapScale = guiScale / dimMul;
                 TownyMapMod.renderWorldMapLatePass(ctx, cameraX * dimMul, cameraZ * dimMul, mapScale, w, h);
             }
-            double[] world = overlayWorldFromScreen(mouseX, mouseY, w, h);
-            if (world != null) {
-                TownyMapMod.renderTownHover(ctx, mouseX, mouseY, world[0], world[1], w, h);
+            // A clean map screenshot skips our own chrome for the frame, so the capture is just the map.
+            if (!TownyMapMod.hideChromeForScreenshot()) {
+                double[] world = overlayWorldFromScreen(mouseX, mouseY, w, h);
+                if (world != null) {
+                    TownyMapMod.renderTownHover(ctx, mouseX, mouseY, world[0], world[1], w, h);
+                }
+                TownyMapMod.renderTownInfo(ctx, w, h);
+                TownyMapMod.renderMapToggles(ctx, h);
+                TownyMapMod.renderPlanningCounter(ctx, w, h);
+                TownyMapMod.renderTownSearch(ctx, w, h);
+                TownyMapMod.renderArchiveBanner(ctx, w);
             }
-            TownyMapMod.renderTownInfo(ctx, w, h);
-            TownyMapMod.renderMapToggles(ctx, h);
-            TownyMapMod.renderPlanningCounter(ctx, w, h);
-            TownyMapMod.renderTownSearch(ctx, w, h);
-            TownyMapMod.renderArchiveBanner(ctx, w);
+            TownyMapMod.captureMapScreenshotIfArmed();
         } catch (Exception e) {
             logOnce(RENDER_ERROR_LOGGED, "Failed to render Xaero world-map overlay", e);
         }
@@ -392,6 +396,13 @@ public abstract class MixinGuiMap {
     private void onKeyPressed(KeyInput input,
                               CallbackInfoReturnable<Boolean> cir) {
         try {
+            // P takes a clean screenshot of the map — but only when the search bar isn't focused, or it
+            // would swallow the letter mid-word.
+            if (input.key() == org.lwjgl.glfw.GLFW.GLFW_KEY_P && !TownSearchOverlay.isFocused()) {
+                TownyMapMod.armMapScreenshot();
+                cir.setReturnValue(true);
+                return;
+            }
             TownSearchOverlay.ClickResult result = TownyMapMod.onTownSearchKeyPressed(input.key());
             if (result.consumed()) {
                 jumpTo(result.target());
