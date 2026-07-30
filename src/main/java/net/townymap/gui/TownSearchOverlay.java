@@ -126,6 +126,8 @@ public final class TownSearchOverlay {
     private static int infoExpandX, infoExpandY, infoExpandW, infoExpandH;
     private static boolean infoExpandVisible;
     private static int infoRangeX, infoRangeY, infoRangeW, infoRangeH;
+    private static int infoStarX, infoStarY, infoStarW, infoStarH;
+    private static boolean infoStarVisible;
     private static boolean infoRangeVisible;
     private static int infoAnchorX, infoAnchorY;   // the right-side panel's top-left, for UI-Scale hit-testing
     private static boolean infoDiscordVisible;
@@ -241,6 +243,10 @@ public final class TownSearchOverlay {
         if (favoriteClick.consumed()) return favoriteClick;
         if (infoDiscordVisible && inside(infoMx, infoMy, infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH)) {
             TownInfoOverlay.openDiscord(infoDiscordUrl);
+            return ClickResult.consumedResult();
+        }
+        if (infoStarVisible && inside(infoMx, infoMy, infoStarX, infoStarY, infoStarW, infoStarH)) {
+            TownyMapMod.toggleFavoriteEntity(selectedType, selectedName);
             return ClickResult.consumedResult();
         }
         if (infoRangeVisible && inside(infoMx, infoMy, infoRangeX, infoRangeY, infoRangeW, infoRangeH)) {
@@ -1018,6 +1024,31 @@ public final class TownSearchOverlay {
                 ctx.drawText(tr, label, lx, ly, 0xFFFFFFFF, false);
             }
         }
+        // Star: nations and players can be favourited too, not just towns. Sits left of the range ring
+        // when there is one, otherwise takes the top-right corner itself.
+        infoStarVisible = false;
+        if ("nation".equals(selectedType) || "player".equals(selectedType)) {
+            int d = 13;
+            infoStarX = (infoRangeVisible ? infoRangeX - 4 - d : x + boxW - 6 - d);
+            infoStarY = y + 5;
+            infoStarW = d;
+            infoStarH = d;
+            infoStarVisible = true;
+            boolean on = TownyMapMod.isFavoriteEntity(selectedType, selectedName);
+            boolean hov = inside(mx, my, infoStarX, infoStarY, d, d);
+            int col = on ? 0xFFFFD24A : hov ? 0xFFFFFFFF : 0xFF9AA0A8;
+            String star = on ? "\u2605" : "\u2606";
+            int swid = tr.getWidth(star);
+            ctx.drawText(tr, star, infoStarX + (d - swid) / 2, infoStarY + 3, col, false);
+            if (hov) {
+                String label = on ? "Unfavourite" : "Favourite";
+                int lw = tr.getWidth(label);
+                int lx = infoStarX - 4 - lw, ly = infoStarY + 3;
+                ctx.fill(lx - 3, ly - 3, lx + lw + 3, ly + 10, 0xE0101114);
+                ctx.drawText(tr, label, lx, ly, 0xFFFFFFFF, false);
+            }
+        }
+
         int ty = y + 7;
         for (InfoRow row : lines) {
             if (row.hasLink()) {
@@ -1318,14 +1349,22 @@ public final class TownSearchOverlay {
         }
         if (!favoritesOpen) return;
 
-        List<TownData> favorites = favoriteTowns(towns, favoriteTowns);
+        List<FavEntry> favorites = favoriteEntries(towns, favoriteTowns);
         int rows = Math.min(MAX_RESULTS, favorites.size());
         for (int i = 0; i < rows; i++) {
-            TownData town = favorites.get(i);
+            FavEntry fav = favorites.get(i);
             int ty = resultRowY(y, i);
             ctx.fill(x - 1, ty - 1, x + FAVORITES_WIDTH + 1, ty + ROW_HEIGHT + 1, BORDER);
             ctx.fill(x, ty, x + FAVORITES_WIDTH, ty + ROW_HEIGHT, BG);
-            ctx.drawText(tr, trimToWidth(tr, town.name(), FAVORITES_WIDTH - 14), x + 7, ty + 5, 0xFFFFFFFF, true);
+            // A one-letter tag keeps the narrow row readable when the three kinds share a name.
+            int tag = switch (fav.type()) {
+                case "nation" -> 0xFF7FB2FF;
+                case "player" -> 0xFFFFD24A;
+                default -> 0xFF9AA0A8;
+            };
+            String letter = fav.type().substring(0, 1).toUpperCase(Locale.ROOT);
+            ctx.drawText(tr, letter, x + 5, ty + 5, tag, true);
+            ctx.drawText(tr, trimToWidth(tr, fav.name(), FAVORITES_WIDTH - 22), x + 14, ty + 5, 0xFFFFFFFF, true);
         }
         if (favorites.isEmpty()) {
             int rowY = resultRowY(y, 0);
@@ -1344,19 +1383,37 @@ public final class TownSearchOverlay {
         }
 
         if (favoritesOpen) {
-            List<TownData> favorites = favoriteTowns(towns, favoriteTowns);
+            List<FavEntry> favorites = favoriteEntries(towns, favoriteTowns);
             int rows = Math.min(MAX_RESULTS, favorites.size());
             for (int i = 0; i < rows; i++) {
                 int ty = resultRowY(y, i);
                 if (inside(mouseX, mouseY, x, ty, FAVORITES_WIDTH, ROW_HEIGHT)) {
-                    TownData town = favorites.get(i);
+                    FavEntry fav = favorites.get(i);
                     favoritesOpen = false;
                     focused = false;
-                    return ClickResult.jump(town);
+                    if (fav.town() != null) return ClickResult.jump(fav.town());
+                    openSearch(fav.type(), fav.name());   // nation/player: open their panel
+                    return ClickResult.consumedResult();
                 }
             }
         }
         return ClickResult.none();
+    }
+
+    /** One row of the favourites dropdown. Towns jump straight to their claim; the other kinds open a panel. */
+    private record FavEntry(String type, String name, TownData town) {}
+
+    /** Towns, then nations, then players — each alphabetical, so the list is stable as it grows. */
+    private static List<FavEntry> favoriteEntries(List<TownData> towns, List<String> favoriteNames) {
+        List<FavEntry> out = new ArrayList<>();
+        for (TownData t : favoriteTowns(towns, favoriteNames)) out.add(new FavEntry("town", t.name(), t));
+        List<String> nations = new ArrayList<>(TownyMapMod.favoriteNations());
+        nations.sort(String.CASE_INSENSITIVE_ORDER);
+        for (String n : nations) out.add(new FavEntry("nation", n, null));
+        List<String> players = new ArrayList<>(TownyMapMod.favoritePlayers());
+        players.sort(String.CASE_INSENSITIVE_ORDER);
+        for (String pl : players) out.add(new FavEntry("player", pl, null));
+        return out;
     }
 
     private static List<TownData> favoriteTowns(List<TownData> towns, List<String> favoriteNames) {

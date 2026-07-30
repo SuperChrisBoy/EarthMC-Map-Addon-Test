@@ -80,6 +80,9 @@ public class TownyMapConfig {
     /** Multiplier applied to the base border stroke width. Range 0.5 – 3.0, default 0.5. */
     public float borderThicknessMultiplier = 0.5f;
     public List<String> favoriteTowns = new ArrayList<>();
+    /** Starred nations and players. Towns had this from the start; the other two kinds behave the same. */
+    public List<String> favoriteNations = new ArrayList<>();
+    public List<String> favoritePlayers = new ArrayList<>();
     public List<Long> chunkCounterSelection = new ArrayList<>();
     public List<List<Long>> chunkCounterGroups = new ArrayList<>();
 
@@ -196,6 +199,8 @@ public class TownyMapConfig {
             infoPanelScale = Float.isNaN(infoPanelScale) ? 1.0f : Math.max(0.7f, Math.min(1.0f, infoPanelScale));
             changed = true;
         }
+        if (favoriteNations == null) favoriteNations = new ArrayList<>();
+        if (favoritePlayers == null) favoritePlayers = new ArrayList<>();
         if (favoriteTowns == null) {
             favoriteTowns = new ArrayList<>();
             changed = true;
@@ -351,7 +356,8 @@ public class TownyMapConfig {
      * unrecoverable, and no one pressing "Reset All" on a settings screen expects it.
      */
     private static final java.util.Set<String> PRESERVED_ON_RESET = java.util.Set.of(
-            "favoriteTowns", "chunkCounterSelection", "chunkCounterGroups",
+            "favoriteTowns", "favoriteNations", "favoritePlayers",
+            "chunkCounterSelection", "chunkCounterGroups",
             "activeChunkCounterGroup", "chunkCounterGroupCount");
 
     /**

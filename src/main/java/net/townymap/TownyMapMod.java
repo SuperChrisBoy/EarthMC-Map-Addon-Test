@@ -2765,6 +2765,45 @@ public class TownyMapMod implements ClientModInitializer {
         return !favorites.isEmpty() && favorites.contains(townKey(townName));
     }
 
+    /** Starred nations/players, kept alongside favourite towns and toggled the same way. */
+    public static boolean isFavoriteEntity(String type, String name) {
+        if (config == null || name == null || name.isBlank()) return false;
+        List<String> list = favoriteListFor(type);
+        if (list == null) return false;
+        for (String s : list) if (s.equalsIgnoreCase(name)) return true;
+        return false;
+    }
+
+    public static void toggleFavoriteEntity(String type, String name) {
+        if (config == null || name == null || name.isBlank()) return;
+        if ("town".equals(type)) { toggleFavorite(name); return; }
+        List<String> list = favoriteListFor(type);
+        if (list == null) return;
+        boolean removed = list.removeIf(s -> s.equalsIgnoreCase(name));
+        if (!removed) list.add(name);
+        config.save();
+    }
+
+    private static List<String> favoriteListFor(String type) {
+        if (config == null) return null;
+        return switch (type == null ? "" : type) {
+            case "town" -> config.favoriteTowns;
+            case "nation" -> config.favoriteNations;
+            case "player" -> config.favoritePlayers;
+            default -> null;
+        };
+    }
+
+    /** Starred nations, for the favourites dropdown. */
+    public static List<String> favoriteNations() {
+        return config == null ? List.of() : List.copyOf(config.favoriteNations);
+    }
+
+    /** Starred players, for the favourites dropdown. */
+    public static List<String> favoritePlayers() {
+        return config == null ? List.of() : List.copyOf(config.favoritePlayers);
+    }
+
     private static void toggleFavorite(String townName) {
         if (config == null || townName == null || townName.isBlank()) return;
         String key = townKey(townName);
