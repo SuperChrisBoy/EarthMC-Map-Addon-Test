@@ -1734,6 +1734,20 @@ public class TownyMapMod implements ClientModInitializer {
                 config != null ? config.favoriteTowns : List.of());
     }
 
+    /**
+     * Ctrl+Z on the world map. Planning mode takes it first when it has something to take back, otherwise
+     * it falls to the chunk counter — whichever tool you're actually using is the one that responds.
+     */
+    public static boolean onMapUndo() {
+        if (net.townymap.gui.PlanningOverlay.isActive() && net.townymap.gui.PlanningOverlay.undo()) {
+            return true;
+        }
+        if (config != null && config.chunkCounterEnabled) {
+            return net.townymap.gui.ChunkCounterOverlay.undo();
+        }
+        return false;
+    }
+
     public static TownSearchOverlay.ClickResult onTownSearchKeyPressed(int keyCode) {
         if (!isActiveOnCurrentServer()) return TownSearchOverlay.ClickResult.none();
         if (apiClient == null) return TownSearchOverlay.ClickResult.none();

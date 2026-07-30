@@ -147,6 +147,16 @@ public final class PlanningOverlay {
         return out;
     }
 
+    /** Removes the most recently placed town. Returns false when the plan is already empty. */
+    public static boolean undo() {
+        if (planned.isEmpty()) return false;
+        planned.remove(planned.size() - 1);
+        version++;
+        return true;
+    }
+
+    public static boolean canUndo() { return !planned.isEmpty(); }
+
     /** Drops a planned town at world (x, z) and disarms. Returns true if it consumed the click. */
     public static boolean placeAt(double worldX, double worldZ) {
         if (!armed || !hasNation()) return false;

@@ -407,6 +407,21 @@ public abstract class MixinGuiMap {
     private void onKeyPressed(KeyInput input,
                               CallbackInfoReturnable<Boolean> cir) {
         try {
+            // Ctrl+Z undoes the last counter/planning gesture. Skipped while typing, where Ctrl+Z would
+            // more reasonably mean "undo my edit" than "undo my map selection".
+            if (input.key() == GLFW.GLFW_KEY_Z && !TownSearchOverlay.isFocused()
+                    && (GLFW.glfwGetKey(MinecraftClient.getInstance().getWindow().getHandle(),
+                                GLFW.GLFW_KEY_LEFT_CONTROL) == GLFW.GLFW_PRESS
+                        || GLFW.glfwGetKey(MinecraftClient.getInstance().getWindow().getHandle(),
+                                GLFW.GLFW_KEY_RIGHT_CONTROL) == GLFW.GLFW_PRESS
+                        || GLFW.glfwGetKey(MinecraftClient.getInstance().getWindow().getHandle(),
+                                GLFW.GLFW_KEY_LEFT_SUPER) == GLFW.GLFW_PRESS)) {
+                if (TownyMapMod.onMapUndo()) {
+                    cir.setReturnValue(true);
+                    return;
+                }
+            }
+
             // The clean-screenshot key is a normal rebindable keybind (Options -> Controls). Screens
             // swallow key presses, so match it here too — but never while the search bar has focus.
             if (!TownSearchOverlay.isFocused()
