@@ -46,10 +46,6 @@ public final class ChunkCounterOverlay {
     // ── Shape select ─────────────────────────────────────────────────────────
     // Hold Shift and right-drag to sweep out a rectangle instead of painting chunk by chunk. Same add/remove
     // rule as painting: starting on an empty chunk fills the box, starting on a selected one clears it.
-    // Undo: snapshots of the active group's chunk set, pushed before each gesture. Box select can change
-    // hundreds of chunks in one drag, so redoing a mistake by hand isn't realistic.
-    private static final java.util.ArrayDeque<UndoStep> UNDO = new java.util.ArrayDeque<>();
-    private static final int MAX_UNDO = 24;
     private static boolean shapeDragging;
     private static boolean shapeAdding = true;
     private static int shapeAnchorX, shapeAnchorZ, shapeCurrentX, shapeCurrentZ;
@@ -301,7 +297,6 @@ public final class ChunkCounterOverlay {
     }
 
     public static void clearActive(TownyMapConfig config) {
-        pushUndo();
         activeSelection(config).clear(true);
         lastRightDownKey = Long.MIN_VALUE;
         rightDragSelecting = true;
@@ -325,7 +320,6 @@ public final class ChunkCounterOverlay {
         int cz = floorToChunk(worldZ);
         long key = key(cx, cz);
 
-        pushUndo();
         if (shiftDown()) {   // rectangle sweep: nothing is committed until the button comes back up
             shapeDragging = true;
             shapeAdding = !selection.chunks.contains(key);
@@ -891,35 +885,6 @@ public final class ChunkCounterOverlay {
         }
         return count;
     }
-
-    private record UndoStep(int group, Set<Long> chunks) {}
-
-    /** Snapshots the active group before a gesture. Call once per gesture, not per chunk. */
-    private static void pushUndo() {
-        TownyMapConfig config = TownyMapMod.getConfig();
-        SelectionState selection = activeSelection(config);
-        UNDO.push(new UndoStep(normalizedActiveGroup(config), new LinkedHashSet<>(selection.chunks)));
-        while (UNDO.size() > MAX_UNDO) UNDO.removeLast();
-    }
-
-    /** Restores the last snapshot. Returns false when there's nothing left to undo. */
-    public static boolean undo() {
-        if (UNDO.isEmpty()) return false;
-        UndoStep step = UNDO.pop();
-        TownyMapConfig config = TownyMapMod.getConfig();
-        ensureGroups();
-        int group = Math.max(0, Math.min(GROUPS.size() - 1, step.group()));
-        SelectionState selection = GROUPS.get(group);
-        selection.chunks.clear();
-        selection.chunks.addAll(step.chunks());
-        selection.dirty = true;
-        if (!selection.chunks.isEmpty()) selection.hadChunks = true;
-        persistDirty = true;
-        flushSelection();
-        return true;
-    }
-
-    public static boolean canUndo() { return !UNDO.isEmpty(); }
 
     private static void applyDragAction(SelectionState selection, long key) {
         boolean changed = rightDragSelecting ? selection.chunks.add(key) : selection.chunks.remove(key);
