@@ -51,6 +51,11 @@ public abstract class MixinGuiMap {
     private static final AtomicBoolean MAP_SURFACE_ERROR_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean RENDER_ERROR_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean CLICK_ERROR_LOGGED = new AtomicBoolean(false);
+    @org.spongepowered.asm.mixin.Unique
+    private boolean townymap$widgetsHidden = false;
+    /** Widgets wider or taller than this share of the screen are never hidden — that's map surface, not UI. */
+    @org.spongepowered.asm.mixin.Unique
+    private static final double TOWNYMAP_MAX_HIDEABLE_FRACTION = 0.4;
     // TEST: how much further "World Map Overview" lets you zoom out (Xaero's min destScale / this).
     private static final double WORLD_MAP_OVERVIEW_FACTOR = 8.0;
 
@@ -131,7 +136,15 @@ public abstract class MixinGuiMap {
     private void onRenderPreDropdown(DrawContext ctx, int mouseX, int mouseY,
                                      float delta, CallbackInfo ci) {
         try {
+            // Hide Xaero's own buttons for the capture too. Only SMALL widgets are touched: hiding every
+            // widget last time took Xaero's map surface with it, so anything occupying a large share of the
+            // screen is left alone no matter what it is. Restored the frame after, and the armed state times
+            // out on its own, so this can't get stuck the way it did before.
             boolean composing = TownyMapMod.hideChromeForScreenshot();
+            if (composing != townymap$widgetsHidden) {
+                townymap$setSmallWidgetsVisible(!composing);
+                townymap$widgetsHidden = composing;
+            }
             // Arrow first, so the UI panels below queue on top of it in the batch.
             // It's a "you are here" marker, so it has no place in a shared picture of the map.
             if (!composing) renderPlayerArrow(ctx);
@@ -464,6 +477,27 @@ public abstract class MixinGuiMap {
                 || GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_SHIFT) == GLFW.GLFW_PRESS;
     }
 
+
+    @org.spongepowered.asm.mixin.Unique
+    private void townymap$setSmallWidgetsVisible(boolean visible) {
+        try {
+            MinecraftClient mc = MinecraftClient.getInstance();
+            if (mc == null || mc.getWindow() == null) return;
+            int sw = mc.getWindow().getScaledWidth();
+            int sh = mc.getWindow().getScaledHeight();
+            for (net.minecraft.client.gui.Element e
+                    : ((net.minecraft.client.gui.screen.Screen) (Object) this).children()) {
+                if (!(e instanceof net.minecraft.client.gui.widget.ClickableWidget w)) continue;
+                if (w.getWidth() > sw * TOWNYMAP_MAX_HIDEABLE_FRACTION
+                        || w.getHeight() > sh * TOWNYMAP_MAX_HIDEABLE_FRACTION) {
+                    continue;   // too big to be a button; leave it alone
+                }
+                w.visible = visible;
+            }
+        } catch (Exception ignored) {
+            // Best-effort: Xaero draws most of its map UI itself rather than as widgets.
+        }
+    }
 
     private static void logOnce(AtomicBoolean flag, String message, Exception e) {
         if (flag.compareAndSet(false, true)) {

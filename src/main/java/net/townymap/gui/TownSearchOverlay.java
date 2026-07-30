@@ -128,6 +128,10 @@ public final class TownSearchOverlay {
     private static int infoRangeX, infoRangeY, infoRangeW, infoRangeH;
     private static int infoStarX, infoStarY, infoStarW, infoStarH;
     private static boolean infoStarVisible;
+    // Hover labels are drawn after everything else in the panel: the info rows are drawn last and were
+    // painting over them (the player's name sat straight across "Favourite").
+    private static String pendingTipText;
+    private static int pendingTipX, pendingTipY;
     private static boolean infoRangeVisible;
     private static int infoAnchorX, infoAnchorY;   // the right-side panel's top-left, for UI-Scale hit-testing
     private static boolean infoDiscordVisible;
@@ -1002,6 +1006,7 @@ public final class TownSearchOverlay {
 
         // Star (favourite). Worked out before the range ring so the ring's hover label knows to clear it.
         // On players it sits left of the head rather than over it.
+        pendingTipText = null;
         infoStarVisible = false;
         int starD = 13;
         if ("nation".equals(selectedType) || "player".equals(selectedType)) {
@@ -1037,11 +1042,9 @@ public final class TownSearchOverlay {
             if (on) ctx.fill(infoRangeX + d / 2 - 1, infoRangeY + d / 2 - 1,
                              infoRangeX + d / 2 + 1, infoRangeY + d / 2 + 1, ring);
             if (hov) {   // left of the ring, so it never runs off the screen edge
-                String label = "Nation Range";
-                int lw = tr.getWidth(label);
-                int lx = (infoStarVisible ? infoStarX : infoRangeX) - 4 - lw, ly = infoRangeY + 3;
-                ctx.fill(lx - 3, ly - 3, lx + lw + 3, ly + 10, 0xE0101114);
-                ctx.drawText(tr, label, lx, ly, 0xFFFFFFFF, false);
+                pendingTipText = "Nation Range";
+                pendingTipX = (infoStarVisible ? infoStarX : infoRangeX) - 4;
+                pendingTipY = infoRangeY + 3;
             }
         }
         // Star: nations and players can be favourited too, not just towns. Sits left of the range ring
@@ -1054,11 +1057,9 @@ public final class TownSearchOverlay {
             int swid = tr.getWidth(star);
             ctx.drawText(tr, star, infoStarX + (starD - swid) / 2, infoStarY + 3, col, false);
             if (hov) {
-                String label = on ? "Unfavourite" : "Favourite";
-                int lw = tr.getWidth(label);
-                int lx = infoStarX - 4 - lw, ly = infoStarY + 3;
-                ctx.fill(lx - 3, ly - 3, lx + lw + 3, ly + 10, 0xE0101114);
-                ctx.drawText(tr, label, lx, ly, 0xFFFFFFFF, false);
+                pendingTipText = on ? "Unfavourite" : "Favourite";
+                pendingTipX = infoStarX - 4;
+                pendingTipY = infoStarY + 3;
             }
         }
 
@@ -1102,6 +1103,14 @@ public final class TownSearchOverlay {
                 infoExpandVisible = true;
                 drawPanelButton(ctx, infoExpandX, infoExpandY, infoExpandW, infoExpandH, "Expand");
             }
+        }
+        // Hover labels last, so nothing in the panel can paint over them.
+        if (pendingTipText != null) {
+            int lw = tr.getWidth(pendingTipText);
+            int lx = pendingTipX - lw;
+            int ly = pendingTipY;
+            ctx.fill(lx - 3, ly - 3, lx + lw + 3, ly + 10, 0xF0101114);
+            ctx.drawText(tr, pendingTipText, lx, ly, 0xFFFFFFFF, false);
         }
         if (scaled) UiScale.pop(ctx);
     }
