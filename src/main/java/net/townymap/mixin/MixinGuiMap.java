@@ -51,6 +51,8 @@ public abstract class MixinGuiMap {
     private static final AtomicBoolean MAP_SURFACE_ERROR_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean RENDER_ERROR_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean CLICK_ERROR_LOGGED = new AtomicBoolean(false);
+    @org.spongepowered.asm.mixin.Unique
+    private boolean townymap$widgetsHidden = false;
     // TEST: how much further "World Map Overview" lets you zoom out (Xaero's min destScale / this).
     private static final double WORLD_MAP_OVERVIEW_FACTOR = 8.0;
 
@@ -131,8 +133,17 @@ public abstract class MixinGuiMap {
     private void onRenderPreDropdown(DrawContext ctx, int mouseX, int mouseY,
                                      float delta, CallbackInfo ci) {
         try {
+            // While composing a clean shot, hide Xaero's own widgets (zoom, side icons) too, and restore
+            // them the frame after. Toggling visibility is reversible and leaves Xaero's state alone.
+            boolean composing = TownyMapMod.hideChromeForScreenshot();
+            if (composing != townymap$widgetsHidden) {
+                townymap$setWidgetsVisible(!composing);
+                townymap$widgetsHidden = composing;
+            }
+
             // Arrow first, so the UI panels below queue on top of it in the batch.
-            renderPlayerArrow(ctx);
+            // It's a "you are here" marker, so it has no place in a shared picture of the map.
+            if (!composing) renderPlayerArrow(ctx);
 
             MinecraftClient mc = MinecraftClient.getInstance();
             int w = mc.getWindow().getScaledWidth();
@@ -460,6 +471,17 @@ public abstract class MixinGuiMap {
         long handle = mc.getWindow().getHandle();
         return GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_LEFT_SHIFT) == GLFW.GLFW_PRESS
                 || GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_SHIFT) == GLFW.GLFW_PRESS;
+    }
+
+    @org.spongepowered.asm.mixin.Unique
+    private void townymap$setWidgetsVisible(boolean visible) {
+        try {
+            for (net.minecraft.client.gui.Element e : ((net.minecraft.client.gui.screen.Screen) (Object) this).children()) {
+                if (e instanceof net.minecraft.client.gui.widget.ClickableWidget w) w.visible = visible;
+            }
+        } catch (Exception ignored) {
+            // Xaero draws most of its map UI itself rather than as widgets; this is best-effort.
+        }
     }
 
     private static void logOnce(AtomicBoolean flag, String message, Exception e) {

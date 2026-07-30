@@ -473,14 +473,20 @@ public class TownyMapMod implements ClientModInitializer {
         cleanShotFrames = 3;
     }
 
-    /** True while a clean shot is pending, so the map's own chrome is skipped this frame. */
+    /**
+     * True while a clean shot is pending, so the map's own chrome is skipped this frame.
+     *
+     * <p>Includes the window between the last armed frame and the capture itself: ticks run at 20/s and
+     * frames much faster, so restoring the chrome the moment the countdown ended meant the frame actually
+     * captured had the buttons back on it.
+     */
     public static boolean hideChromeForScreenshot() {
-        return cleanShotFrames > 0;
+        return cleanShotFrames > 0 || cleanShotReady;
     }
 
-    /** True while the frame being drawn is the one that will be captured. */
+    /** True while the frame being drawn is one that will be captured. */
     public static boolean composingScreenshot() {
-        return cleanShotFrames > 0;
+        return cleanShotFrames > 0 || cleanShotReady;
     }
 
     /** Whether player dots belong in the screenshot being composed. */
