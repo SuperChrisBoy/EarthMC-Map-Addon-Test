@@ -40,38 +40,13 @@ def borderCountriesJson = 'tools/border-source/borders.nostra.countries.json'
 def borderStatesJson    = 'tools/border-source/borders.nostra.states-and-countries.json'
 
 processResources {
-    dependsOn 'prebuildBorderTiles', 'encodeBorders'
+    dependsOn 'encodeBorders'
     inputs.property "version", project.version
     filteringCharset 'UTF-8'
-    from(layout.buildDirectory.dir("generated/resources/prebuiltBorders"))
     from(layout.buildDirectory.dir("generated/resources/borders"))
     filesMatching("fabric.mod.json") {
         expand "version": project.version
     }
-}
-
-tasks.register('compilePrebuildBorderTiles', JavaCompile) {
-    source = fileTree('tools') { include 'PrebuildBorderTiles.java' }
-    destinationDirectory = layout.buildDirectory.dir('tools/classes')
-    classpath = files()
-    sourceCompatibility = '21'
-    targetCompatibility = '21'
-}
-
-tasks.register('prebuildBorderTiles', JavaExec) {
-    dependsOn 'compilePrebuildBorderTiles'
-    inputs.file borderCountriesJson
-    inputs.file borderStatesJson
-    inputs.file 'tools/PrebuildBorderTiles.java'
-    outputs.dir layout.buildDirectory.dir('generated/resources/prebuiltBorders/assets/townymapaddon/prebuilt-borders')
-    classpath = files(layout.buildDirectory.dir('tools/classes'))
-    mainClass = 'PrebuildBorderTiles'
-    doFirst {
-        delete layout.buildDirectory.dir('generated/resources/prebuiltBorders')
-    }
-    args file(borderCountriesJson).absolutePath,
-         file(borderStatesJson).absolutePath,
-         layout.buildDirectory.dir('generated/resources/prebuiltBorders').get().asFile.absolutePath
 }
 
 tasks.register('compileEncodeBorders', JavaCompile) {

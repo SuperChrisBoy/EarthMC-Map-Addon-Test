@@ -1,45 +1,25 @@
 package net.townymap.render;
 
-import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.textures.AddressMode;
-import com.mojang.blaze3d.textures.FilterMode;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.texture.NativeImage;
-import net.minecraft.client.texture.NativeImageBackedTexture;
-import net.minecraft.util.Identifier;
-import net.fabricmc.loader.api.FabricLoader;
 import net.townymap.TownyMapConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.imageio.ImageIO;
-import java.awt.BasicStroke;
-import java.awt.Color;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
-import java.awt.image.BufferedImage;
-import java.awt.geom.Path2D;
-import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.Queue;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
+/**
+ * Draws the real-world country and state borders over the map, as vector polylines.
+ *
+ * <p>This used to bake the borders into raster tiles — a 26 MB prebuilt PNG atlas plus a runtime rasteriser,
+ * texture cache and disk cache — and cap them two zoom levels below the map's maximum. Zooming past that cap
+ * stretched a 0.25 px/block texture across the screen, which is what made borders look blurry up close.
+ *
+ * <p>Lines are geometry, so drawing them directly is sharper at every zoom (there is no fixed resolution to
+ * outgrow, and no seams between tiles) and drops all of that machinery. The geometry itself is a compact
+ * binary blob built by tools/EncodeBorders — see {@link #decode} for the format.
+ */
 final class BorderOverlayRenderer {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("TownyMapAddon");
@@ -47,65 +27,25 @@ final class BorderOverlayRenderer {
     private static final String BORDERS_BIN = "/assets/townymapaddon/borders/borders.bin";
     private static final byte LAYER_COUNTRY = 1;
     private static final byte LAYER_STATE_ONLY = 2;
-    private static final int TILE_PIXELS = 512;
-    private static final int ATLAS_GRID = 4;
-    private static final int ATLAS_PIXELS = TILE_PIXELS * ATLAS_GRID;
-    private static final int MAX_ATLAS_ZOOM = 3;
-    private static final int MAX_NEW_TILES_PER_FRAME = 24;
-    private static final int MAX_NEW_COUNTRY_TILES_PER_FRAME = 48;
-    private static final int MAX_NEW_STATE_TILES_PER_FRAME = 8;
-    private static final int MAX_CONCURRENT_TILES = 16;
-    private static final int MAX_CONCURRENT_COUNTRY_TILES = 32;
-    private static final int MAX_TEXTURE_UPLOADS_PER_FRAME = 8;
-    private static final int MAX_COUNTRY_TEXTURE_UPLOADS_PER_FRAME = 16;
-    private static final int MAX_ATLAS_TEXTURE_UPLOADS_PER_FRAME = 1;
-    private static final int MAX_TEXTURES = 768;
-    private static final int PREFETCH_TILE_MARGIN = 2;
-    private static final int QUALITY_ZOOM_BIAS = 2;
-    private static final int MAX_BORDER_ZOOM_BELOW_MAX = 2;
-    private static final double INDEX_CELL_BLOCKS = 4096.0;
-    private static final String CACHE_VERSION = "v6";
-    private static final String PREBUILT_ROOT = "/assets/townymapaddon/prebuilt-borders";
-    private static final int PREBUILT_THICKNESS_Q = 10;
-    private static final int PREBUILT_SQUAREMAP_MAX_ZOOM = 5;
-    private static final RenderPipeline PIPELINE = RenderPipelines.GUI_TEXTURED;
+    /** Points closer together than this on screen add no visible detail, so they are folded away. */
+    private static final double MIN_SEGMENT_PX = 1.0;
 
     private final TownyMapConfig config;
-    private final ExecutorService executor = Executors.newFixedThreadPool(tileWorkerCount(), r -> {
-        Thread t = new Thread(r, "TownyMap-BorderTiles");
-        t.setDaemon(true);
-        return t;
-    });
-    private final Set<TileKey> loading = ConcurrentHashMap.newKeySet();
-    private final Set<TileKey> emptyTiles = ConcurrentHashMap.newKeySet();
-    private final Queue<LoadedTile> completedTiles = new ConcurrentLinkedQueue<>();
-    private final Set<AtlasKey> atlasLoading = ConcurrentHashMap.newKeySet();
-    private final Set<AtlasKey> emptyAtlases = ConcurrentHashMap.newKeySet();
-    private final Queue<LoadedTile> completedCountryTiles = new ConcurrentLinkedQueue<>();
-    private final Queue<LoadedAtlas> completedAtlases = new ConcurrentLinkedQueue<>();
-    private final Queue<LoadedAtlas> completedCountryAtlases = new ConcurrentLinkedQueue<>();
-    private final LinkedHashMap<TileKey, Identifier> textures =
-            new LinkedHashMap<>(64, 0.75f, true);
-    private final LinkedHashMap<AtlasKey, Identifier> atlasTextures =
-            new LinkedHashMap<>(64, 0.75f, true);
-    private final Map<Integer, BorderLineIndex> lineIndexes = new ConcurrentHashMap<>();
-    private final Path diskCacheDir;
-    private volatile Set<String> prebuiltTileManifest;
-    private volatile boolean prebuiltManifestLoaded;
-    private volatile Set<String> prebuiltAtlasManifest;
-    private volatile boolean prebuiltAtlasManifestLoaded;
-
-    private List<BorderLine> countryLines;
-    private List<BorderLine> stateOnlyLines;
+    // Populated off-thread at startup: decoding ~244k points takes a moment and must not stall the first frame.
+    private volatile List<BorderLine> countryLines = List.of();
+    private volatile List<BorderLine> stateOnlyLines = List.of();
+    private volatile boolean loading = true;
 
     BorderOverlayRenderer(TownyMapConfig config) {
         this.config = config;
-        this.diskCacheDir = FabricLoader.getInstance().getConfigDir()
-                .resolve("townymapaddon")
-                .resolve("border-cache")
-                .resolve(CACHE_VERSION);
-        executor.execute(this::prebuiltManifest);
-        executor.execute(this::prebuiltAtlasManifest);
+        Thread loader = new Thread(this::load, "TownyMap-BorderLoad");
+        loader.setDaemon(true);
+        loader.start();
+    }
+
+    /** True while the border geometry is still being decoded, so the toggle can show a loading hint. */
+    boolean isLoading() {
+        return loading;
     }
 
     void render(DrawContext ctx, double cameraX, double cameraZ, double blockScale,
@@ -114,510 +54,104 @@ final class BorderOverlayRenderer {
         int mode = config.borderOverlayMode;
         if (mode == 0 || blockScale <= 0) return;
 
-        processCompletedTiles();
-        if (mode == 1) {
-            renderLayer(ctx, 1, cameraX, cameraZ, blockScale, sw, sh,
-                    worldLeft, worldRight, worldTop, worldBottom, MAX_NEW_COUNTRY_TILES_PER_FRAME);
-        } else {
-            renderLayer(ctx, 1, cameraX, cameraZ, blockScale, sw, sh,
-                    worldLeft, worldRight, worldTop, worldBottom, MAX_NEW_COUNTRY_TILES_PER_FRAME);
-            renderLayer(ctx, 2, cameraX, cameraZ, blockScale, sw, sh,
-                    worldLeft, worldRight, worldTop, worldBottom, MAX_NEW_STATE_TILES_PER_FRAME);
+        float thickness = Math.max(0.1f, Math.min(3.0f, config.borderThicknessMultiplier));
+        // Widths are screen pixels now (they used to be tile pixels at a fixed tile resolution), so borders
+        // keep the same visual weight at every zoom instead of thickening as a tile is stretched.
+        float countryW = Math.max(1.0f, 2.4f * thickness);
+        float stateW = Math.max(1.0f, 1.8f * thickness);
+
+        // States first, so country outlines draw over them where the two run together — the old layer order.
+        if (mode == 2) {
+            drawLines(ctx, stateOnlyLines, cameraX, cameraZ, blockScale, sw, sh,
+                    worldLeft, worldRight, worldTop, worldBottom, 0xEBFFFFFF, stateW);
         }
-    }
-
-    private void renderLayer(DrawContext ctx, int mode, double cameraX, double cameraZ, double blockScale,
-                             int sw, int sh, double worldLeft, double worldRight,
-                             double worldTop, double worldBottom, int maxNewRequests) {
-        int zoom = chooseTileZoom(blockScale);
-        double pixelsPerBlock = pixelsPerBlock(zoom);
-        double tileWorldSize = TILE_PIXELS / pixelsPerBlock;
-
-        int visibleMinTileX = floorToTile(worldLeft, tileWorldSize);
-        int visibleMaxTileX = floorToTile(worldRight, tileWorldSize);
-        int visibleMinTileY = floorToTile(worldTop, tileWorldSize);
-        int visibleMaxTileY = floorToTile(worldBottom, tileWorldSize);
-        int minTileX = visibleMinTileX - PREFETCH_TILE_MARGIN;
-        int maxTileX = visibleMaxTileX + PREFETCH_TILE_MARGIN;
-        int minTileY = visibleMinTileY - PREFETCH_TILE_MARGIN;
-        int maxTileY = visibleMaxTileY + PREFETCH_TILE_MARGIN;
-        int centerTileX = floorToTile((worldLeft + worldRight) * 0.5, tileWorldSize);
-        int centerTileY = floorToTile((worldTop + worldBottom) * 0.5, tileWorldSize);
-        int maxRadius = Math.max(
-                Math.max(Math.abs(minTileX - centerTileX), Math.abs(maxTileX - centerTileX)),
-                Math.max(Math.abs(minTileY - centerTileY), Math.abs(maxTileY - centerTileY)));
-
-        // Quantise thickness so the key is stable while the slider is between notches.
-        int thicknessQ = Math.max(2, Math.min(60, Math.round(config.borderThicknessMultiplier * 20)));
-
-        int requested = 0;
-        for (int radius = 0; radius <= maxRadius; radius++) {
-            for (int tileY = centerTileY - radius; tileY <= centerTileY + radius; tileY++) {
-                for (int tileX = centerTileX - radius; tileX <= centerTileX + radius; tileX++) {
-                    if (tileX < minTileX || tileX > maxTileX || tileY < minTileY || tileY > maxTileY) continue;
-                    if (Math.max(Math.abs(tileX - centerTileX), Math.abs(tileY - centerTileY)) != radius) continue;
-
-                    TileKey key = new TileKey(mode, zoom, tileX, tileY, thicknessQ);
-                    boolean visible = tileX >= visibleMinTileX && tileX <= visibleMaxTileX
-                            && tileY >= visibleMinTileY && tileY <= visibleMaxTileY;
-                    if (visible && renderAtlasTileIfAvailable(ctx, key, tileWorldSize, cameraX, cameraZ,
-                            blockScale, sw, sh)) {
-                        continue;
-                    }
-
-                    Identifier texture = textures.get(key);
-                    if (texture == null) {
-                        if (!emptyTiles.contains(key) && requested++ < maxNewRequests) {
-                            requestTile(key, tileWorldSize, pixelsPerBlock);
-                        }
-                        continue;
-                    }
-
-                    if (visible) {
-                        renderTile(ctx, texture, tileX, tileY, tileWorldSize, cameraX, cameraZ,
-                                blockScale, sw, sh);
-                    }
-                }
-            }
-        }
-    }
-
-    private void requestTile(TileKey key, double tileWorldSize, double pixelsPerBlock) {
-        if (textures.containsKey(key) || emptyTiles.contains(key) || !loading.add(key)) return;
-        int maxConcurrent = key.mode() == 1 ? MAX_CONCURRENT_COUNTRY_TILES : MAX_CONCURRENT_TILES;
-        if (loading.size() > maxConcurrent) {
-            loading.remove(key);
-            return;
-        }
-
-        executor.execute(() -> {
-            try {
-                NativeImage image = loadPrebuiltTile(key);
-                if (image == null && isKnownMissingPrebuiltTile(key)) {
-                    emptyTiles.add(key);
-                    return;
-                }
-                if (image == null) {
-                    image = loadCachedTile(key);
-                }
-                if (image == null) {
-                    image = rasterizeTile(key, tileWorldSize, pixelsPerBlock);
-                }
-                if (image == null) {
-                    emptyTiles.add(key);
-                } else {
-                    if (key.mode() == 1) {
-                        completedCountryTiles.add(new LoadedTile(key, image));
-                    } else {
-                        completedTiles.add(new LoadedTile(key, image));
-                    }
-                }
-            } catch (Exception e) {
-                LOGGER.warn("[TownyMap] Failed to rasterize border tile {}: {}", key, e.getMessage());
-            } finally {
-                loading.remove(key);
-            }
-        });
-    }
-
-    private boolean renderAtlasTileIfAvailable(DrawContext ctx, TileKey key, double tileWorldSize,
-                                               double cameraX, double cameraZ, double blockScale,
-                                               int sw, int sh) {
-        if (!canUsePrebuiltAtlas(key)) return false;
-        AtlasKey atlasKey = atlasKey(key);
-        Identifier atlas = atlasTextures.get(atlasKey);
-        if (atlas == null) {
-            if (!prebuiltAtlasManifest().contains(prebuiltAtlasRelativePath(atlasKey))) return false;
-            requestAtlas(atlasKey);
-            return false;
-        }
-        renderAtlasTile(ctx, atlas, key, tileWorldSize, cameraX, cameraZ, blockScale, sw, sh);
-        return true;
-    }
-
-    private void requestAtlas(AtlasKey key) {
-        if (atlasTextures.containsKey(key) || emptyAtlases.contains(key) || !atlasLoading.add(key)) return;
-        executor.execute(() -> {
-            try {
-                NativeImage image = loadPrebuiltAtlas(key);
-                if (image == null) {
-                    emptyAtlases.add(key);
-                } else {
-                    if (key.mode() == 1) {
-                        completedCountryAtlases.add(new LoadedAtlas(key, image));
-                    } else {
-                        completedAtlases.add(new LoadedAtlas(key, image));
-                    }
-                }
-            } catch (Exception e) {
-                LOGGER.warn("[TownyMap] Failed to load prebuilt border atlas {}: {}", key, e.getMessage());
-            } finally {
-                atlasLoading.remove(key);
-            }
-        });
-    }
-
-    private NativeImage rasterizeTile(TileKey key, double tileWorldSize, double pixelsPerBlock) {
-        List<BorderLine> lines = tileLines(key, tileWorldSize);
-        if (lines.isEmpty()) return null;
-
-        double tileWorldX = key.x * tileWorldSize;
-        double tileWorldZ = key.y * tileWorldSize;
-        double left = tileWorldX - tileWorldSize * 0.02;
-        double right = tileWorldX + tileWorldSize * 1.02;
-        double top = tileWorldZ - tileWorldSize * 0.02;
-        double bottom = tileWorldZ + tileWorldSize * 1.02;
-
-        BufferedImage buffered = new BufferedImage(TILE_PIXELS, TILE_PIXELS, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g = buffered.createGraphics();
-        boolean drew = false;
-        try {
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
-            g.setStroke(new BasicStroke(strokeWidth(key),
-                    BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-            g.setColor(key.mode == 1 ? new Color(255, 255, 255, 255) : new Color(255, 255, 255, 235));
-
-            for (BorderLine line : lines) {
-                drew |= drawBorderLine(g, line, tileWorldX, tileWorldZ, pixelsPerBlock);
-            }
-        } finally {
-            g.dispose();
-        }
-
-        if (!drew) return null;
-
-        saveCachedTile(key, buffered);
-        NativeImage image = new NativeImage(TILE_PIXELS, TILE_PIXELS, false);
-        for (int y = 0; y < TILE_PIXELS; y++) {
-            for (int x = 0; x < TILE_PIXELS; x++) {
-                image.setColorArgb(x, y, buffered.getRGB(x, y));
-            }
-        }
-        return image;
-    }
-
-    private NativeImage loadCachedTile(TileKey key) {
-        Path path = cachePath(key);
-        if (!Files.isRegularFile(path)) return null;
-        try (InputStream stream = Files.newInputStream(path)) {
-            return NativeImage.read(stream);
-        } catch (Exception e) {
-            LOGGER.debug("[TownyMap] Ignoring unreadable cached border tile {}: {}", path, e.getMessage());
-            return null;
-        }
-    }
-
-    private NativeImage loadPrebuiltTile(TileKey key) {
-        if (!canUsePrebuiltTile(key)) return null;
-        String relative = prebuiltRelativePath(key);
-        if (!prebuiltManifest().contains(relative)) return null;
-        try (InputStream stream = BorderOverlayRenderer.class.getResourceAsStream(PREBUILT_ROOT + "/" + relative)) {
-            if (stream == null) return null;
-            return NativeImage.read(stream);
-        } catch (Exception e) {
-            LOGGER.debug("[TownyMap] Ignoring unreadable prebuilt border tile {}: {}", relative, e.getMessage());
-            return null;
-        }
-    }
-
-    private NativeImage loadPrebuiltAtlas(AtlasKey key) {
-        String relative = prebuiltAtlasRelativePath(key);
-        if (!prebuiltAtlasManifest().contains(relative)) return null;
-        try (InputStream stream = BorderOverlayRenderer.class.getResourceAsStream(PREBUILT_ROOT + "/" + relative)) {
-            if (stream == null) return null;
-            return NativeImage.read(stream);
-        } catch (Exception e) {
-            LOGGER.debug("[TownyMap] Ignoring unreadable prebuilt border atlas {}: {}", relative, e.getMessage());
-            return null;
-        }
-    }
-
-    private boolean isKnownMissingPrebuiltTile(TileKey key) {
-        return canUsePrebuiltTile(key) && prebuiltManifestLoaded && !prebuiltManifest().contains(prebuiltRelativePath(key));
-    }
-
-    private boolean canUsePrebuiltTile(TileKey key) {
-        return config.squaremapMaxZoom == PREBUILT_SQUAREMAP_MAX_ZOOM
-                && key.thicknessQ() == PREBUILT_THICKNESS_Q
-                && key.zoom() >= 0
-                && key.zoom() <= Math.max(0, PREBUILT_SQUAREMAP_MAX_ZOOM - MAX_BORDER_ZOOM_BELOW_MAX);
-    }
-
-    private String prebuiltRelativePath(TileKey key) {
-        return key.mode() + "/" + key.zoom() + "/" + key.x() + "_" + key.y() + "_t" + key.thicknessQ() + ".png";
-    }
-
-    private boolean canUsePrebuiltAtlas(TileKey key) {
-        return canUsePrebuiltTile(key) && key.zoom() <= MAX_ATLAS_ZOOM;
-    }
-
-    private AtlasKey atlasKey(TileKey key) {
-        return new AtlasKey(key.mode(), key.zoom(), Math.floorDiv(key.x(), ATLAS_GRID),
-                Math.floorDiv(key.y(), ATLAS_GRID), key.thicknessQ());
-    }
-
-    private String prebuiltAtlasRelativePath(AtlasKey key) {
-        return "atlas/" + key.mode() + "/" + key.zoom() + "/"
-                + key.pageX() + "_" + key.pageY() + "_t" + key.thicknessQ() + ".png";
-    }
-
-    private Set<String> prebuiltManifest() {
-        Set<String> manifest = prebuiltTileManifest;
-        if (manifest != null) return manifest;
-        synchronized (this) {
-            if (prebuiltTileManifest != null) return prebuiltTileManifest;
-            HashSet<String> loaded = new HashSet<>();
-            try (InputStream stream = BorderOverlayRenderer.class.getResourceAsStream(PREBUILT_ROOT + "/manifest.txt")) {
-                if (stream != null) {
-                    String text = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
-                    for (String line : text.split("\\R")) {
-                        String trimmed = line.trim();
-                        if (!trimmed.isEmpty()) loaded.add(trimmed);
-                    }
-                    LOGGER.info("[TownyMap] Loaded {} prebuilt border tile entries", loaded.size());
-                } else {
-                    LOGGER.info("[TownyMap] No bundled prebuilt border tile manifest found; using runtime border cache");
-                }
-            } catch (Exception e) {
-                LOGGER.warn("[TownyMap] Failed to load prebuilt border tile manifest: {}", e.getMessage());
-            }
-            prebuiltTileManifest = Set.copyOf(loaded);
-            prebuiltManifestLoaded = true;
-            return prebuiltTileManifest;
-        }
-    }
-
-    private Set<String> prebuiltAtlasManifest() {
-        Set<String> manifest = prebuiltAtlasManifest;
-        if (manifest != null) return manifest;
-        synchronized (this) {
-            if (prebuiltAtlasManifest != null) return prebuiltAtlasManifest;
-            HashSet<String> loaded = new HashSet<>();
-            try (InputStream stream = BorderOverlayRenderer.class.getResourceAsStream(PREBUILT_ROOT + "/atlas-manifest.txt")) {
-                if (stream != null) {
-                    String text = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
-                    for (String line : text.split("\\R")) {
-                        String trimmed = line.trim();
-                        if (!trimmed.isEmpty()) loaded.add(trimmed);
-                    }
-                    LOGGER.info("[TownyMap] Loaded {} prebuilt border atlas entries", loaded.size());
-                }
-            } catch (Exception e) {
-                LOGGER.warn("[TownyMap] Failed to load prebuilt border atlas manifest: {}", e.getMessage());
-            }
-            prebuiltAtlasManifest = Set.copyOf(loaded);
-            prebuiltAtlasManifestLoaded = true;
-            return prebuiltAtlasManifest;
-        }
-    }
-
-    private void saveCachedTile(TileKey key, BufferedImage image) {
-        Path path = cachePath(key);
-        try {
-            Files.createDirectories(path.getParent());
-            ImageIO.write(image, "png", path.toFile());
-        } catch (IOException e) {
-            LOGGER.debug("[TownyMap] Failed to cache border tile {}: {}", path, e.getMessage());
-        }
-    }
-
-    private Path cachePath(TileKey key) {
-        return diskCacheDir
-                .resolve(Integer.toString(key.mode()))
-                .resolve(Integer.toString(key.zoom()))
-                .resolve(key.x() + "_" + key.y() + "_t" + key.thicknessQ() + ".png");
-    }
-
-    private static boolean drawBorderLine(Graphics2D g, BorderLine line,
-                                          double tileWorldX, double tileWorldZ,
-                                          double pixelsPerBlock) {
-        Path2D.Double path = new Path2D.Double();
-        path.moveTo((line.x[0] - tileWorldX) * pixelsPerBlock,
-                (line.z[0] - tileWorldZ) * pixelsPerBlock);
-        for (int i = 1; i < line.x.length; i++) {
-            path.lineTo((line.x[i] - tileWorldX) * pixelsPerBlock,
-                    (line.z[i] - tileWorldZ) * pixelsPerBlock);
-        }
-        g.draw(path);
-        return true;
-    }
-
-    private void processCompletedTiles() {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client == null) return;
-
-        processAtlasUploads(client, completedCountryAtlases, MAX_ATLAS_TEXTURE_UPLOADS_PER_FRAME);
-        processTileUploads(client, completedCountryTiles, MAX_COUNTRY_TEXTURE_UPLOADS_PER_FRAME);
-        processAtlasUploads(client, completedAtlases, MAX_ATLAS_TEXTURE_UPLOADS_PER_FRAME);
-        processTileUploads(client, completedTiles, MAX_TEXTURE_UPLOADS_PER_FRAME);
-    }
-
-    private void processAtlasUploads(MinecraftClient client, Queue<LoadedAtlas> queue, int limit) {
-        for (int i = 0; i < limit; i++) {
-            LoadedAtlas loaded = queue.poll();
-            if (loaded == null) return;
-            try {
-                AtlasKey key = loaded.key();
-                if (atlasTextures.containsKey(key)) {
-                    loaded.image().close();
-                    continue;
-                }
-                Identifier id = Identifier.of("townymapaddon",
-                        "border_atlas/" + key.mode() + "/" + key.zoom() + "/"
-                                + key.pageX() + "_" + key.pageY() + "_t" + key.thicknessQ());
-                BorderTileTexture texture =
-                        new BorderTileTexture(() -> "TownyMap border atlas " + key, loaded.image());
-                client.getTextureManager().registerTexture(id, texture);
-                atlasTextures.put(key, id);
-                evictOldTextures(client);
-            } catch (Exception e) {
-                loaded.image().close();
-                LOGGER.warn("[TownyMap] Failed to upload border atlas {}: {}", loaded.key(), e.getMessage());
-            }
-        }
-    }
-
-    private void processTileUploads(MinecraftClient client, Queue<LoadedTile> queue, int limit) {
-        for (int i = 0; i < limit; i++) {
-            LoadedTile loaded = queue.poll();
-            if (loaded == null) return;
-            try {
-                TileKey key = loaded.key();
-                if (textures.containsKey(key)) {
-                    loaded.image().close();
-                    continue;
-                }
-                Identifier id = Identifier.of("townymapaddon",
-                        "borders/" + key.mode() + "/" + key.zoom() + "/" + key.x() + "_" + key.y() + "_t" + key.thicknessQ());
-                BorderTileTexture texture =
-                        new BorderTileTexture(() -> "TownyMap border tile " + key, loaded.image());
-                client.getTextureManager().registerTexture(id, texture);
-                textures.put(key, id);
-                evictOldTextures(client);
-            } catch (Exception e) {
-                loaded.image().close();
-                LOGGER.warn("[TownyMap] Failed to upload border tile {}: {}", loaded.key(), e.getMessage());
-            }
-        }
-    }
-
-    private List<BorderLine> tileLines(TileKey key, double tileWorldSize) {
-        BorderLineIndex index = lineIndexes.computeIfAbsent(key.mode, this::buildLineIndex);
-        double tileWorldX = key.x * tileWorldSize;
-        double tileWorldZ = key.y * tileWorldSize;
-        double padding = tileWorldSize * 0.03;
-        double left = tileWorldX - padding;
-        double right = tileWorldX + tileWorldSize + padding;
-        double top = tileWorldZ - padding;
-        double bottom = tileWorldZ + tileWorldSize + padding;
-
-        int minCellX = floorToCell(left);
-        int maxCellX = floorToCell(right);
-        int minCellY = floorToCell(top);
-        int maxCellY = floorToCell(bottom);
-        HashSet<BorderLine> candidates = new HashSet<>();
-
-        for (int cellY = minCellY; cellY <= maxCellY; cellY++) {
-            for (int cellX = minCellX; cellX <= maxCellX; cellX++) {
-                List<BorderLine> lines = index.cells().get(packTile(cellX, cellY));
-                if (lines != null) candidates.addAll(lines);
-            }
-        }
-
-        if (candidates.isEmpty()) return List.of();
-        ArrayList<BorderLine> lines = new ArrayList<>();
-        for (BorderLine line : candidates) {
-            if (line.intersects(left, right, top, bottom)) lines.add(line);
-        }
-        return lines;
-    }
-
-    private BorderLineIndex buildLineIndex(int mode) {
-        long started = System.currentTimeMillis();
-        Map<Long, ArrayList<BorderLine>> mutable = new HashMap<>();
-        List<BorderLine> source = mode == 1 ? countries() : statesOnly();
-
-        for (BorderLine line : source) {
-            int minCellX = floorToCell(line.minX);
-            int maxCellX = floorToCell(line.maxX);
-            int minCellY = floorToCell(line.minZ);
-            int maxCellY = floorToCell(line.maxZ);
-            for (int cellY = minCellY; cellY <= maxCellY; cellY++) {
-                for (int cellX = minCellX; cellX <= maxCellX; cellX++) {
-                    mutable.computeIfAbsent(packTile(cellX, cellY), ignored -> new ArrayList<>()).add(line);
-                }
-            }
-        }
-
-        Map<Long, List<BorderLine>> index = new HashMap<>(mutable.size());
-        for (Map.Entry<Long, ArrayList<BorderLine>> entry : mutable.entrySet()) {
-            index.put(entry.getKey(), List.copyOf(entry.getValue()));
-        }
-
-        LOGGER.info("[TownyMap] Indexed {} border grid cells for mode {} in {}ms",
-                index.size(), mode, System.currentTimeMillis() - started);
-        return new BorderLineIndex(Map.copyOf(index));
-    }
-
-    private void renderTile(DrawContext ctx, Identifier texture, int tileX, int tileY,
-                            double tileWorldSize, double cameraX, double cameraZ,
-                            double blockScale, int sw, int sh) {
-        double tileWorldX = tileX * tileWorldSize;
-        double tileWorldZ = tileY * tileWorldSize;
-        int x1 = toScreenX(tileWorldX, cameraX, blockScale, sw);
-        int y1 = toScreenY(tileWorldZ, cameraZ, blockScale, sh);
-        int x2 = toScreenX(tileWorldX + tileWorldSize, cameraX, blockScale, sw);
-        int y2 = toScreenY(tileWorldZ + tileWorldSize, cameraZ, blockScale, sh);
-
-        if (x2 <= 0 || x1 >= sw || y2 <= 0 || y1 >= sh) return;
-        int drawW = Math.max(1, x2 - x1);
-        int drawH = Math.max(1, y2 - y1);
-        ctx.drawTexture(PIPELINE, texture, x1 - 1, y1 - 1, 0.0F, 0.0F,
-                drawW + 2, drawH + 2,
-                TILE_PIXELS, TILE_PIXELS, TILE_PIXELS, TILE_PIXELS);
-    }
-
-    private void renderAtlasTile(DrawContext ctx, Identifier texture, TileKey key,
-                                 double tileWorldSize, double cameraX, double cameraZ,
-                                 double blockScale, int sw, int sh) {
-        double tileWorldX = key.x * tileWorldSize;
-        double tileWorldZ = key.y * tileWorldSize;
-        int x1 = toScreenX(tileWorldX, cameraX, blockScale, sw);
-        int y1 = toScreenY(tileWorldZ, cameraZ, blockScale, sh);
-        int x2 = toScreenX(tileWorldX + tileWorldSize, cameraX, blockScale, sw);
-        int y2 = toScreenY(tileWorldZ + tileWorldSize, cameraZ, blockScale, sh);
-
-        if (x2 <= 0 || x1 >= sw || y2 <= 0 || y1 >= sh) return;
-        int drawW = Math.max(1, x2 - x1);
-        int drawH = Math.max(1, y2 - y1);
-        int u = Math.floorMod(key.x(), ATLAS_GRID) * TILE_PIXELS;
-        int v = Math.floorMod(key.y(), ATLAS_GRID) * TILE_PIXELS;
-        ctx.drawTexture(PIPELINE, texture, x1 - 1, y1 - 1, (float) u, (float) v,
-                drawW + 2, drawH + 2,
-                TILE_PIXELS, TILE_PIXELS, ATLAS_PIXELS, ATLAS_PIXELS);
-    }
-
-    private List<BorderLine> countries() {
-        ensureLoaded();
-        return countryLines;
-    }
-
-    private List<BorderLine> statesOnly() {
-        ensureLoaded();
-        return stateOnlyLines;
+        drawLines(ctx, countryLines, cameraX, cameraZ, blockScale, sw, sh,
+                worldLeft, worldRight, worldTop, worldBottom, 0xFFFFFFFF, countryW);
     }
 
     /**
-     * Reads the packed border blob once. Each polyline carries its layer tag, so the country/state split is
-     * already decided here — the old path parsed 11 MB of JSON and then re-derived that split by
-     * fingerprinting every line on each startup.
+     * Projects and draws one layer.
+     *
+     * <p>Two cheap filters carry the cost at world zoom, where every line is technically on screen: a
+     * bounding-box reject per line, then screen-space decimation that folds away points landing on the pixel
+     * just drawn. Detail therefore costs nothing until you are zoomed in far enough to actually see it.
      */
-    private void ensureLoaded() {
-        if (countryLines != null && stateOnlyLines != null) return;
+    private void drawLines(DrawContext ctx, List<BorderLine> lines,
+                           double cameraX, double cameraZ, double blockScale, int sw, int sh,
+                           double worldLeft, double worldRight, double worldTop, double worldBottom,
+                           int color, float width) {
+        final double minStepSq = MIN_SEGMENT_PX * MIN_SEGMENT_PX;
+        final double halfW = sw / 2.0;
+        final double halfH = sh / 2.0;
 
-        ArrayList<BorderLine> countries = new ArrayList<>();
-        ArrayList<BorderLine> stateOnly = new ArrayList<>();
+        for (BorderLine line : lines) {
+            if (!line.intersects(worldLeft, worldRight, worldTop, worldBottom)) continue;
+
+            double[] xs = line.x();
+            double[] zs = line.z();
+            double px = (xs[0] - cameraX) * blockScale + halfW;
+            double py = (zs[0] - cameraZ) * blockScale + halfH;
+            double tailX = px;
+            double tailY = py;
+            boolean pendingTail = false;   // last point was folded away; keep it if the line ends there
+
+            for (int i = 1; i < xs.length; i++) {
+                double cx = (xs[i] - cameraX) * blockScale + halfW;
+                double cy = (zs[i] - cameraZ) * blockScale + halfH;
+                double dx = cx - px;
+                double dy = cy - py;
+                if (dx * dx + dy * dy < minStepSq && i < xs.length - 1) {
+                    tailX = cx;
+                    tailY = cy;
+                    pendingTail = true;
+                    continue;
+                }
+                if (onScreen(px, py, cx, cy, sw, sh)) {
+                    drawSegment(ctx, px, py, cx, cy, width, color);
+                }
+                px = cx;
+                py = cy;
+                pendingTail = false;
+            }
+            if (pendingTail && onScreen(px, py, tailX, tailY, sw, sh)) {
+                drawSegment(ctx, px, py, tailX, tailY, width, color);
+            }
+        }
+    }
+
+    /** Cheap reject for a segment that cannot cross the viewport (both ends off the same edge). */
+    private static boolean onScreen(double x1, double y1, double x2, double y2, int sw, int sh) {
+        return !((x1 < 0 && x2 < 0) || (x1 > sw && x2 > sw)
+                || (y1 < 0 && y2 < 0) || (y1 > sh && y2 > sh));
+    }
+
+    /** One segment as a rotated, centred quad — smooth at any angle, unlike an axis-aligned fill. */
+    private static void drawSegment(DrawContext ctx, double x1, double y1, double x2, double y2,
+                                    float width, int color) {
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        double length = Math.hypot(dx, dy);
+        if (length < 0.01) return;
+        org.joml.Matrix3x2fStack m = ctx.getMatrices();
+        m.pushMatrix();
+        try {
+            m.translate((float) x1, (float) y1);
+            m.rotate((float) Math.atan2(dy, dx));
+            m.translate(0f, -width / 2f);          // centre the quad on the line
+            m.scale((float) length, width);
+            ctx.fill(0, 0, 1, 1, color);           // unit quad stretched to the exact sub-pixel size
+        } finally {
+            m.popMatrix();
+        }
+    }
+
+    // ── Geometry loading ─────────────────────────────────────────────────────
+
+    private void load() {
+        deleteStaleTileCache();
+
+        List<BorderLine> countries = new ArrayList<>();
+        List<BorderLine> stateOnly = new ArrayList<>();
         try (InputStream stream = BorderOverlayRenderer.class.getResourceAsStream(BORDERS_BIN)) {
             if (stream == null) {
                 LOGGER.warn("[TownyMap] Missing border resource {}", BORDERS_BIN);
@@ -631,9 +165,19 @@ final class BorderOverlayRenderer {
         }
         countryLines = List.copyOf(countries);
         stateOnlyLines = List.copyOf(stateOnly);
+        loading = false;
     }
 
-    /** See tools/EncodeBorders for the format: header, then per line a zigzag-varint delta point stream. */
+    /**
+     * Reads the packed blob written by tools/EncodeBorders:
+     * <pre>
+     *   "TMBL", version, scale, lineCount,
+     *   then per line: pointCount, layer byte, and pointCount (dx, dz) zigzag varints
+     *   delta-encoded against the previous point.
+     * </pre>
+     * Each line carries its own layer, so the country/state split is already decided — the old JSON path
+     * had to re-derive it on every startup by fingerprinting all 21k polylines.
+     */
     private static void decode(byte[] data, List<BorderLine> countries, List<BorderLine> stateOnly) {
         if (data.length < 6 || data[0] != 'T' || data[1] != 'M' || data[2] != 'B' || data[3] != 'L') {
             throw new IllegalStateException("bad border blob header");
@@ -668,6 +212,40 @@ final class BorderOverlayRenderer {
         }
     }
 
+    /**
+     * Removes the border tile cache the old raster renderer wrote into the config folder.
+     *
+     * <p>That renderer cached every rasterised tile to disk, which grew to ~100 MB for an active player. The
+     * vector path never reads or writes it, so on first run after updating it is pure dead weight — this is
+     * the mod's own generated cache, safe to drop and never regenerated.
+     */
+    private static void deleteStaleTileCache() {
+        try {
+            java.nio.file.Path dir = net.fabricmc.loader.api.FabricLoader.getInstance().getConfigDir()
+                    .resolve("townymapaddon").resolve("border-cache");
+            if (!java.nio.file.Files.isDirectory(dir)) return;
+
+            long[] stats = new long[2];   // {files, bytes}
+            try (var walk = java.nio.file.Files.walk(dir)) {
+                walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try {
+                        if (java.nio.file.Files.isRegularFile(p)) {
+                            stats[0]++;
+                            stats[1] += java.nio.file.Files.size(p);
+                        }
+                        java.nio.file.Files.deleteIfExists(p);
+                    } catch (Exception ignored) { /* leave anything we can't remove */ }
+                });
+            }
+            if (stats[0] > 0) {
+                LOGGER.info("[TownyMap] Removed {} stale border tile cache files ({} MB) — "
+                        + "borders are drawn as vectors now", stats[0], stats[1] / (1024 * 1024));
+            }
+        } catch (Exception e) {
+            LOGGER.debug("[TownyMap] Could not clean the old border cache: {}", e.toString());
+        }
+    }
+
     private static long readVarInt(byte[] data, int[] pos) {
         long raw = 0;
         int shift = 0;
@@ -680,111 +258,10 @@ final class BorderOverlayRenderer {
         return (raw >>> 1) ^ -(raw & 1);   // undo zigzag
     }
 
-    private void evictOldTextures(MinecraftClient client) {
-        while (textures.size() > MAX_TEXTURES) {
-            Map.Entry<TileKey, Identifier> eldest = textures.entrySet().iterator().next();
-            client.getTextureManager().destroyTexture(eldest.getValue());
-            textures.remove(eldest.getKey());
-        }
-        while (atlasTextures.size() > MAX_TEXTURES / 4) {
-            Map.Entry<AtlasKey, Identifier> eldest = atlasTextures.entrySet().iterator().next();
-            client.getTextureManager().destroyTexture(eldest.getValue());
-            atlasTextures.remove(eldest.getKey());
-        }
-    }
-
-    boolean isLoading() {
-        return !loading.isEmpty() || !completedTiles.isEmpty()
-                || !completedCountryTiles.isEmpty()
-                || !atlasLoading.isEmpty() || !completedAtlases.isEmpty()
-                || !completedCountryAtlases.isEmpty();
-    }
-
-    private int chooseTileZoom(double blockScale) {
-        int zoom = config.squaremapMaxZoom + (int) Math.ceil(log2(blockScale)) + QUALITY_ZOOM_BIAS;
-        if (zoom < 0) return 0;
-        int maxBorderZoom = Math.max(0, config.squaremapMaxZoom - MAX_BORDER_ZOOM_BELOW_MAX);
-        return Math.min(maxBorderZoom, zoom);
-    }
-
-    private double pixelsPerBlock(int zoom) {
-        return Math.pow(2.0, zoom - config.squaremapMaxZoom);
-    }
-
-    private float strokeWidth(TileKey key) {
-        int maxBorderZoom = Math.max(0, config.squaremapMaxZoom - MAX_BORDER_ZOOM_BELOW_MAX);
-        int levelsBelowMax = Math.max(0, maxBorderZoom - key.zoom());
-        float base;
-        if (levelsBelowMax == 0) {
-            base = key.mode() == 1 ? 2.4F : 1.8F;
-        } else if (levelsBelowMax == 1) {
-            base = key.mode() == 1 ? 5.0F : 4.0F;
-        } else {
-            base = key.mode() == 1 ? 11.0F : 9.0F;
-        }
-        return base * key.thicknessMultiplier();
-    }
-
-    private static int floorToTile(double worldCoord, double tileWorldSize) {
-        return (int) Math.floor(worldCoord / tileWorldSize);
-    }
-
-    private static int floorToCell(double worldCoord) {
-        return (int) Math.floor(worldCoord / INDEX_CELL_BLOCKS);
-    }
-
-    private static double log2(double value) {
-        return Math.log(value) / Math.log(2.0);
-    }
-
-    private static int tileWorkerCount() {
-        return Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() - 1));
-    }
-
-    private static long packTile(int x, int y) {
-        return ((long) x << 32) ^ (y & 0xFFFFFFFFL);
-    }
-
-    private static int toScreenX(double worldX, double camX, double scale, int sw) {
-        return sw / 2 + (int) Math.round((worldX - camX) * scale);
-    }
-
-    private static int toScreenY(double worldZ, double camZ, double scale, int sh) {
-        return sh / 2 + (int) Math.round((worldZ - camZ) * scale);
-    }
-
-    /**
-     * Identifies a rasterised border tile.
-     * {@code thicknessQ} = {@code round(borderThicknessMultiplier × 20)}, range 2–60.
-     * Embedding it in the key means each distinct thickness has its own rasterised
-     * tile in both the in-memory LRU cache and the disk cache — no manual invalidation needed.
-     */
-    private record TileKey(int mode, int zoom, int x, int y, int thicknessQ) {
-        /** Recover the actual multiplier from the quantised value. */
-        float thicknessMultiplier() { return thicknessQ / 20.0f; }
-    }
-    private record AtlasKey(int mode, int zoom, int pageX, int pageY, int thicknessQ) {}
-    private record LoadedTile(TileKey key, NativeImage image) {}
-    private record LoadedAtlas(AtlasKey key, NativeImage image) {}
-    private record BorderLineIndex(Map<Long, List<BorderLine>> cells) {}
-
     private record BorderLine(double[] x, double[] z,
                               double minX, double maxX, double minZ, double maxZ) {
         boolean intersects(double left, double right, double top, double bottom) {
             return maxX >= left && minX <= right && maxZ >= top && minZ <= bottom;
-        }
-    }
-
-
-    private static final class BorderTileTexture extends NativeImageBackedTexture {
-        private BorderTileTexture(java.util.function.Supplier<String> name, NativeImage image) {
-            super(name, image);
-            this.sampler = RenderSystem.getSamplerCache().get(
-                    AddressMode.CLAMP_TO_EDGE,
-                    AddressMode.CLAMP_TO_EDGE,
-                    FilterMode.LINEAR,
-                    FilterMode.LINEAR,
-                    false);
         }
     }
 }
