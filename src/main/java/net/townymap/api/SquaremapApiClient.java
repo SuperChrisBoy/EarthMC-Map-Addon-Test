@@ -331,6 +331,7 @@ public class SquaremapApiClient {
         List<TownData> towns = new ArrayList<>();
         Map<String, String> mayors = new HashMap<>();
         Map<String, Integer> residents = new HashMap<>();
+        int markerFailures = 0;
         Map<String, String> nations = new HashMap<>();
         try {
             JsonElement root = JsonParser.parseString(json);
@@ -349,6 +350,7 @@ public class SquaremapApiClient {
                 for (JsonElement markerEl : markers) {
                     if (!markerEl.isJsonObject()) continue;
                     JsonObject m = markerEl.getAsJsonObject();
+                    try {
 
                     if (!"polygon".equalsIgnoreCase(getString(m, "type"))) continue;
 
@@ -396,10 +398,18 @@ public class SquaremapApiClient {
                     if (!rings.isEmpty()) {
                         towns.add(new TownData(name, rgb, fillRgb, List.copyOf(rings)));
                     }
+                    } catch (Exception e) {
+                        // One malformed marker must not discard the rest of the map — this loop
+                        // carries all 5,600 towns, and the outer catch would have dropped them all.
+                        markerFailures++;
+                    }
                 }
             }
         } catch (Exception e) {
             LOGGER.error("[TownyMap] Failed to parse markers.json", e);
+        }
+        if (markerFailures > 0) {
+            LOGGER.warn("[TownyMap] Skipped {} unparseable town markers", markerFailures);
         }
         townMayors = Map.copyOf(mayors);
         townNations = Map.copyOf(nations);
@@ -413,7 +423,7 @@ public class SquaremapApiClient {
             if (el.isJsonObject()) {
                 JsonObject o = el.getAsJsonObject();
                 if (o.has("x") && o.has("z")) {
-                    pts.add(new int[]{o.get("x").getAsInt(), o.get("z").getAsInt()});
+                    pts.add(new int[]{intOf(o, "x", 0), intOf(o, "z", 0)});
                 }
             } else if (el.isJsonArray()) {
                 JsonArray a = el.getAsJsonArray();
@@ -455,11 +465,11 @@ public class SquaremapApiClient {
                 int x, z;
                 if (p.has("position") && p.get("position").isJsonObject()) {
                     JsonObject pos = p.getAsJsonObject("position");
-                    x = pos.get("x").getAsInt();
-                    z = pos.get("z").getAsInt();
+                    x = intOf(pos, "x", 0);
+                    z = intOf(pos, "z", 0);
                 } else if (p.has("x") && p.has("z")) {
-                    x = p.get("x").getAsInt();
-                    z = p.get("z").getAsInt();
+                    x = intOf(p, "x", 0);
+                    z = intOf(p, "z", 0);
                 } else {
                     continue;
                 }
@@ -484,6 +494,16 @@ public class SquaremapApiClient {
         if (bold != null) return bold;
         String stripped = stripHtml(html);
         return stripped == null || stripped.isBlank() ? null : stripped;
+    }
+
+    /** Null-safe int read: has() is true for a JSON null, and getAsInt() on that throws. */
+    private static int intOf(JsonObject obj, String key, int fallback) {
+        try {
+            JsonElement el = obj.get(key);
+            return el != null && el.isJsonPrimitive() ? el.getAsInt() : fallback;
+        } catch (Exception e) {
+            return fallback;
+        }
     }
 
     private static int extractPopupResidents(String popupHtml) {
