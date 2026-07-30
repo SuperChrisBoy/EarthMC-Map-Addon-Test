@@ -10,12 +10,15 @@ import net.townymap.gui.DetailScreen.Page;
 import net.townymap.gui.DetailScreen.Ref;
 import net.townymap.gui.DetailScreen.Rule;
 import net.townymap.api.ArchiveClient;
+import net.townymap.model.EarthMcNationData;
 import net.townymap.model.NationFullData;
 import net.townymap.model.PlayerFullData;
+import net.townymap.model.TownData;
 import net.townymap.model.TownFullData;
 import net.townymap.TownyMapMod;
 import net.townymap.util.DiscordUrl;
 
+import java.util.Locale;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -74,17 +77,80 @@ public final class DetailPages {
         if (names != null && !names.isEmpty()) blocks.add(new NameList(title, refs(names, kind)));
     }
 
-    /** Adds "Meganation" / "Alliances" rows for a nation, if it belongs to any (from the alliance roster). */
+    /**
+     * Adds "Meganation" / "Alliances" rows for a nation, if it belongs to any (from the alliance roster).
+     * Each bloc is a link through to its own panel, so a nation's memberships are explorable rather than
+     * being a dead end of text.
+     */
     private static void addAllianceBlocks(List<DetailScreen.Block> b, String nation) {
         if (nation == null || nation.isBlank()) return;
-        List<String> megas = TownyMapMod.meganationsForNation(nation);
-        if (!megas.isEmpty()) {
-            b.add(new DetailScreen.Wide(megas.size() > 1 ? "Meganations" : "Meganation", String.join(", ", megas)));
+        addBlocRefs(b, TownyMapMod.meganationsForNation(nation), "Meganation", "Meganations");
+        addBlocRefs(b, TownyMapMod.alliancesForNation(nation), "Alliance", "Alliances");
+    }
+
+    private static void addBlocRefs(List<DetailScreen.Block> b, List<String> names,
+                                    String singular, String plural) {
+        if (names.isEmpty()) return;
+        List<DetailScreen.RefLine> lines = new ArrayList<>(names.size());
+        for (String name : names) {
+            net.townymap.api.AllianceClient.Alliance a = TownyMapMod.allianceByName(name);
+            String suffix = a == null ? "" : "  " + a.nations().size() + " nations";
+            lines.add(new DetailScreen.RefLine(new Ref(Kind.ALLIANCE, name), suffix));
         }
-        List<String> allis = TownyMapMod.alliancesForNation(nation);
-        if (!allis.isEmpty()) {
-            b.add(new DetailScreen.Wide(allis.size() > 1 ? "Alliances" : "Alliance", String.join(", ", allis)));
+        b.add(new DetailScreen.RefLineList(names.size() > 1 ? plural : singular, lines));
+    }
+
+    // ── Alliance / meganation ─────────────────────────────────────────────────
+
+    /**
+     * The Expand panel for an alliance or meganation. Everything here comes from data already in memory —
+     * the BreakTheBot roster plus the town list the map is drawing — so opening it costs no requests.
+     */
+    public static Page alliance(net.townymap.api.AllianceClient.Alliance a) {
+        List<DetailScreen.Block> b = new ArrayList<>();
+        List<String> nations = a.nations();
+
+        // Roll the bloc's totals up from the towns already on the map, so they're complete even when the
+        // per-nation detail fetches haven't caught up.
+        int towns = 0;
+        int chunks = 0;
+        for (TownData t : TownyMapMod.currentTowns()) {
+            String n = TownyMapMod.townNationOf(t.key());
+            if (n == null || !a.nationsLower().contains(n.toLowerCase(Locale.ROOT))) continue;
+            towns++;
+            chunks += t.approximateChunks();
         }
+        // Residents only exist in the nation records, which warm in the background; sum what has arrived.
+        int residents = 0;
+        boolean partial = false;
+        for (String n : nations) {
+            EarthMcNationData nd = TownyMapMod.nationDetails(n);
+            if (nd == null) { partial = true; continue; }
+            residents += nd.residentCount();
+        }
+
+        b.add(new Cols(List.of(
+                new Col("Type", a.mega() ? "Meganation" : "Alliance", null),
+                new Col("Tag", orDash(a.identifier()), null),
+                new Col("Nations", String.valueOf(nations.size()), null))));
+        b.add(new Cols(List.of(
+                new Col("Towns", towns > 0 ? String.valueOf(towns) : "—", null),
+                new Col("Chunks", chunks > 0 ? String.format("%,d", chunks) : "—", null),
+                new Col("Residents", residents > 0 ? String.format("%,d", residents)
+                        + (partial ? "+" : "") : "—", null))));
+        b.add(new DetailScreen.Rule());
+
+        List<DetailScreen.RefLine> lines = new ArrayList<>(nations.size());
+        for (String n : nations) {
+            EarthMcNationData nd = TownyMapMod.nationDetails(n);
+            String suffix = nd == null ? "" : "  " + nd.townCount() + " towns";
+            lines.add(new DetailScreen.RefLine(new Ref(Kind.NATION, n), suffix));
+        }
+        b.add(new DetailScreen.RefLineList("Members", lines));
+
+        return new Page(Kind.ALLIANCE, a.label() == null || a.label().isBlank() ? a.identifier() : a.label(),
+                (a.mega() ? "Meganation" : "Alliance") + " · " + nations.size() + " nations",
+                b, "", "");
     }
 
     // ── Town ──────────────────────────────────────────────────────────────────
@@ -352,7 +418,6 @@ public final class DetailPages {
                 new Col("Capital", n.capital().isBlank() ? "—" : n.capital(),
                         n.capital().isBlank() ? null : new Ref(Kind.TOWN, n.capital())),
                 new Col("Founded", date(n.registeredMs())))));
-        addAllianceBlocks(b, n.name());
 
         if (!n.board().isBlank()) b.add(new DetailScreen.Wide("Board", n.board()));
         b.add(new Rule());
@@ -377,6 +442,8 @@ public final class DetailPages {
         addNames(b, "Sanctioned", n.sanctioned(), Kind.NATION);
         addNames(b, "Outlaws", n.outlaws(), Kind.PLAYER);
         addNames(b, "Residents", n.residents(), Kind.PLAYER);
+        // Blocs sit with the other collapsible lists rather than up in the summary rows.
+        addAllianceBlocks(b, n.name());
         addRanks(b, n.occupiedRanks());
 
         if (!n.pacts().isEmpty()) {

@@ -51,11 +51,17 @@ public abstract class MixinGuiMap {
     private static final AtomicBoolean MAP_SURFACE_ERROR_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean RENDER_ERROR_LOGGED = new AtomicBoolean(false);
     private static final AtomicBoolean CLICK_ERROR_LOGGED = new AtomicBoolean(false);
-
     // MC 26.2 fires a phantom left-click immediately after every right-click; we swallow one left-click
     // within this window of a right-click so it can't dismiss the town popup the right-click just opened.
     private static final long SPURIOUS_LEFT_CLICK_NANOS = 70_000_000L;   // 70ms
     private long lastRightClickNanos = 0L;
+    @org.spongepowered.asm.mixin.Unique
+    private boolean townymap$widgetsHidden = false;
+    /** Widgets wider or taller than this share of the screen are never hidden — that's map surface, not UI. */
+    @org.spongepowered.asm.mixin.Unique
+    private static final double TOWNYMAP_MAX_HIDEABLE_FRACTION = 0.4;
+    // TEST: how much further "World Map Overview" lets you zoom out (Xaero's min destScale / this).
+    private static final double WORLD_MAP_OVERVIEW_FACTOR = 8.0;
 
     @Shadow(remap = false) private double cameraX;
     @Shadow(remap = false) private double cameraZ;
@@ -132,8 +138,18 @@ public abstract class MixinGuiMap {
     private void onRenderPreDropdown(GuiGraphicsExtractor ctx, int mouseX, int mouseY,
                                      float delta, CallbackInfo ci) {
         try {
+            // Hide Xaero's own buttons for the capture too. Only SMALL widgets are touched: hiding every
+            // widget last time took Xaero's map surface with it, so anything occupying a large share of the
+            // screen is left alone no matter what it is. Restored the frame after, and the armed state times
+            // out on its own, so this can't get stuck the way it did before.
+            boolean composing = TownyMapMod.hideChromeForScreenshot();
+            if (composing != townymap$widgetsHidden) {
+                townymap$setSmallWidgetsVisible(!composing);
+                townymap$widgetsHidden = composing;
+            }
             // Arrow first, so the UI panels below queue on top of it in the batch.
-            renderPlayerArrow(ctx);
+            // It's a "you are here" marker, so it has no place in a shared picture of the map.
+            if (!composing) renderPlayerArrow(ctx);
 
             Minecraft mc = Minecraft.getInstance();
             int w = mc.getWindow().getGuiScaledWidth();
@@ -146,15 +162,19 @@ public abstract class MixinGuiMap {
                 double mapScale = guiScale / dimMul;
                 TownyMapMod.renderWorldMapLatePass(ctx, cameraX * dimMul, cameraZ * dimMul, mapScale, w, h);
             }
-            double[] world = overlayWorldFromScreen(mouseX, mouseY, w, h);
-            if (world != null) {
-                TownyMapMod.renderTownHover(ctx, mouseX, mouseY, world[0], world[1], w, h);
+            // A clean map screenshot skips our own chrome for the frame, so the capture is just the map.
+            if (!TownyMapMod.hideChromeForScreenshot()) {
+                double[] world = overlayWorldFromScreen(mouseX, mouseY, w, h);
+                if (world != null) {
+                    TownyMapMod.renderTownHover(ctx, mouseX, mouseY, world[0], world[1], w, h);
+                }
+                TownyMapMod.renderTownInfo(ctx, w, h);
+                TownyMapMod.renderMapToggles(ctx, h);
+                TownyMapMod.renderPlanningCounter(ctx, w, h);
+                TownyMapMod.renderTownSearch(ctx, w, h);
+                TownyMapMod.renderArchiveBanner(ctx, w);
             }
-            TownyMapMod.renderTownInfo(ctx, w, h);
-            TownyMapMod.renderMapToggles(ctx, h);
-            TownyMapMod.renderPlanningCounter(ctx, w, h);
-            TownyMapMod.renderTownSearch(ctx, w, h);
-            TownyMapMod.renderArchiveBanner(ctx, w);
+            TownyMapMod.captureMapScreenshotIfArmed();
         } catch (Exception e) {
             logOnce(RENDER_ERROR_LOGGED, "Failed to render Xaero world-map overlay", e);
         }
@@ -401,6 +421,14 @@ public abstract class MixinGuiMap {
     private void onKeyPressed(KeyEvent input,
                               CallbackInfoReturnable<Boolean> cir) {
         try {
+            // The clean-screenshot key is a normal rebindable keybind (Options -> Controls). Screens
+            // swallow key presses, so match it here too — but never while the search bar has focus.
+            if (!TownSearchOverlay.isFocused()
+                    && net.townymap.input.TownyMapKeybinds.isMapScreenshotKey(input)) {
+                TownyMapMod.armMapScreenshot();
+                cir.setReturnValue(true);
+                return;
+            }
             TownSearchOverlay.ClickResult result = TownyMapMod.onTownSearchKeyPressed(input.key());
             if (result.consumed()) {
                 jumpTo(result.target());
@@ -457,6 +485,28 @@ public abstract class MixinGuiMap {
         long handle = mc.getWindow().handle();
         return GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_LEFT_SHIFT) == GLFW.GLFW_PRESS
                 || GLFW.glfwGetKey(handle, GLFW.GLFW_KEY_RIGHT_SHIFT) == GLFW.GLFW_PRESS;
+    }
+
+
+    @org.spongepowered.asm.mixin.Unique
+    private void townymap$setSmallWidgetsVisible(boolean visible) {
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc == null || mc.getWindow() == null) return;
+            int sw = mc.getWindow().getGuiScaledWidth();
+            int sh = mc.getWindow().getGuiScaledHeight();
+            for (net.minecraft.client.gui.components.events.GuiEventListener e
+                    : ((net.minecraft.client.gui.screens.Screen) (Object) this).children()) {
+                if (!(e instanceof net.minecraft.client.gui.components.AbstractWidget w)) continue;
+                if (w.getWidth() > sw * TOWNYMAP_MAX_HIDEABLE_FRACTION
+                        || w.getHeight() > sh * TOWNYMAP_MAX_HIDEABLE_FRACTION) {
+                    continue;   // too big to be a button; leave it alone
+                }
+                w.visible = visible;
+            }
+        } catch (Exception ignored) {
+            // Best-effort: Xaero draws most of its map UI itself rather than as widgets.
+        }
     }
 
     private static void logOnce(AtomicBoolean flag, String message, Exception e) {

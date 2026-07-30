@@ -444,6 +444,155 @@ public class TownyMapMod implements ClientModInitializer {
     private static volatile Map<String, int[]> allianceByNation = Map.of();
     private static volatile Map<String, List<String>> megaNamesByNation = Map.of();     // nation → meganation labels
     private static volatile Map<String, List<String>> allianceNamesByNation = Map.of(); // nation → alliance labels
+    // Full records keyed by label (lower-case), so a bloc's own panel can list its roster. Previously only
+    // the colours and labels survived the load and the rest of each record was thrown away.
+    private static volatile Map<String, net.townymap.api.AllianceClient.Alliance> allianceByName = Map.of();
+
+    /** The towns the map is currently drawing — used to roll a bloc's totals up without any new requests. */
+    public static List<TownData> currentTowns() {
+        return apiClient == null ? List.of() : apiClient.getTowns();
+    }
+
+    /** The nation a town belongs to (from the squaremap tooltips), or null if it is nationless. */
+    public static String townNationOf(String townKey) {
+        return apiClient == null ? null : apiClient.getTownNation(townKey);
+    }
+
+    // ── Clean map screenshot ─────────────────────────────────────────────────
+    // A plain F2 grabs the map with all of our chrome on top — buttons, search bar, panels — which is not
+    // what anyone wants to paste into Discord. Arming this hides our own UI for one frame and captures the
+    // map on its own; the countdown gives the frame time to render before the framebuffer is read.
+    private static volatile int cleanShotFrames = 0;
+    private static volatile boolean cleanShotReady = false;
+    private static volatile long cleanShotArmedAtMs = 0L;
+    /** A shot that hasn't completed in this long is abandoned — see armMapScreenshot. */
+    private static final long CLEAN_SHOT_TIMEOUT_MS = 2_000L;
+
+    /**
+     * Arms a clean map screenshot: our overlays are hidden for the next frames, then the map is captured.
+     *
+     * <p>The countdown only advances while the world map is drawing, so arming with the map closed would
+     * otherwise leave the "hide everything" flag set forever — which is exactly what happened when the
+     * default key (P) was pressed in-game. The timestamp lets the state expire on its own instead.
+     */
+    public static void armMapScreenshot() {
+        cleanShotReady = false;
+        cleanShotFrames = 3;
+        cleanShotArmedAtMs = System.currentTimeMillis();
+    }
+
+    /** True when Xaero's world map is the active screen. */
+    public static boolean isWorldMapOpen() {
+        Minecraft client = Minecraft.getInstance();
+        return client != null && client.gui.screen() != null
+                && client.gui.screen().getClass().getName().startsWith("xaero.map.gui.GuiMap");
+    }
+
+    /** True once an armed shot has outlived its window, so the hidden state can never stick. */
+    private static boolean cleanShotExpired() {
+        if (cleanShotFrames <= 0 && !cleanShotReady) return false;
+        if (System.currentTimeMillis() - cleanShotArmedAtMs <= CLEAN_SHOT_TIMEOUT_MS) return false;
+        cleanShotFrames = 0;
+        cleanShotReady = false;
+        return true;
+    }
+
+    /**
+     * True while a clean shot is pending, so the map's own chrome is skipped this frame.
+     *
+     * <p>Includes the window between the last armed frame and the capture itself: ticks run at 20/s and
+     * frames much faster, so restoring the chrome the moment the countdown ended meant the frame actually
+     * captured had the buttons back on it.
+     */
+    public static boolean hideChromeForScreenshot() {
+        if (cleanShotExpired()) return false;
+        return cleanShotFrames > 0 || cleanShotReady;
+    }
+
+    /** True while the frame being drawn is one that will be captured. */
+    public static boolean composingScreenshot() {
+        if (cleanShotExpired()) return false;
+        return cleanShotFrames > 0 || cleanShotReady;
+    }
+
+    /** Whether player dots belong in the screenshot being composed. */
+    public static boolean screenshotWantsPlayers() {
+        return config == null || config.screenshotPlayers;
+    }
+
+    /** Whether nation stars belong in the screenshot being composed. */
+    public static boolean screenshotWantsNationStars() {
+        return config == null || config.screenshotNationStars;
+    }
+
+    /** Whether dimmed (blacked-out) towns should be dropped from the screenshot rather than shot black. */
+    public static boolean screenshotHidesDimmedTowns() {
+        return config != null && config.screenshotHideDimmedTowns;
+    }
+
+    /** Called at the end of the map's own draw: counts down, then marks the frame ready to be captured. */
+    public static void captureMapScreenshotIfArmed() {
+        if (cleanShotFrames <= 0) return;
+        if (--cleanShotFrames > 0) return;
+        cleanShotReady = true;   // this frame drew the map without our chrome; grab it between frames
+    }
+
+    /**
+     * Takes the pending capture, from a client tick rather than mid-render.
+     *
+     * <p>This build of Minecraft records GUI draws into a render state and only submits them at the end of
+     * the frame, so reading the framebuffer during rendering caught Xaero's map but none of our own layers —
+     * the squaremap overlay, town borders and player dots were all still queued. Between frames the
+     * framebuffer holds the finished picture, which is what we want anyway.
+     */
+    public static void captureMapScreenshotIfReady() {
+        if (!cleanShotReady) return;
+        cleanShotReady = false;
+        Minecraft client = Minecraft.getInstance();
+        if (client == null) return;
+        try {
+            // 26.2 exposes neither the main render target nor the chat component, so use the convenience
+            // grab that does the whole job. The filename is Minecraft's default rather than ours.
+            net.minecraft.client.Screenshot.grab(client, true);
+        } catch (Exception e) {
+            LOGGER.warn("[TownyMap] Map screenshot failed: {}", e.toString());
+        }
+    }
+
+    /**
+     * Where a player is right now, for jumping to them. Live position first; if they aren't on the feed —
+     * offline, or hidden from the public map — their last-seen ghost, which is the last place we saw them.
+     */
+    public static net.townymap.model.MapJumpTarget playerJumpTarget(String name) {
+        if (name == null || name.isBlank() || apiClient == null) return null;
+        for (PlayerMarker m : apiClient.getPlayers()) {
+            if (m.name() != null && m.name().equalsIgnoreCase(name)) {
+                return new net.townymap.model.MapJumpTarget(m.name(), m.x(), m.z());
+            }
+        }
+        for (GhostMarker g : lastSeenGhosts()) {
+            if (g.name() != null && g.name().equalsIgnoreCase(name)) {
+                return new net.townymap.model.MapJumpTarget(g.name(), (int) g.x(), (int) g.z());
+            }
+        }
+        return null;
+    }
+
+    /** Resident count for a town, parsed from its squaremap popup; -1 if unknown. */
+    public static int townResidentsOf(String townKey) {
+        return apiClient == null ? -1 : apiClient.getTownResidents(townKey);
+    }
+
+    /** Cached nation record, or null if it hasn't been fetched yet. Honours archive mode. */
+    public static EarthMcNationData nationDetails(String nation) {
+        if (nation == null || nation.isBlank()) return null;
+        return activeNationDetails().get(nation.toLowerCase(Locale.ROOT));
+    }
+
+    /** The full record for an alliance/meganation by name, or null if the roster hasn't loaded it. */
+    public static net.townymap.api.AllianceClient.Alliance allianceByName(String name) {
+        return name == null ? null : allianceByName.get(name.toLowerCase(Locale.ROOT));
+    }
 
     /** Bumps whenever the alliance colour maps change, so the renderer knows to re-bake. */
     public static int allianceDataVersion() { return allianceDataVersion; }
@@ -522,6 +671,12 @@ public class TownyMapMod implements ClientModInitializer {
                         if (!names.contains(label)) names.add(label);   // but list every bloc it's part of
                     }
                 }
+                Map<String, net.townymap.api.AllianceClient.Alliance> byName = new java.util.HashMap<>();
+                for (net.townymap.api.AllianceClient.Alliance a : list) {
+                    String label = a.label() == null || a.label().isBlank() ? a.identifier() : a.label();
+                    byName.putIfAbsent(label.toLowerCase(Locale.ROOT), a);
+                }
+                allianceByName = Map.copyOf(byName);
                 megaByNation = Map.copyOf(mega);
                 allianceByNation = Map.copyOf(alli);
                 megaNamesByNation = freezeLists(megaNames);
@@ -726,6 +881,12 @@ public class TownyMapMod implements ClientModInitializer {
     public static void dismissOnMapClick() {
         armedMapDismiss = false;
         dismissTownInfo();
+        // A filter is a view of the map, not a transient lookup: clicking away should let you pan and zoom
+        // around the highlighted towns. Only the bar's focus is dropped, so the dimming survives.
+        if (net.townymap.gui.TownSearchOverlay.isFilterActive()) {
+            net.townymap.gui.TownSearchOverlay.unfocusKeepingFilter();
+            return;
+        }
         TownSearchOverlay.reset();
     }
 
@@ -775,6 +936,7 @@ public class TownyMapMod implements ClientModInitializer {
             }
         }
         if (!config.playersEnabled) return;   // this branch gates the player layer here, not inside it
+        if (composingScreenshot() && !screenshotWantsPlayers()) return;   // a map picture, not a who's-online
         renderer.renderPlayersLayer(ctx, cameraX, cameraZ, scale, screenW, screenH, playerDetailsCache);
     }
 
@@ -811,6 +973,8 @@ public class TownyMapMod implements ClientModInitializer {
                                                   double scale, int screenW, int screenH,
                                                   double worldX, double worldZ) {
         if (!isActiveOnCurrentServer()) return;
+        // The hover highlight tracks the mouse — it's a cursor, not map content, so it stays out of shots.
+        if (composingScreenshot()) return;
         if (renderer != null) {
             renderer.renderHoveredChunk(ctx, cameraX, cameraZ, scale, screenW, screenH, worldX, worldZ);
         }
@@ -1606,11 +1770,22 @@ public class TownyMapMod implements ClientModInitializer {
             if (kind == net.townymap.gui.DetailScreen.Kind.NATION) { openArchiveNationDetail(name, parent); return; }
             if (kind == net.townymap.gui.DetailScreen.Kind.PLAYER) { openArchivePlayerDetail(name, parent); return; }
         }
-        if (earthMcApi == null) return;
         Minecraft client = Minecraft.getInstance();
         if (client == null) return;
         net.minecraft.client.gui.screens.Screen from =
                 parent != null ? parent : client.gui.screen();
+
+        // Alliances are already in memory (the roster the map colours towns from), so open the panel
+        // directly rather than routing through a fetch that would have nothing to fetch.
+        if (kind == net.townymap.gui.DetailScreen.Kind.ALLIANCE) {
+            net.townymap.api.AllianceClient.Alliance a = allianceByName(name);
+            net.townymap.gui.DetailScreen screen = new net.townymap.gui.DetailScreen(from, name);
+            client.gui.setScreen(screen);
+            if (a == null) screen.markFailed();
+            else screen.setPage(net.townymap.gui.DetailPages.alliance(a));
+            return;
+        }
+        if (earthMcApi == null) return;
 
         java.util.concurrent.CompletableFuture<net.townymap.gui.DetailScreen.Page> future = switch (kind) {
             case TOWN -> earthMcApi.fetchTownFull(name)
@@ -1619,6 +1794,7 @@ public class TownyMapMod implements ClientModInitializer {
                     .thenApply(d -> d == null ? null : net.townymap.gui.DetailPages.player(d));
             case NATION -> earthMcApi.fetchNationFull(name)
                     .thenApply(d -> d == null ? null : net.townymap.gui.DetailPages.nation(d));
+            case ALLIANCE -> throw new IllegalStateException("handled above, from cache");
         };
 
         // Show the panel immediately in a loading state. Waiting for the fetch before opening anything made
@@ -2565,6 +2741,45 @@ public class TownyMapMod implements ClientModInitializer {
     public static boolean isFavorite(String townName) {
         if (config == null || townName == null) return false;
         return favoriteTownKeys().contains(townKey(townName));
+    }
+
+    /** Starred nations/players, kept alongside favourite towns and toggled the same way. */
+    public static boolean isFavoriteEntity(String type, String name) {
+        if (config == null || name == null || name.isBlank()) return false;
+        List<String> list = favoriteListFor(type);
+        if (list == null) return false;
+        for (String s : list) if (s.equalsIgnoreCase(name)) return true;
+        return false;
+    }
+
+    public static void toggleFavoriteEntity(String type, String name) {
+        if (config == null || name == null || name.isBlank()) return;
+        if ("town".equals(type)) { toggleFavorite(name); return; }
+        List<String> list = favoriteListFor(type);
+        if (list == null) return;
+        boolean removed = list.removeIf(s -> s.equalsIgnoreCase(name));
+        if (!removed) list.add(name);
+        config.save();
+    }
+
+    private static List<String> favoriteListFor(String type) {
+        if (config == null) return null;
+        return switch (type == null ? "" : type) {
+            case "town" -> config.favoriteTowns;
+            case "nation" -> config.favoriteNations;
+            case "player" -> config.favoritePlayers;
+            default -> null;
+        };
+    }
+
+    /** Starred nations, for the favourites dropdown. */
+    public static List<String> favoriteNations() {
+        return config == null ? List.of() : List.copyOf(config.favoriteNations);
+    }
+
+    /** Starred players, for the favourites dropdown. */
+    public static List<String> favoritePlayers() {
+        return config == null ? List.of() : List.copyOf(config.favoritePlayers);
     }
 
     private static void toggleFavorite(String townName) {

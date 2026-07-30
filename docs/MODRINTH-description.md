@@ -23,6 +23,3 @@ A client-side EarthMC map extension for **Xaero's World Map** and **Xaero's Mini
 - Xaero's Minimap and/or Xaero's World Map
 - Mod Menu (optional, for the in-game settings screen)
 
-## Note on town claim limits
-
-The town **"X / max claims"** display and the **Overclaim** map mode are temporarily disabled. EarthMC's API currently counts inactive residents toward a town's claim limit, so the calculated maximum is wrong. They will return once the API exposes active-resident counts (expected in ~2 weeks). The popup shows the actual claimed chunk count in the meantime.

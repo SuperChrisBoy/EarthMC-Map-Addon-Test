@@ -25,7 +25,7 @@ import java.util.Set;
  */
 public class DetailScreen extends Screen {
 
-    public enum Kind { TOWN, NATION, PLAYER }
+    public enum Kind { TOWN, NATION, PLAYER, ALLIANCE }
 
     /** A clickable entity reference. */
     public record Ref(Kind kind, String name) {}

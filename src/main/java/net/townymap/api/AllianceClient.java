@@ -41,7 +41,8 @@ public final class AllianceClient {
      * colour, used for both).
      */
     public record Alliance(String identifier, String label, boolean mega,
-                           Set<String> nationsLower, int outlineRgb, int fillRgb) {}
+                           Set<String> nationsLower, List<String> nations,
+                           int outlineRgb, int fillRgb) {}
 
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(15))
@@ -107,15 +108,18 @@ public final class AllianceClient {
         boolean mega = str(a, "type").toUpperCase(Locale.ROOT).contains("MEGA");   // "MEGANATION" vs "ALLIANCE"
 
         Set<String> nations = new HashSet<>();
+        List<String> display = new ArrayList<>();   // original casing, for the alliance panel's roster
         JsonElement nEl = a.get("nations");
         if (nEl != null && nEl.isJsonArray()) {
             for (JsonElement el : nEl.getAsJsonArray()) {
                 if (!el.isJsonObject()) continue;
                 String nn = str(el.getAsJsonObject(), "name");
-                if (!nn.isBlank()) nations.add(nn.toLowerCase(Locale.ROOT));
+                if (nn.isBlank()) continue;
+                if (nations.add(nn.toLowerCase(Locale.ROOT))) display.add(nn);
             }
         }
         if (nations.isEmpty()) return null;
+        display.sort(String.CASE_INSENSITIVE_ORDER);
 
         // Fall back to a per-name colour when unset: near-black placeholders (e.g. #000001) would blend into
         // the blacked-out non-member towns, and a shared default would make different alliances look alike.
@@ -128,7 +132,7 @@ public final class AllianceClient {
                 if (brightness >= 24) rgb = c;
             } catch (Exception ignored) { /* keep the name-derived colour */ }
         }
-        return new Alliance(identifier, label, mega, nations, rgb, rgb);
+        return new Alliance(identifier, label, mega, nations, List.copyOf(display), rgb, rgb);
     }
 
     /** A stable, distinct, bright colour derived from an alliance's name — used when it has no colour set. */

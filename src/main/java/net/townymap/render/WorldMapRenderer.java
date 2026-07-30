@@ -208,6 +208,10 @@ public class WorldMapRenderer {
     private List<TownData> recoloredBase;
     private int recoloredMode = -1;
     private int recoloredVersion = -1;
+    // Same memo pattern for the search-filter dim, keyed on the filter's own version.
+    private List<TownData> filtered;
+    private List<TownData> filteredBase;
+    private int filteredVersion = -1;
 
 
     public WorldMapRenderer(TownyMapConfig config, SquaremapApiClient api) {
@@ -1470,11 +1474,37 @@ public class WorldMapRenderer {
         // LIVE feed, which doesn't know the archived towns, so applying it here would black the whole snapshot
         // out (and make leaving archive look like nothing changed). Always show the snapshot as-is.
         if (TownyMapMod.isArchiveMode()) return base;
+
+        // A property filter in the search bar dims the map the same way an alliance layer does: matches keep
+        // their colour, everything else goes black, so the result set reads at a glance instead of being a
+        // list you have to cross-reference. Takes precedence — you filtered, that's what you want to see.
+        if (net.townymap.gui.TownSearchOverlay.isFilterActive()) {
+            java.util.Set<String> keep = net.townymap.gui.TownSearchOverlay.filterMatches();
+            int fVersion = net.townymap.gui.TownSearchOverlay.filterVersion();
+            boolean dropDimmed = TownyMapMod.composingScreenshot() && TownyMapMod.screenshotHidesDimmedTowns();
+            if (!dropDimmed && base == filteredBase && fVersion == filteredVersion && filtered != null) {
+                return filtered;
+            }
+            ArrayList<TownData> out = new ArrayList<>(base.size());
+            for (TownData t : base) {
+                if (keep.contains(t.key())) out.add(t);
+                else if (!dropDimmed) out.add(t.withColors(0x000000, 0x000000));
+            }
+            if (dropDimmed) return List.copyOf(out);   // one-off for the capture; don't poison the cache
+            filteredBase = base;
+            filteredVersion = fVersion;
+            filtered = List.copyOf(out);
+            return filtered;
+        }
+
         int mode = config == null ? 0 : config.townStatusOverlayMode;
         if (mode != 4 && mode != 5) return base;   // not an alliance layer → identity preserved (no rebuild)
         int version = TownyMapMod.allianceDataVersion();
         if (version == 0) return base;             // alliance data not loaded yet → keep normal colours
-        if (base == recoloredBase && mode == recoloredMode && version == recoloredVersion && recolored != null) {
+        boolean dropDimmedAlliance =
+                TownyMapMod.composingScreenshot() && TownyMapMod.screenshotHidesDimmedTowns();
+        if (!dropDimmedAlliance && base == recoloredBase && mode == recoloredMode
+                && version == recoloredVersion && recolored != null) {
             return recolored;
         }
         boolean mega = (mode == 4);
@@ -1483,8 +1513,10 @@ public class WorldMapRenderer {
             int[] c = TownyMapMod.allianceColorsForNation(TownyMapMod.bareTownNation(t.name()), mega);
             // In an alliance layer, towns that belong to one show its colour; every other town (nationless,
             // or in a nation that isn't in this layer) is blacked out so the alliances stand alone.
-            out.add(c != null ? t.withColors(c[0], c[1]) : t.withColors(0x000000, 0x000000));
+            if (c != null) out.add(t.withColors(c[0], c[1]));
+            else if (!dropDimmedAlliance) out.add(t.withColors(0x000000, 0x000000));
         }
+        if (dropDimmedAlliance) return List.copyOf(out);   // one-off for the capture
         recoloredBase = base;
         recoloredMode = mode;
         recoloredVersion = version;
@@ -1825,6 +1857,10 @@ public class WorldMapRenderer {
                                           double worldLeft, double worldRight,
                                           double worldTop, double worldBottom,
                                           Map<String, EarthMcNationData> nationDetails) {
+        if (TownyMapMod.composingScreenshot() && !TownyMapMod.screenshotWantsNationStars()) {
+            nationStarHits = List.of();
+            return;
+        }
         if (!config.townsEnabled || !config.nationStarsEnabled || nationDetails.isEmpty()) {
             nationStarHits = List.of();
             return;

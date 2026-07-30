@@ -420,17 +420,17 @@ public class EarthMcApiClient {
         double balance   = 0;
         if (t.has("stats") && t.get("stats").isJsonObject()) {
             JsonObject stats = t.getAsJsonObject("stats");
-            if (stats.has("numTownBlocks")) chunks    = stats.get("numTownBlocks").getAsInt();
-            if (stats.has("numResidents"))  residents = stats.get("numResidents").getAsInt();
-            if (stats.has("maxTownBlocks")) maxChunks = stats.get("maxTownBlocks").getAsInt();
-            if (stats.has("balance"))       balance   = stats.get("balance").getAsDouble();
+            chunks = intOf(stats, "numTownBlocks", chunks);
+            residents = intOf(stats, "numResidents", residents);
+            maxChunks = intOf(stats, "maxTownBlocks", maxChunks);
+            balance = dblOf(stats, "balance", balance);
         }
 
         String founded = "";
         if (t.has("timestamps") && t.get("timestamps").isJsonObject()) {
             JsonObject ts = t.getAsJsonObject("timestamps");
-            if (ts.has("registered")) {
-                long ms = ts.get("registered").getAsLong();
+            long ms = ts(ts, "registered");
+            if (ms > 0) {
                 founded = Instant.ofEpochMilli(ms)
                         .atZone(ZoneId.systemDefault())
                         .toLocalDate()
@@ -508,7 +508,7 @@ public class EarthMcApiClient {
         int authBonus = -1;
         if (obj.has("stats") && obj.get("stats").isJsonObject()) {
             JsonObject st = obj.getAsJsonObject("stats");
-            if (st.has("nationBonus")) authBonus = st.get("nationBonus").getAsInt();
+            authBonus = intOf(st, "nationBonus", authBonus);
         }
         NationBonusProjection proj = computeProjectionFrom(authBonus, active, dates, now);
         return new NationResidentStats(active, proj);
@@ -872,8 +872,8 @@ public class EarthMcApiClient {
         int friends = 0;
         if (p.has("stats") && p.get("stats").isJsonObject()) {
             JsonObject stats = p.getAsJsonObject("stats");
-            if (stats.has("balance")) balance = stats.get("balance").getAsDouble();
-            if (stats.has("numFriends")) friends = stats.get("numFriends").getAsInt();
+            balance = dblOf(stats, "balance", balance);
+            friends = intOf(stats, "numFriends", friends);
         }
 
         String lastOnline = "";
@@ -915,8 +915,8 @@ public class EarthMcApiClient {
         String founded = "";
         if (n.has("timestamps") && n.get("timestamps").isJsonObject()) {
             JsonObject ts = n.getAsJsonObject("timestamps");
-            if (ts.has("registered")) {
-                long ms = ts.get("registered").getAsLong();
+            long ms = ts(ts, "registered");
+            if (ms > 0) {
                 founded = Instant.ofEpochMilli(ms)
                         .atZone(ZoneId.systemDefault())
                         .toLocalDate()
@@ -934,14 +934,14 @@ public class EarthMcApiClient {
         double balance = 0;
         if (n.has("stats") && n.get("stats").isJsonObject()) {
             JsonObject stats = n.getAsJsonObject("stats");
-            if (stats.has("numTowns")) towns = stats.get("numTowns").getAsInt();
-            if (stats.has("numResidents")) residents = stats.get("numResidents").getAsInt();
-            if (stats.has("numTownBlocks")) chunks = stats.get("numTownBlocks").getAsInt();
-            if (stats.has("nationBonus")) nationBonusVal = stats.get("nationBonus").getAsInt();
-            if (stats.has("numOutlaws")) outlaws = stats.get("numOutlaws").getAsInt();
-            if (stats.has("numAllies")) allies = stats.get("numAllies").getAsInt();
-            if (stats.has("numEnemies")) enemies = stats.get("numEnemies").getAsInt();
-            if (stats.has("balance")) balance = stats.get("balance").getAsDouble();
+            towns = intOf(stats, "numTowns", towns);
+            residents = intOf(stats, "numResidents", residents);
+            chunks = intOf(stats, "numTownBlocks", chunks);
+            outlaws = intOf(stats, "numOutlaws", outlaws);
+            allies = intOf(stats, "numAllies", allies);
+            enemies = intOf(stats, "numEnemies", enemies);
+            balance = dblOf(stats, "balance", balance);
+            nationBonusVal = intOf(stats, "nationBonus", nationBonusVal);
         }
 
         boolean isPublic = false;
