@@ -287,11 +287,27 @@ public class WorldMapRenderer {
         renderPlayers(ctx, cameraX, cameraZ, blockScale, sw, sh, playerDetails);
     }
 
-    public void renderSquaremapBackground(DrawContext ctx,
-                                          double cameraX, double cameraZ, double blockScale,
-                                          int sw, int sh, boolean moving) {
-        if (!config.squaremapBackgroundEnabled || blockScale <= 0) return;
+    /**
+     * The opaque backdrop the squaremap tiles sit on. Split out from the tile pass because the world wraps:
+     * the tiles are drawn once per visible copy of the world, and a full-screen fill inside that loop would
+     * paint over the previous copy (and over Xaero's terrain beneath it).
+     */
+    public void renderSquaremapBackdrop(DrawContext ctx, int sw, int sh) {
+        if (!config.squaremapBackgroundEnabled) return;
         ctx.fill(0, 0, sw, sh, 0xFF101418);
+    }
+
+    /** Dim pass, drawn once after every tile copy so the towns above it read clearly. */
+    public void renderSquaremapDarken(DrawContext ctx, int sw, int sh) {
+        if (!config.squaremapBackgroundEnabled) return;
+        int darkAlpha = Math.min(0xFF, 0x38 + config.squaremapDarken * 0x2A);
+        ctx.fill(0, 0, sw, sh, darkAlpha << 24);
+    }
+
+    public void renderSquaremapTiles(DrawContext ctx,
+                                     double cameraX, double cameraZ, double blockScale,
+                                     int sw, int sh, boolean moving) {
+        if (!config.squaremapBackgroundEnabled || blockScale <= 0) return;
 
         double worldLeft   = cameraX - sw / 2.0 / blockScale;
         double worldRight  = cameraX + sw / 2.0 / blockScale;
@@ -300,10 +316,6 @@ public class WorldMapRenderer {
 
         squaremapTiles.render(ctx, cameraX, cameraZ, blockScale, sw, sh,
                 worldLeft, worldRight, worldTop, worldBottom, moving);
-        // Baseline dim (0x38) plus the optional user "Darken Map" level (0-3), so the squaremap can be
-        // pushed darker to make the town overlay stand out.
-        int darkAlpha = Math.min(0xFF, 0x38 + config.squaremapDarken * 0x2A);
-        ctx.fill(0, 0, sw, sh, darkAlpha << 24);
     }
 
     public void renderSquaremapViewport(DrawContext ctx,

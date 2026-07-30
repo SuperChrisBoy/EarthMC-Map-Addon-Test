@@ -111,13 +111,24 @@ public abstract class MixinGuiMap {
             double camX = cameraX * dimMul;
             double camZ = cameraZ * dimMul;
             double mapScale = guiScale / dimMul;
-            TownyMapMod.renderSquaremapBackground(ctx, camX, camZ, mapScale, w, h);
-            TownyMapMod.renderOnWorldMap(ctx, camX, camZ, mapScale, w, h);
+            // The world wraps at the antimeridian, so our layers are drawn once per visible copy of it.
+            // The full-screen backdrop and the dim pass stay OUTSIDE that loop: drawn per copy they would
+            // paint over the previous copy, and over Xaero's terrain underneath.
+            double[] wrapCams = TownyMapMod.wrapCameras(camX, w, mapScale);
+            TownyMapMod.renderSquaremapBackdrop(ctx, w, h);
+            for (double wrapCam : wrapCams) {
+                TownyMapMod.renderSquaremapTiles(ctx, wrapCam, camZ, mapScale, w, h);
+            }
+            TownyMapMod.renderSquaremapDarken(ctx, w, h);
+            for (double wrapCam : wrapCams) {
+                TownyMapMod.renderOnWorldMap(ctx, wrapCam, camZ, mapScale, w, h);
+            }
             if (mapScale > 0) {
-                double worldX = (mouseX - w / 2.0) / mapScale + camX;
+                double worldX = TownyMapMod.wrapWorldX((mouseX - w / 2.0) / mapScale + camX);
                 double worldZ = (mouseY - h / 2.0) / mapScale + camZ;
-                TownyMapMod.renderHoveredWorldMapChunk(ctx, camX, camZ, mapScale, w, h, worldX, worldZ);
-                TownyMapMod.renderChunkCounter(ctx, camX, camZ, mapScale, w, h, worldX, worldZ);
+                double hoverCam = TownyMapMod.wrapWorldX(camX);
+                TownyMapMod.renderHoveredWorldMapChunk(ctx, hoverCam, camZ, mapScale, w, h, worldX, worldZ);
+                TownyMapMod.renderChunkCounter(ctx, hoverCam, camZ, mapScale, w, h, worldX, worldZ);
             }
             ctx.drawDeferredElements();
             clearDepthForXaeroArrowIfAvailable();
@@ -145,7 +156,9 @@ public abstract class MixinGuiMap {
             if (dimMul > 0.0) {
                 double guiScale = (screenScale > 0) ? scale / screenScale : scale;
                 double mapScale = guiScale / dimMul;
-                TownyMapMod.renderWorldMapLatePass(ctx, cameraX * dimMul, cameraZ * dimMul, mapScale, w, h);
+                for (double wrapCam : TownyMapMod.wrapCameras(cameraX * dimMul, w, mapScale)) {
+                    TownyMapMod.renderWorldMapLatePass(ctx, wrapCam, cameraZ * dimMul, mapScale, w, h);
+                }
             }
             // A clean map screenshot skips our own chrome for the frame, so the capture is just the map.
             if (!TownyMapMod.hideChromeForScreenshot()) {
@@ -263,7 +276,8 @@ public abstract class MixinGuiMap {
         if (guiScale <= 0) return null;
         double mapScale = guiScale / dimMul;
         return new double[] {
-                (screenX - sw / 2.0) / mapScale + cameraX * dimMul,
+                // Fold back onto the real world, so clicking in a wrapped copy hits the actual town.
+                TownyMapMod.wrapWorldX((screenX - sw / 2.0) / mapScale + cameraX * dimMul),
                 (screenY - sh / 2.0) / mapScale + cameraZ * dimMul
         };
     }
@@ -320,7 +334,8 @@ public abstract class MixinGuiMap {
                 double guiScale = (screenScale > 0) ? scale / screenScale : scale;
                 if (dimMul > 0.0 && guiScale > 0.0
                         && TownyMapMod.onPlanningMapClick(click.x(), click.y(),
-                                cameraX * dimMul, cameraZ * dimMul, guiScale / dimMul, sw, sh)) {
+                                TownyMapMod.wrapWorldX(cameraX * dimMul), cameraZ * dimMul,
+                                guiScale / dimMul, sw, sh)) {
                     cir.setReturnValue(true);
                     return;
                 }
@@ -345,7 +360,8 @@ public abstract class MixinGuiMap {
                 double guiScale = (screenScale > 0) ? scale / screenScale : scale;
                 if (dimMul > 0.0 && guiScale > 0.0
                         && TownyMapMod.onMapPlayerClick(click.x(), click.y(),
-                                cameraX * dimMul, cameraZ * dimMul, guiScale / dimMul, sw, sh)) {
+                                TownyMapMod.wrapWorldX(cameraX * dimMul), cameraZ * dimMul,
+                                guiScale / dimMul, sw, sh)) {
                     cir.setReturnValue(true);
                     return;
                 }
