@@ -986,6 +986,8 @@ public class TownyMapMod implements ClientModInitializer {
                                                   double scale, int screenW, int screenH,
                                                   double worldX, double worldZ) {
         if (!isActiveOnCurrentServer()) return;
+        // The hover highlight tracks the mouse — it's a cursor, not map content, so it stays out of shots.
+        if (composingScreenshot()) return;
         if (renderer != null) {
             renderer.renderHoveredChunk(ctx, cameraX, cameraZ, scale, screenW, screenH, worldX, worldZ);
         }

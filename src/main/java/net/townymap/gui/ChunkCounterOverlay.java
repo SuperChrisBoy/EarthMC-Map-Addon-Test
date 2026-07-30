@@ -427,7 +427,8 @@ public final class ChunkCounterOverlay {
                 }
             }
             drawShapeSizeLabel(ctx, x0, z0, x1, z1, cameraX, cameraZ, blockScale, sw, sh);
-        } else if (preview) {
+        } else if (preview && !TownyMapMod.composingScreenshot()) {
+            // Selected chunks belong in a screenshot; the chunk under the cursor does not.
             drawChunk(ctx, floorToChunk(mouseWorldX), floorToChunk(mouseWorldZ),
                     cameraX, cameraZ, blockScale, sw, sh, PREVIEW_FILL, PREVIEW_BORDER, true);
             // Box select isn't guessable, so say so — but only until the first chunks are picked, and never
