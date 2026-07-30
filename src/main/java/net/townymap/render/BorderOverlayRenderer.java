@@ -34,6 +34,8 @@ final class BorderOverlayRenderer {
     /** Snapshot covers a bit more than the screen, so ordinary panning doesn't force a rebuild. */
     private static final double SNAPSHOT_MARGIN = 1.35;
     private static final int MAX_SNAPSHOT_PX = 4096;
+    /** Cap on supersampling; past 2x the extra pixels are not visible but the memory is real. */
+    private static final double MAX_SNAPSHOT_DENSITY = 2.0;
     /** One reusable worker: panning can retrigger rebuilds, and a thread per rebuild would churn. */
     private static final java.util.concurrent.ExecutorService SNAPSHOT_WORKER =
             java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
@@ -203,11 +205,12 @@ final class BorderOverlayRenderer {
 
         // Position by world anchor so a stale snapshot still lines up while its replacement renders. If the
         // zoom changed since it was taken, scale it — briefly soft, but never a gap and never a stall.
-        double scaleRatio = blockScale / snap.blockScale();
         double x = (snap.worldX() - cameraX) * blockScale + sw / 2.0;
         double y = (snap.worldZ() - cameraZ) * blockScale + sh / 2.0;
-        int drawW = (int) Math.round(snap.width() * scaleRatio);
-        int drawH = (int) Math.round(snap.height() * scaleRatio);
+        // Draw at the world footprint's current on-screen size: the texture holds more pixels than that
+        // (density supersampling), so it downsamples rather than stretches.
+        int drawW = (int) Math.round(snap.worldW() * blockScale);
+        int drawH = (int) Math.round(snap.worldH() * blockScale);
         ctx.drawTexture(SNAPSHOT_PIPELINE, snap.texture(),
                 (int) Math.round(x), (int) Math.round(y), 0.0F, 0.0F,
                 drawW, drawH, snap.width(), snap.height(), snap.width(), snap.height());
@@ -216,14 +219,33 @@ final class BorderOverlayRenderer {
     private void requestSnapshot(double cameraX, double cameraZ, double blockScale,
                                  int sw, int sh, int mode, float thickness,
                                  float countryW, float stateW) {
-        // Never smaller than the screen: a snapshot that can't cover the viewport would fail covers() every
-        // frame and rebuild forever. The margin is what's optional, not the coverage.
-        int width = Math.max(sw, Math.min(MAX_SNAPSHOT_PX, (int) Math.ceil(sw * SNAPSHOT_MARGIN)));
-        int height = Math.max(sh, Math.min(MAX_SNAPSHOT_PX, (int) Math.ceil(sh * SNAPSHOT_MARGIN)));
-        double worldW = width / blockScale;
-        double worldH = height / blockScale;
+        // Rasterise at the framebuffer's real pixel density, not in GUI pixels. At GUI scale 2 a GUI-sized
+        // texture is magnified 2x on screen, which is exactly the softness the old atlas had; the vector path
+        // avoided it because the GPU rasterises quads at physical resolution. Trade margin away before
+        // density, so the picture stays sharp even when the texture cap bites.
+        double density = renderDensity();
+        double margin = SNAPSHOT_MARGIN;
+        while (margin > 1.0
+                && (sw * margin * density > MAX_SNAPSHOT_PX || sh * margin * density > MAX_SNAPSHOT_PX)) {
+            margin = Math.max(1.0, margin - 0.05);
+        }
+        while (density > 1.0
+                && (sw * margin * density > MAX_SNAPSHOT_PX || sh * margin * density > MAX_SNAPSHOT_PX)) {
+            density = Math.max(1.0, density - 0.25);
+        }
+        // GUI-space footprint (what it covers on screen) and the pixel buffer backing it.
+        double guiW = Math.max(sw, sw * margin);
+        double guiH = Math.max(sh, sh * margin);
+        int width = Math.max(1, Math.min(MAX_SNAPSHOT_PX, (int) Math.ceil(guiW * density)));
+        int height = Math.max(1, Math.min(MAX_SNAPSHOT_PX, (int) Math.ceil(guiH * density)));
+        double worldW = guiW / blockScale;
+        double worldH = guiH / blockScale;
         double originX = cameraX - worldW / 2.0;
         double originZ = cameraZ - worldH / 2.0;
+        // One world block spans this many texture pixels; strokes scale to match so weight is unchanged.
+        double pixelsPerBlock = blockScale * density;
+        float countryStroke = (float) (countryW * density);
+        float stateStroke = (float) (stateW * density);
 
         snapshotBuilding = true;
         List<BorderLine> countries = countryLines;
@@ -238,11 +260,12 @@ final class BorderOverlayRenderer {
                 g.setRenderingHint(java.awt.RenderingHints.KEY_STROKE_CONTROL,
                         java.awt.RenderingHints.VALUE_STROKE_PURE);
                 if (!states.isEmpty()) {
-                    rasterise(g, states, originX, originZ, blockScale, stateW, new java.awt.Color(255, 255, 255, 235));
+                    rasterise(g, states, originX, originZ, pixelsPerBlock, stateStroke,
+                            new java.awt.Color(255, 255, 255, 235));
                 }
-                rasterise(g, countries, originX, originZ, blockScale, countryW, java.awt.Color.WHITE);
+                rasterise(g, countries, originX, originZ, pixelsPerBlock, countryStroke, java.awt.Color.WHITE);
                 g.dispose();
-                pending = new PendingSnapshot(img, width, height, originX, originZ,
+                pending = new PendingSnapshot(img, width, height, worldW, worldH, originX, originZ,
                         blockScale, mode, thickness, sw, sh);
             } catch (Exception e) {
                 LOGGER.warn("[TownyMap] Border snapshot failed: {}", e.toString());
@@ -252,7 +275,7 @@ final class BorderOverlayRenderer {
     }
 
     private static void rasterise(java.awt.Graphics2D g, List<BorderLine> lines,
-                                  double originX, double originZ, double blockScale,
+                                  double originX, double originZ, double pixelsPerBlock,
                                   float width, java.awt.Color color) {
         g.setColor(color);
         g.setStroke(new java.awt.BasicStroke(width, java.awt.BasicStroke.CAP_ROUND,
@@ -261,13 +284,13 @@ final class BorderOverlayRenderer {
         for (BorderLine line : lines) {
             double[] xs = line.x();
             double[] zs = line.z();
-            double px = (xs[0] - originX) * blockScale;
-            double py = (zs[0] - originZ) * blockScale;
+            double px = (xs[0] - originX) * pixelsPerBlock;
+            double py = (zs[0] - originZ) * pixelsPerBlock;
             path.moveTo(px, py);
             boolean any = false;
             for (int i = 1; i < xs.length; i++) {
-                double cx = (xs[i] - originX) * blockScale;
-                double cy = (zs[i] - originZ) * blockScale;
+                double cx = (xs[i] - originX) * pixelsPerBlock;
+                double cy = (zs[i] - originZ) * pixelsPerBlock;
                 double dx = cx - px;
                 double dy = cy - py;
                 if (dx * dx + dy * dy < 1.0 && i < xs.length - 1) continue;   // sub-pixel: nothing to add
@@ -297,12 +320,12 @@ final class BorderOverlayRenderer {
             }
             net.minecraft.util.Identifier id = net.minecraft.util.Identifier.of(
                     "townymapaddon", "border-snapshot/" + (snapshotSerial++));
-            client.getTextureManager().registerTexture(id,
-                    new net.minecraft.client.texture.NativeImageBackedTexture(() -> "border snapshot", image));
+            client.getTextureManager().registerTexture(id, new SnapshotTexture(() -> "border snapshot", image));
 
             Snapshot old = snapshot;
-            snapshot = new Snapshot(id, p.width(), p.height(), p.worldX(), p.worldZ(),
-                    p.blockScale(), p.mode(), p.thickness(), p.screenW(), p.screenH());
+            snapshot = new Snapshot(id, p.width(), p.height(), p.worldW(), p.worldH(),
+                    p.worldX(), p.worldZ(), p.blockScale(), p.mode(), p.thickness(),
+                    p.screenW(), p.screenH());
             if (old != null) client.getTextureManager().destroyTexture(old.texture());
         } catch (Exception e) {
             LOGGER.warn("[TownyMap] Border snapshot upload failed: {}", e.toString());
@@ -312,11 +335,13 @@ final class BorderOverlayRenderer {
     }
 
     private record PendingSnapshot(java.awt.image.BufferedImage image, int width, int height,
+                                   double worldW, double worldH,
                                    double worldX, double worldZ, double blockScale,
                                    int mode, float thickness, int screenW, int screenH) {}
 
     /** A rasterised view of the borders, anchored at a world position so it can be blitted while stale. */
     private record Snapshot(net.minecraft.util.Identifier texture, int width, int height,
+                            double worldW, double worldH,
                             double worldX, double worldZ, double blockScale,
                             int mode, float thickness, int screenW, int screenH) {
         boolean matches(double scale, int m, float t, int sw, int sh) {
@@ -332,8 +357,7 @@ final class BorderOverlayRenderer {
             double right = camX + sw / 2.0 / scale;
             double bottom = camZ + sh / 2.0 / scale;
             return left >= worldX && top >= worldZ
-                    && right <= worldX + width / blockScale
-                    && bottom <= worldZ + height / blockScale;
+                    && right <= worldX + worldW && bottom <= worldZ + worldH;
         }
     }
 
@@ -448,6 +472,27 @@ final class BorderOverlayRenderer {
             shift += 7;
         }
         return (raw >>> 1) ^ -(raw & 1);   // undo zigzag
+    }
+
+    /** Smooth sampling, so the supersampled snapshot resolves cleanly instead of aliasing on downscale. */
+    private static final class SnapshotTexture extends net.minecraft.client.texture.NativeImageBackedTexture {
+        private SnapshotTexture(java.util.function.Supplier<String> name,
+                                net.minecraft.client.texture.NativeImage image) {
+            super(name, image);
+            this.sampler = com.mojang.blaze3d.systems.RenderSystem.getSamplerCache().get(
+                    com.mojang.blaze3d.textures.AddressMode.CLAMP_TO_EDGE,
+                    com.mojang.blaze3d.textures.AddressMode.CLAMP_TO_EDGE,
+                    com.mojang.blaze3d.textures.FilterMode.LINEAR,
+                    com.mojang.blaze3d.textures.FilterMode.LINEAR,
+                    false);
+        }
+    }
+
+    /** Physical pixels per GUI pixel to rasterise at — the window's scale factor, capped. */
+    private static double renderDensity() {
+        net.minecraft.client.MinecraftClient client = net.minecraft.client.MinecraftClient.getInstance();
+        if (client == null || client.getWindow() == null) return 1.0;
+        return Math.min(MAX_SNAPSHOT_DENSITY, Math.max(1.0, client.getWindow().getScaleFactor()));
     }
 
     private record BorderLine(double[] x, double[] z,
