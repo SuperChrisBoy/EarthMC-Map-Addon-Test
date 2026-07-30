@@ -113,18 +113,13 @@ public abstract class MixinGuiMap {
             double camX = cameraX * dimMul;
             double camZ = cameraZ * dimMul;
             double mapScale = guiScale / dimMul;
-            // The world wraps at the antimeridian: draw our layers once per visible copy of it, so panning
-            // east off the edge continues into the Pacific instead of into blank space.
-            for (double wrapCam : TownyMapMod.wrapCameras(camX, w, mapScale)) {
-                TownyMapMod.renderSquaremapBackground(ctx, wrapCam, camZ, mapScale, w, h);
-                TownyMapMod.renderOnWorldMap(ctx, wrapCam, camZ, mapScale, w, h);
-            }
+            TownyMapMod.renderSquaremapBackground(ctx, camX, camZ, mapScale, w, h);
+            TownyMapMod.renderOnWorldMap(ctx, camX, camZ, mapScale, w, h);
             if (mapScale > 0) {
-                double worldX = TownyMapMod.wrapWorldX((mouseX - w / 2.0) / mapScale + camX);
+                double worldX = (mouseX - w / 2.0) / mapScale + camX;
                 double worldZ = (mouseY - h / 2.0) / mapScale + camZ;
-                double hoverCam = TownyMapMod.wrapWorldX(camX);
-                TownyMapMod.renderHoveredWorldMapChunk(ctx, hoverCam, camZ, mapScale, w, h, worldX, worldZ);
-                TownyMapMod.renderChunkCounter(ctx, hoverCam, camZ, mapScale, w, h, worldX, worldZ);
+                TownyMapMod.renderHoveredWorldMapChunk(ctx, camX, camZ, mapScale, w, h, worldX, worldZ);
+                TownyMapMod.renderChunkCounter(ctx, camX, camZ, mapScale, w, h, worldX, worldZ);
             }
             ctx.drawDeferredElements();
             clearDepthForXaeroArrowIfAvailable();
@@ -159,9 +154,7 @@ public abstract class MixinGuiMap {
             if (dimMul > 0.0) {
                 double guiScale = (screenScale > 0) ? scale / screenScale : scale;
                 double mapScale = guiScale / dimMul;
-                for (double wrapCam : TownyMapMod.wrapCameras(cameraX * dimMul, w, mapScale)) {
-                    TownyMapMod.renderWorldMapLatePass(ctx, wrapCam, cameraZ * dimMul, mapScale, w, h);
-                }
+                TownyMapMod.renderWorldMapLatePass(ctx, cameraX * dimMul, cameraZ * dimMul, mapScale, w, h);
             }
             // A clean map screenshot skips our own chrome for the frame, so the capture is just the map.
             if (!TownyMapMod.hideChromeForScreenshot()) {
@@ -279,8 +272,7 @@ public abstract class MixinGuiMap {
         if (guiScale <= 0) return null;
         double mapScale = guiScale / dimMul;
         return new double[] {
-                // Fold back into the real world, so clicking a town in a wrapped copy hits the actual town.
-                TownyMapMod.wrapWorldX((screenX - sw / 2.0) / mapScale + cameraX * dimMul),
+                (screenX - sw / 2.0) / mapScale + cameraX * dimMul,
                 (screenY - sh / 2.0) / mapScale + cameraZ * dimMul
         };
     }
@@ -362,8 +354,7 @@ public abstract class MixinGuiMap {
                 double guiScale = (screenScale > 0) ? scale / screenScale : scale;
                 if (dimMul > 0.0 && guiScale > 0.0
                         && TownyMapMod.onMapPlayerClick(click.x(), click.y(),
-                                TownyMapMod.wrapWorldX(cameraX * dimMul), cameraZ * dimMul,
-                                guiScale / dimMul, sw, sh)) {
+                                cameraX * dimMul, cameraZ * dimMul, guiScale / dimMul, sw, sh)) {
                     cir.setReturnValue(true);
                     return;
                 }

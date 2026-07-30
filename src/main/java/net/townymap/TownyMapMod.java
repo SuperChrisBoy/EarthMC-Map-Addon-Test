@@ -857,34 +857,6 @@ public class TownyMapMod implements ClientModInitializer {
         suppressNextPanClear = true;
     }
 
-    // ── World wrap (antimeridian) ────────────────────────────────────────────
-    // The EarthMC map is an equirectangular Earth projection exactly 129,024 blocks wide, so x = +64512 and
-    // x = -64512 are the same meridian. Panning east past the edge should continue into the Pacific rather
-    // than run off into nothing.
-    public static final double WORLD_WIDTH = 129_024.0;
-
-    /** Folds a world X into the canonical [-W/2, W/2) range, so any copy of the world maps back onto itself. */
-    public static double wrapWorldX(double x) {
-        double wrapped = x - Math.round(x / WORLD_WIDTH) * WORLD_WIDTH;
-        return wrapped;
-    }
-
-    /**
-     * Camera X values our overlay should be drawn at for this viewport: the wrapped camera, plus the
-     * neighbouring copy when the view straddles a seam. Rendering the same layers a second time at a shifted
-     * camera is what makes the map continuous — every renderer already takes the camera as a parameter, so
-     * none of them need to know the world wraps.
-     */
-    public static double[] wrapCameras(double cameraX, int screenW, double blockScale) {
-        double base = wrapWorldX(cameraX);
-        if (blockScale <= 0) return new double[]{base};
-        double halfView = screenW / 2.0 / blockScale;
-        double half = WORLD_WIDTH / 2.0;
-        if (base + halfView > half) return new double[]{base, base - WORLD_WIDTH};
-        if (base - halfView < -half) return new double[]{base, base + WORLD_WIDTH};
-        return new double[]{base};
-    }
-
     public static void renderOnWorldMap(DrawContext ctx,
                                         double cameraX, double cameraZ,
                                         double scale, int screenW, int screenH) {
