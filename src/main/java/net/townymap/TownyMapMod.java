@@ -363,7 +363,7 @@ public class TownyMapMod implements ClientModInitializer {
     // Selectable map modes. "Overclaim" (2) is omitted until EarthMC's API exposes active-resident
     // counts — its claim max is wrong without them, so over-claim detection misfires. The case is kept
     // (commented) in the highlight switch and labels so it can be re-enabled later.
-    private static final int[] STATUS_MODES = {0, 1, 2, 3, 4, 5};
+    private static final int[] STATUS_MODES = {0, 1, 2, 3, 4, 5, 6};   // 6 = Planning
 
     /** Advance the map-mode value to the next/previous selectable mode, skipping disabled ones. */
     public static int nextStatusMode(int current, boolean backward) {
@@ -760,7 +760,21 @@ public class TownyMapMod implements ClientModInitializer {
      *  "blinking" at zoom-out. Positions/details are the same live squaremap data used everywhere. */
     public static void renderWorldMapLatePass(GuiGraphicsExtractor ctx, double cameraX, double cameraZ,
                                              double scale, int screenW, int screenH) {
-        if (!isActiveOnCurrentServer() || renderer == null || config == null || !config.playersEnabled) return;
+        if (!isActiveOnCurrentServer() || renderer == null || config == null) return;
+        // Join-range zone for the selected nation, under the player dots.
+        if (config.nationRangeEnabled) {
+            // Planning always shows its own nation's zone — that's the whole point of the mode — otherwise
+            // it's whatever the info panel's range button has turned on.
+            String rangeNation = net.townymap.gui.PlanningOverlay.isActive()
+                    && net.townymap.gui.PlanningOverlay.hasNation()
+                    ? net.townymap.gui.PlanningOverlay.nation()
+                    : net.townymap.gui.TownSearchOverlay.rangeNationName();
+            if (rangeNation != null) {
+                EarthMcNationData nd = activeNationDetails().get(rangeNation.toLowerCase(Locale.ROOT));
+                renderer.renderNationJoinRange(ctx, rangeNation, nd, cameraX, cameraZ, scale, screenW, screenH);
+            }
+        }
+        if (!config.playersEnabled) return;   // this branch gates the player layer here, not inside it
         renderer.renderPlayersLayer(ctx, cameraX, cameraZ, scale, screenW, screenH, playerDetailsCache);
     }
 
@@ -838,6 +852,31 @@ public class TownyMapMod implements ClientModInitializer {
                     renderer != null && renderer.isSquaremapLoading(),
                     renderer != null && renderer.isBorderLoading());
         }
+    }
+
+    /** The Planning-mode town counter, drawn top-left alongside the other map HUD. */
+    public static void renderPlanningCounter(GuiGraphicsExtractor ctx, int screenW, int screenH) {
+        if (!isActiveOnCurrentServer() || config == null) return;
+        Minecraft client = Minecraft.getInstance();
+        if (client == null) return;
+        net.townymap.gui.PlanningOverlay.render(ctx, client.font, screenW, screenH);
+    }
+
+    /** A click on a Planning counter chip (+ / T#). True if it was consumed. */
+    public static boolean onPlanningCounterClick(double screenX, double screenY) {
+        return isActiveOnCurrentServer() && config != null
+                && net.townymap.gui.PlanningOverlay.handleClick(screenX, screenY);
+    }
+
+    /** With "+" armed, a left-click on the map drops a planned town there instead of selecting. */
+    public static boolean onPlanningMapClick(double screenX, double screenY,
+                                             double camXWorld, double camZWorld, double mapScale,
+                                             int sw, int sh) {
+        if (!isActiveOnCurrentServer() || config == null || mapScale <= 0) return false;
+        if (!net.townymap.gui.PlanningOverlay.isArmed()) return false;
+        double worldX = (screenX - sw / 2.0) / mapScale + camXWorld;
+        double worldZ = (screenY - sh / 2.0) / mapScale + camZWorld;
+        return net.townymap.gui.PlanningOverlay.placeAt(worldX, worldZ);
     }
 
     public static void updateMinimapNationAlert(double playerX, double playerZ, double visibleBlocks) {
@@ -2453,7 +2492,10 @@ public class TownyMapMod implements ClientModInitializer {
         List<String> names = new ArrayList<>();
         for (EarthMcNationData nation : apiNations) {
             String key = townKey(nation.name());
-            if (nationDetailsCache.containsKey(key) || nationDetailsLoading.contains(key)) continue;
+            // Honour the defer window like every other warm path: without it, nations the API never returns
+            // (deleted between index and query, or unparseable) were re-requested every single second.
+            if (nationDetailsCache.containsKey(key) || nationDetailsLoading.contains(key)
+                    || requestDeferred(nationDetailsDeferredAt, key, now)) continue;
             names.add(nation.name());
             if (names.size() >= NATION_BULK_PER_CYCLE) break;
         }

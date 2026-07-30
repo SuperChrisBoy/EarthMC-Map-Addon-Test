@@ -147,6 +147,7 @@ public abstract class MixinGuiMap {
             }
             TownyMapMod.renderTownInfo(ctx, w, h);
             TownyMapMod.renderMapToggles(ctx, h);
+            TownyMapMod.renderPlanningCounter(ctx, w, h);
             TownyMapMod.renderTownSearch(ctx, w, h);
             TownyMapMod.renderArchiveBanner(ctx, w);
         } catch (Exception e) {
@@ -295,6 +296,24 @@ public abstract class MixinGuiMap {
             if (button == 0 && TownyMapMod.onMapToggleClick(click.x(), click.y(), sh)) {
                 cir.setReturnValue(true);
                 return;
+            }
+
+            // Planning counter chips ("+" arms placement, T# removes that planned town).
+            if (button == 0 && TownyMapMod.onPlanningCounterClick(click.x(), click.y())) {
+                cir.setReturnValue(true);
+                return;
+            }
+
+            // With "+" armed, the next map click drops a planned town instead of selecting anything.
+            if (button == 0) {
+                double dimMul = TownyMapMod.worldMapOverlayScale();
+                double guiScale = (screenScale > 0) ? scale / screenScale : scale;
+                if (dimMul > 0.0 && guiScale > 0.0
+                        && TownyMapMod.onPlanningMapClick(click.x(), click.y(),
+                                cameraX * dimMul, cameraZ * dimMul, guiScale / dimMul, sw, sh)) {
+                    cir.setReturnValue(true);
+                    return;
+                }
             }
 
             // Left-click a date-step arrow under the archive banner (±1 / ±10 days).

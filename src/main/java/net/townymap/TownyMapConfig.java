@@ -54,6 +54,9 @@ public class TownyMapConfig {
     // keeping it centred on the camera) so you can zoom out to see the whole EarthMC map. On by default.
     public boolean worldMapOverview = true;
     public boolean nationStarsEnabled = true;
+    /** Show a nation's join-range zone on the world map when it's selected: a 5k circle around the capital
+     *  plus a 1.5k circle around every town, whose union is where a town could join that nation. */
+    public boolean nationRangeEnabled = true;
     /** At far zoom, collapse small towns to a single crisp dot instead of drawing their outline. Off =
      *  always draw the real outline (towns keep their shape until they're literally sub-pixel). */
     public boolean farZoomTownDots = false;
@@ -89,7 +92,7 @@ public class TownyMapConfig {
     public double playerNameMinScale = 0.08;
     public double playerAffiliationMinScale = 0.108;
     /** Player heads on the dots: 0 off, 1 world map, 2 minimap, 3 both. */
-    public int playerHeadMode = 3;   // heads on (world map + minimap) by default
+    public int playerHeadMode = 0;
     /** Zoom threshold (world-map block scale) above which heads are drawn — chosen via a Near/Medium/Far
      *  button. Larger = must be more zoomed in (Near); smaller = heads show from further out (Far). */
     public double playerHeadMinScale = 0.06;
