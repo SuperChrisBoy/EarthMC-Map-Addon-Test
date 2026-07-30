@@ -167,9 +167,13 @@ public class EarthMcApiClient {
         }
         for (JsonElement el : arr) {
             if (!el.isJsonObject()) continue;
-            TownPopupData data = parseTown(el.getAsJsonObject());
-            if (data != null && data.townName() != null && !data.townName().isBlank()) {
-                out.put(data.townName().toLowerCase(java.util.Locale.ROOT), data);
+            try {   // one malformed town must not discard the rest of the batch
+                TownPopupData data = parseTown(el.getAsJsonObject());
+                if (data != null && data.townName() != null && !data.townName().isBlank()) {
+                    out.put(data.townName().toLowerCase(java.util.Locale.ROOT), data);
+                }
+            } catch (RuntimeException e) {
+                LOGGER.warn("[TownyMap] Skipped an unparseable town record: {}", e.toString());
             }
         }
     }
@@ -286,9 +290,13 @@ public class EarthMcApiClient {
         }
         for (JsonElement el : arr) {
             if (!el.isJsonObject()) continue;
-            EarthMcPlayerData data = parsePlayer(el.getAsJsonObject());
-            if (data != null && data.name() != null && !data.name().isBlank()) {
-                out.put(data.name().toLowerCase(java.util.Locale.ROOT), data);
+            try {   // one malformed player must not discard the rest of the batch
+                EarthMcPlayerData data = parsePlayer(el.getAsJsonObject());
+                if (data != null && data.name() != null && !data.name().isBlank()) {
+                    out.put(data.name().toLowerCase(java.util.Locale.ROOT), data);
+                }
+            } catch (RuntimeException e) {
+                LOGGER.warn("[TownyMap] Skipped an unparseable player record: {}", e.toString());
             }
         }
     }
@@ -361,9 +369,15 @@ public class EarthMcApiClient {
         }
         for (JsonElement el : arr) {
             if (!el.isJsonObject()) continue;
-            EarthMcNationData data = parseNation(el.getAsJsonObject());
-            if (data != null && data.name() != null && !data.name().isBlank()) {
-                out.put(data.name().toLowerCase(java.util.Locale.ROOT), data);
+            // Parse per record: one malformed nation must not discard the other 99 in this batch (that
+            // dropped most stars and made the warm loop re-request the rest every second, forever).
+            try {
+                EarthMcNationData data = parseNation(el.getAsJsonObject());
+                if (data != null && data.name() != null && !data.name().isBlank()) {
+                    out.put(data.name().toLowerCase(java.util.Locale.ROOT), data);
+                }
+            } catch (RuntimeException e) {
+                LOGGER.warn("[TownyMap] Skipped an unparseable nation record: {}", e.toString());
             }
         }
     }
@@ -947,7 +961,10 @@ public class EarthMcApiClient {
             JsonObject coords = n.getAsJsonObject("coordinates");
             if (coords.has("spawn") && coords.get("spawn").isJsonObject()) {
                 JsonObject spawn = coords.getAsJsonObject("spawn");
-                if (spawn.has("x") && spawn.has("z")) {
+                // A nation with no spawn set returns the key with a JSON null value ({"x": null, …}), so
+                // has() alone isn't enough — getAsDouble() on that null threw and killed the whole batch.
+                if (spawn.has("x") && spawn.get("x").isJsonPrimitive()
+                        && spawn.has("z") && spawn.get("z").isJsonPrimitive()) {
                     spawnX = (int) Math.round(spawn.get("x").getAsDouble());
                     spawnZ = (int) Math.round(spawn.get("z").getAsDouble());
                     hasSpawn = true;

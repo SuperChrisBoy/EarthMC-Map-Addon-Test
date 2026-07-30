@@ -104,6 +104,8 @@ public class TownyMapConfigScreen extends Screen {
                     "Keep players on the map in red at their last spot after they go offline or hidden, re-checked every few seconds."),
             Map.entry("Nation Capital Stars",
                     "Mark each nation's capital with a star on the world map."),
+            Map.entry("Nation Join Range",
+                    "When a nation is selected, shade where a town could join it — 5k around the capital plus 1.5k around each town."),
             Map.entry("UI Scale",
                     "Scales all of this mod's GUIs — buttons, panels, this settings screen — smaller. 100% keeps "
                     + "the current sizing; lower shrinks the text and the gaps, independent of your Minecraft GUI scale."),
@@ -213,6 +215,9 @@ public class TownyMapConfigScreen extends Screen {
         option("Nation Capital Stars", onOff(cfg.nationStarsEnabled, v -> cfg.nationStarsEnabled = v),
                 () -> cfg.nationStarsEnabled == DEFAULTS.nationStarsEnabled,
                 () -> cfg.nationStarsEnabled = DEFAULTS.nationStarsEnabled);
+        option("Nation Join Range", onOff(cfg.nationRangeEnabled, v -> cfg.nationRangeEnabled = v),
+                () -> cfg.nationRangeEnabled == DEFAULTS.nationRangeEnabled,
+                () -> cfg.nationRangeEnabled = DEFAULTS.nationRangeEnabled);
         // OFF = towns keep their outline at far zoom, ON = small towns collapse to a dot.
         // ON = smooth squaremap-style diagonals, OFF = the original blocky chunk-aligned borders.
         option("Smooth Town Outlines", onOff(cfg.smoothTownOutlines, v -> cfg.smoothTownOutlines = v),
