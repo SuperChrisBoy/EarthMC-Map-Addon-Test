@@ -29,12 +29,30 @@ final class BorderOverlayRenderer {
     private static final byte LAYER_STATE_ONLY = 2;
     /** Points closer together than this on screen add no visible detail, so they are folded away. */
     private static final double MIN_SEGMENT_PX = 1.0;
+    /** Above this many blocks per pixel the view holds too much geometry to draw a quad at a time. */
+    private static final double VECTOR_MAX_BLOCKS_PER_PIXEL = 4.0;
+    /** Snapshot covers a bit more than the screen, so ordinary panning doesn't force a rebuild. */
+    private static final double SNAPSHOT_MARGIN = 1.35;
+    private static final int MAX_SNAPSHOT_PX = 4096;
+    /** One reusable worker: panning can retrigger rebuilds, and a thread per rebuild would churn. */
+    private static final java.util.concurrent.ExecutorService SNAPSHOT_WORKER =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "TownyMap-BorderSnapshot");
+                t.setDaemon(true);
+                return t;
+            });
+    private static final com.mojang.blaze3d.pipeline.RenderPipeline SNAPSHOT_PIPELINE =
+            net.minecraft.client.gl.RenderPipelines.GUI_TEXTURED;
 
     private final TownyMapConfig config;
     // Populated off-thread at startup: decoding ~244k points takes a moment and must not stall the first frame.
     private volatile List<BorderLine> countryLines = List.of();
     private volatile List<BorderLine> stateOnlyLines = List.of();
     private volatile boolean loading = true;
+    private volatile Snapshot snapshot;
+    private volatile PendingSnapshot pending;
+    private volatile boolean snapshotBuilding;
+    private int snapshotSerial;
 
     BorderOverlayRenderer(TownyMapConfig config) {
         this.config = config;
@@ -60,6 +78,22 @@ final class BorderOverlayRenderer {
         float countryW = Math.max(1.0f, 2.4f * thickness);
         float stateW = Math.max(1.0f, 1.8f * thickness);
 
+        // Zoomed out, the visible geometry runs to ~96k segments — far too many to emit one quad at a time,
+        // which is what made the map freeze. Past the threshold the same lines are rasterised ONCE into a
+        // screen-resolution snapshot and blitted as a single quad per frame, so cost stops tracking detail.
+        // Zoomed in there are only a few hundred segments, so vectors stay direct, crisp and pan instantly.
+        if (1.0 / blockScale > VECTOR_MAX_BLOCKS_PER_PIXEL) {
+            renderSnapshot(ctx, cameraX, cameraZ, blockScale, sw, sh, mode, thickness, countryW, stateW);
+            return;
+        }
+        drawVector(ctx, cameraX, cameraZ, blockScale, sw, sh,
+                worldLeft, worldRight, worldTop, worldBottom, mode, countryW, stateW);
+    }
+
+    private void drawVector(DrawContext ctx, double cameraX, double cameraZ, double blockScale,
+                            int sw, int sh, double worldLeft, double worldRight,
+                            double worldTop, double worldBottom, int mode,
+                            float countryW, float stateW) {
         // States first, so country outlines draw over them where the two run together — the old layer order.
         if (mode == 2) {
             drawLines(ctx, stateOnlyLines, cameraX, cameraZ, blockScale, sw, sh,
@@ -142,6 +176,164 @@ final class BorderOverlayRenderer {
             ctx.fill(0, 0, 1, 1, color);           // unit quad stretched to the exact sub-pixel size
         } finally {
             m.popMatrix();
+        }
+    }
+
+    // ── Far-zoom snapshot ────────────────────────────────────────────────────
+
+    /**
+     * Draws the cached snapshot, rebuilding it when the view has moved off it.
+     *
+     * <p>The snapshot is rasterised over a slightly larger area than the screen, so ordinary panning just
+     * shifts where it is blitted instead of forcing a rebuild. A rebuild runs off-thread and the previous
+     * snapshot keeps drawing meanwhile, so the map never stalls waiting for one.
+     */
+    private void renderSnapshot(DrawContext ctx, double cameraX, double cameraZ, double blockScale,
+                                int sw, int sh, int mode, float thickness,
+                                float countryW, float stateW) {
+        uploadPendingSnapshot();
+
+        Snapshot snap = snapshot;
+        boolean usable = snap != null && snap.matches(blockScale, mode, thickness, sw, sh)
+                && snap.covers(cameraX, cameraZ, sw, sh, blockScale);
+        if (!usable && !snapshotBuilding) {
+            requestSnapshot(cameraX, cameraZ, blockScale, sw, sh, mode, thickness, countryW, stateW);
+        }
+        if (snap == null) return;   // nothing to show yet; the first build lands within a frame or two
+
+        // Position by world anchor so a stale snapshot still lines up while its replacement renders. If the
+        // zoom changed since it was taken, scale it — briefly soft, but never a gap and never a stall.
+        double scaleRatio = blockScale / snap.blockScale();
+        double x = (snap.worldX() - cameraX) * blockScale + sw / 2.0;
+        double y = (snap.worldZ() - cameraZ) * blockScale + sh / 2.0;
+        int drawW = (int) Math.round(snap.width() * scaleRatio);
+        int drawH = (int) Math.round(snap.height() * scaleRatio);
+        ctx.drawTexture(SNAPSHOT_PIPELINE, snap.texture(),
+                (int) Math.round(x), (int) Math.round(y), 0.0F, 0.0F,
+                drawW, drawH, snap.width(), snap.height(), snap.width(), snap.height());
+    }
+
+    private void requestSnapshot(double cameraX, double cameraZ, double blockScale,
+                                 int sw, int sh, int mode, float thickness,
+                                 float countryW, float stateW) {
+        // Never smaller than the screen: a snapshot that can't cover the viewport would fail covers() every
+        // frame and rebuild forever. The margin is what's optional, not the coverage.
+        int width = Math.max(sw, Math.min(MAX_SNAPSHOT_PX, (int) Math.ceil(sw * SNAPSHOT_MARGIN)));
+        int height = Math.max(sh, Math.min(MAX_SNAPSHOT_PX, (int) Math.ceil(sh * SNAPSHOT_MARGIN)));
+        double worldW = width / blockScale;
+        double worldH = height / blockScale;
+        double originX = cameraX - worldW / 2.0;
+        double originZ = cameraZ - worldH / 2.0;
+
+        snapshotBuilding = true;
+        List<BorderLine> countries = countryLines;
+        List<BorderLine> states = mode == 2 ? stateOnlyLines : List.of();
+        SNAPSHOT_WORKER.execute(() -> {
+            try {
+                java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(
+                        width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+                java.awt.Graphics2D g = img.createGraphics();
+                g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                        java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+                g.setRenderingHint(java.awt.RenderingHints.KEY_STROKE_CONTROL,
+                        java.awt.RenderingHints.VALUE_STROKE_PURE);
+                if (!states.isEmpty()) {
+                    rasterise(g, states, originX, originZ, blockScale, stateW, new java.awt.Color(255, 255, 255, 235));
+                }
+                rasterise(g, countries, originX, originZ, blockScale, countryW, java.awt.Color.WHITE);
+                g.dispose();
+                pending = new PendingSnapshot(img, width, height, originX, originZ,
+                        blockScale, mode, thickness, sw, sh);
+            } catch (Exception e) {
+                LOGGER.warn("[TownyMap] Border snapshot failed: {}", e.toString());
+                snapshotBuilding = false;
+            }
+        });
+    }
+
+    private static void rasterise(java.awt.Graphics2D g, List<BorderLine> lines,
+                                  double originX, double originZ, double blockScale,
+                                  float width, java.awt.Color color) {
+        g.setColor(color);
+        g.setStroke(new java.awt.BasicStroke(width, java.awt.BasicStroke.CAP_ROUND,
+                java.awt.BasicStroke.JOIN_ROUND));
+        java.awt.geom.Path2D.Double path = new java.awt.geom.Path2D.Double();
+        for (BorderLine line : lines) {
+            double[] xs = line.x();
+            double[] zs = line.z();
+            double px = (xs[0] - originX) * blockScale;
+            double py = (zs[0] - originZ) * blockScale;
+            path.moveTo(px, py);
+            boolean any = false;
+            for (int i = 1; i < xs.length; i++) {
+                double cx = (xs[i] - originX) * blockScale;
+                double cy = (zs[i] - originZ) * blockScale;
+                double dx = cx - px;
+                double dy = cy - py;
+                if (dx * dx + dy * dy < 1.0 && i < xs.length - 1) continue;   // sub-pixel: nothing to add
+                path.lineTo(cx, cy);
+                px = cx;
+                py = cy;
+                any = true;
+            }
+            if (!any) path.lineTo(px, py);   // degenerate line: a round cap dot still marks it
+        }
+        g.draw(path);   // one path for the whole layer, so AWT strokes it in a single pass
+    }
+
+    /** Moves a finished snapshot onto the GPU. Must run on the render thread, so it happens here. */
+    private void uploadPendingSnapshot() {
+        PendingSnapshot p = pending;
+        if (p == null) return;
+        pending = null;
+        try {
+            net.minecraft.client.MinecraftClient client = net.minecraft.client.MinecraftClient.getInstance();
+            if (client == null) return;
+            net.minecraft.client.texture.NativeImage image =
+                    new net.minecraft.client.texture.NativeImage(p.width(), p.height(), false);
+            int[] argb = p.image().getRGB(0, 0, p.width(), p.height(), null, 0, p.width());
+            for (int y = 0, i = 0; y < p.height(); y++) {
+                for (int x = 0; x < p.width(); x++, i++) image.setColorArgb(x, y, argb[i]);
+            }
+            net.minecraft.util.Identifier id = net.minecraft.util.Identifier.of(
+                    "townymapaddon", "border-snapshot/" + (snapshotSerial++));
+            client.getTextureManager().registerTexture(id,
+                    new net.minecraft.client.texture.NativeImageBackedTexture(() -> "border snapshot", image));
+
+            Snapshot old = snapshot;
+            snapshot = new Snapshot(id, p.width(), p.height(), p.worldX(), p.worldZ(),
+                    p.blockScale(), p.mode(), p.thickness(), p.screenW(), p.screenH());
+            if (old != null) client.getTextureManager().destroyTexture(old.texture());
+        } catch (Exception e) {
+            LOGGER.warn("[TownyMap] Border snapshot upload failed: {}", e.toString());
+        } finally {
+            snapshotBuilding = false;
+        }
+    }
+
+    private record PendingSnapshot(java.awt.image.BufferedImage image, int width, int height,
+                                   double worldX, double worldZ, double blockScale,
+                                   int mode, float thickness, int screenW, int screenH) {}
+
+    /** A rasterised view of the borders, anchored at a world position so it can be blitted while stale. */
+    private record Snapshot(net.minecraft.util.Identifier texture, int width, int height,
+                            double worldX, double worldZ, double blockScale,
+                            int mode, float thickness, int screenW, int screenH) {
+        boolean matches(double scale, int m, float t, int sw, int sh) {
+            return m == mode && Math.abs(t - thickness) < 1e-4
+                    && Math.abs(scale - blockScale) / blockScale < 0.01
+                    && sw == screenW && sh == screenH;
+        }
+
+        /** True while the visible area still sits inside the rasterised margin. */
+        boolean covers(double camX, double camZ, int sw, int sh, double scale) {
+            double left = camX - sw / 2.0 / scale;
+            double top = camZ - sh / 2.0 / scale;
+            double right = camX + sw / 2.0 / scale;
+            double bottom = camZ + sh / 2.0 / scale;
+            return left >= worldX && top >= worldZ
+                    && right <= worldX + width / blockScale
+                    && bottom <= worldZ + height / blockScale;
         }
     }
 
