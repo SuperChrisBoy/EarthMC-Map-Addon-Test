@@ -111,6 +111,9 @@ public class TownyMapConfigScreen extends Screen {
             Map.entry("UI Scale",
                     "Scales all of this mod's GUIs — buttons, panels, this settings screen — smaller. 100% keeps "
                     + "the current sizing; lower shrinks the text and the gaps, independent of your Minecraft GUI scale."),
+            Map.entry("Map Screenshot Key",
+                    "Key that saves a clean picture of the world map — no buttons, search bar or panels. "
+                    + "The same bind as Options > Controls; changing it in either place changes both."),
             Map.entry("View Archive",
                     "Type a date (dd/mm/yyyy) and press Enter to view the historical map from that day. "
                     + "You can also do this from the world-map search bar, using . , or / (e.g. 17/4/2026)."));
@@ -123,6 +126,8 @@ public class TownyMapConfigScreen extends Screen {
     private TownyMapConfig cfg;
     private TextFieldWidget searchField;
     private TextFieldWidget archiveField;   // Advanced → type a dd/mm/yyyy date + Enter to open the archive
+    private ButtonWidget screenshotKeyButton;   // Advanced → rebind the clean-map-screenshot key
+    private boolean awaitingScreenshotKey;
     private String searchQuery = "";
     private int scrollOffset;
     private int contentHeight;
@@ -298,6 +303,18 @@ public class TownyMapConfigScreen extends Screen {
         archiveField.setPlaceholder(Text.literal("dd/mm/yyyy"));
         archiveField.setMaxLength(14);
         inputRow("View Archive", archiveField);
+
+        // The screenshot bind, editable here as well as in vanilla Controls — both write the same KeyBinding.
+        screenshotKeyButton = ButtonWidget.builder(screenshotKeyLabel(), b -> {
+            awaitingScreenshotKey = true;
+            b.setMessage(Text.literal("> Press a key <"));
+        }).dimensions(ctrlX, 0, CTRL_W, 20).build();
+        option("Map Screenshot Key", screenshotKeyButton,
+                () -> "P".equalsIgnoreCase(net.townymap.input.TownyMapKeybinds.mapScreenshotKeyName()),
+                () -> {
+                    net.townymap.input.TownyMapKeybinds.setMapScreenshotKey(GLFW.GLFW_KEY_P);
+                    screenshotKeyButton.setMessage(screenshotKeyLabel());
+                });
 
         this.addDrawableChild(
                 ButtonWidget.builder(Text.literal("Reset All"), b -> {
@@ -516,8 +533,20 @@ public class TownyMapConfigScreen extends Screen {
         return true;
     }
 
+    private Text screenshotKeyLabel() {
+        return Text.literal(net.townymap.input.TownyMapKeybinds.mapScreenshotKeyName());
+    }
+
     @Override
     public boolean keyPressed(net.minecraft.client.input.KeyInput input) {
+        // Rebinding: the next key becomes the screenshot bind (Escape clears it, as vanilla Controls does).
+        if (awaitingScreenshotKey) {
+            awaitingScreenshotKey = false;
+            int key = input.key() == GLFW.GLFW_KEY_ESCAPE ? GLFW.GLFW_KEY_UNKNOWN : input.key();
+            net.townymap.input.TownyMapKeybinds.setMapScreenshotKey(key);
+            if (screenshotKeyButton != null) screenshotKeyButton.setMessage(screenshotKeyLabel());
+            return true;
+        }
         // Enter in the archive-date field opens that day's archive and closes settings.
         if (archiveField != null && archiveField.isFocused()
                 && (input.key() == GLFW.GLFW_KEY_ENTER || input.key() == GLFW.GLFW_KEY_KP_ENTER)) {

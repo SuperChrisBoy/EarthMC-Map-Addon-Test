@@ -34,7 +34,10 @@ import java.util.Set;
 
 public final class TownSearchOverlay {
 
-    private static final int WIDTH = 180;
+    private static final int WIDTH = 180;          // minimum; the bar grows to fit its contents
+    private static final int MAX_WIDTH = 460;
+    /** Current bar width, recomputed each frame from the query and results so nothing is cut off. */
+    private static volatile int panelWidth = WIDTH;
     private static final int FAVORITES_WIDTH = 74;
     private static final int ROW_HEIGHT = 20;
     private static final int MAX_RESULTS = 7;
@@ -142,14 +145,23 @@ public final class TownSearchOverlay {
         MinecraftClient mc = MinecraftClient.getInstance();
         TextRenderer tr = mc.textRenderer;
         tickTextDrag(mc, sw);   // follow a left-drag over the bar (updates the caret/selection)
+
+        // Results are needed before layout: the bar widens to fit the longest row, so nothing is ellipsised.
+        List<Result> results = focused
+                ? results(towns, players, townDetails, apiPlayers, playerDetails, playerHistory,
+                          apiNations, nationDetails)
+                : List.of();
+        panelWidth = computePanelWidth(tr, results, sw);
+        final int W = panelWidth;
+
         int x = left(sw);
         int y = top();
         boolean scaled = UiScale.active();   // shrink around the bar's CENTRE so a centred bar stays centred
-        if (scaled) UiScale.push(ctx, x + WIDTH / 2f, y + ROW_HEIGHT / 2f);
+        if (scaled) UiScale.push(ctx, x + W / 2f, y + ROW_HEIGHT / 2f);
         int border = focused ? ACTIVE_BORDER : BORDER;
 
-        ctx.fill(x - 1, y - 1, x + WIDTH + 1, y + ROW_HEIGHT + 1, border);
-        ctx.fill(x, y, x + WIDTH, y + ROW_HEIGHT, BG);
+        ctx.fill(x - 1, y - 1, x + W + 1, y + ROW_HEIGHT + 1, border);
+        ctx.fill(x, y, x + W, y + ROW_HEIGHT, BG);
 
         String display = query.isEmpty() && !focused ? "Search towns/nations/players" : query;
         int color = query.isEmpty() && !focused ? 0xFFAAAAAA : 0xFFFFFFFF;
@@ -171,26 +183,28 @@ public final class TownSearchOverlay {
         // are mutually exclusive — focusing clears the selection, selecting unfocuses
         // — so they are never on screen at the same time.
         if (focused) {
-            List<Result> results = results(towns, players, townDetails, apiPlayers,
-                    playerDetails, playerHistory, apiNations, nationDetails);
             for (int i = 0; i < results.size(); i++) {
                 Result result = results.get(i);
                 int rowY = resultRowY(y, i);
-                ctx.fill(x - 1, rowY - 1, x + WIDTH + 1, rowY + ROW_HEIGHT + 1, BORDER);
-                ctx.fill(x, rowY, x + WIDTH, rowY + ROW_HEIGHT, i == selected ? HOVER : BG);
-                ctx.drawText(tr, trimToWidth(tr, result.label(), WIDTH - 14), x + 7, rowY + 5, 0xFFFFFFFF, true);
+                ctx.fill(x - 1, rowY - 1, x + W + 1, rowY + ROW_HEIGHT + 1, BORDER);
+                ctx.fill(x, rowY, x + W, rowY + ROW_HEIGHT, i == selected ? HOVER : BG);
+                ctx.drawText(tr, trimToWidth(tr, result.label(), W - 14), x + 7, rowY + 5, 0xFFFFFFFF, true);
             }
-            // Empty bar: tell players how to open the historical archive (there's no other discoverable entry).
-            // Kept short so the row lines up with the search bar's own width.
+            // Empty bar: advertise what the bar can do beyond names — filters first, archive last, since
+            // the archive row was the only hint before and stays where players already expect it.
             if (query.isEmpty()) {
-                // Planning mode needs a nation before it can do anything, so it takes over this row until
-                // one is chosen; otherwise the row advertises the archive.
                 boolean planningPrompt = PlanningOverlay.isActive() && !PlanningOverlay.hasNation();
-                String hint = planningPrompt ? "§fPlease enter a nation" : "§7Type §fdd/mm/yyyy §7= archive";
-                int rowY = resultRowY(y, 0);
-                ctx.fill(x - 1, rowY - 1, x + WIDTH + 1, rowY + ROW_HEIGHT + 1, BORDER);
-                ctx.fill(x, rowY, x + WIDTH, rowY + ROW_HEIGHT, BG);
-                ctx.drawText(tr, trimToWidth(tr, hint, WIDTH - 14), x + 7, rowY + 5, 0xFFFFFFFF, true);
+                List<String> hints = planningPrompt
+                        ? List.of("§fPlease enter a nation")
+                        : List.of("§7Filter: §fnationless§7, §fnation:a,b",
+                                  "§7Filter: §fresidents>30,<60§7, §fchunks>500",
+                                  "§7Type §fdd/mm/yyyy §7= archive");
+                for (int i = 0; i < hints.size(); i++) {
+                    int rowY = resultRowY(y, i);
+                    ctx.fill(x - 1, rowY - 1, x + W + 1, rowY + ROW_HEIGHT + 1, BORDER);
+                    ctx.fill(x, rowY, x + W, rowY + ROW_HEIGHT, BG);
+                    ctx.drawText(tr, trimToWidth(tr, hints.get(i), W - 14), x + 7, rowY + 5, 0xFFFFFFFF, true);
+                }
             }
         }
         // The selected info panel is tied to the search bar: an empty bar means no lingering right-clicked
@@ -217,7 +231,7 @@ public final class TownSearchOverlay {
         // mouse for each separately. The caret uses the RAW mouse (charIndexAtX un-scales it itself).
         double barMx = mouseX, barMy = mouseY, infoMx = mouseX, infoMy = mouseY;
         if (UiScale.active()) {
-            barMx = UiScale.unscale(mouseX, x + WIDTH / 2.0); barMy = UiScale.unscale(mouseY, y + ROW_HEIGHT / 2.0);
+            barMx = UiScale.unscale(mouseX, x + panelWidth / 2.0); barMy = UiScale.unscale(mouseY, y + ROW_HEIGHT / 2.0);
             infoMx = UiScale.unscale(mouseX, infoAnchorX);    infoMy = UiScale.unscale(mouseY, infoAnchorY);
         }
         ClickResult favoriteClick = favoriteClick(barMx, barMy, favoritesX(x), y, towns, favoriteTowns);
@@ -247,7 +261,7 @@ public final class TownSearchOverlay {
             }
         }
 
-        if (inside(barMx, barMy, x, y, WIDTH, ROW_HEIGHT)) {
+        if (inside(barMx, barMy, x, y, panelWidth, ROW_HEIGHT)) {
             focused = true;
             selected = 0;
             caret = charIndexAtX(sw, mouseX);   // place the cursor where they clicked (raw mouse)
@@ -262,7 +276,7 @@ public final class TownSearchOverlay {
                     playerDetails, playerHistory, apiNations, nationDetails);
             for (int i = 0; i < results.size(); i++) {
                 int rowY = resultRowY(y, i);
-                if (inside(barMx, barMy, x, rowY, WIDTH, ROW_HEIGHT)) {
+                if (inside(barMx, barMy, x, rowY, panelWidth, ROW_HEIGHT)) {
                     selected = i;
                     Result result = results.get(i);
                     focused = false;
@@ -304,7 +318,7 @@ public final class TownSearchOverlay {
     /** The caret index nearest a screen-space x within the bar (0..length). */
     private static int charIndexAtX(int sw, double mouseX) {
         TextRenderer tr = MinecraftClient.getInstance().textRenderer;
-        if (UiScale.active()) mouseX = UiScale.unscale(mouseX, left(sw) + WIDTH / 2.0);   // scaled around the bar centre
+        if (UiScale.active()) mouseX = UiScale.unscale(mouseX, left(sw) + panelWidth / 2.0);   // scaled around the bar centre
         double target = mouseX - (left(sw) + 7);
         if (target <= 0) return 0;
         for (int i = 1; i <= query.length(); i++) {
@@ -1385,7 +1399,14 @@ public final class TownSearchOverlay {
     }
 
     private static int left(int sw) {
-        return Math.max(8, sw / 2 - WIDTH / 2);
+        return Math.max(8, sw / 2 - panelWidth / 2);
+    }
+
+    /** Widens the bar to fit whichever is longest: the typed query or a result row. Capped, and grows only. */
+    private static int computePanelWidth(TextRenderer tr, List<Result> results, int sw) {
+        int needed = tr.getWidth(query) + 20;
+        for (Result r : results) needed = Math.max(needed, tr.getWidth(r.label()) + 20);
+        return Math.max(WIDTH, Math.min(Math.min(MAX_WIDTH, Math.max(WIDTH, sw - 24)), needed));
     }
 
     private static int top() {
@@ -1412,57 +1433,87 @@ public final class TownSearchOverlay {
      * <p>Every field here comes from the squaremap markers the map already downloads — the resident count is
      * parsed out of the town popup — so a filter never triggers an API call, however many towns it scans.
      */
-    private record Filters(boolean nationless, String nation,
-                           String residentsOp, int residentsVal,
-                           String chunksOp, int chunksVal, String text) {
+    private record Filters(boolean nationless, List<String> nations,
+                           List<int[]> residents, List<int[]> chunks, String text) {
 
+        // "residents>30", and "residents>30,<60" for a range — each comma-separated clause must hold.
         private static final Pattern NUMERIC =
-                Pattern.compile("^(residents|chunks)(>=|<=|>|<|=)(\\d+)$", Pattern.CASE_INSENSITIVE);
+                Pattern.compile("^(residents|chunks)((?:(?:>=|<=|>|<|=)\\d+)(?:,(?:>=|<=|>|<|=)?\\d+)*)$",
+                        Pattern.CASE_INSENSITIVE);
+        private static final Pattern CLAUSE = Pattern.compile("(>=|<=|>|<|=)?(\\d+)");
+
+        static final int OP_GT = 0, OP_LT = 1, OP_GE = 2, OP_LE = 3, OP_EQ = 4;
 
         /** Parses a query, or returns null if it holds no filter terms (so the normal name search runs). */
         static Filters parse(String raw) {
             if (raw == null || raw.isBlank()) return null;
             boolean nationless = false;
-            String nation = null, rOp = null, cOp = null;
-            int rVal = 0, cVal = 0;
+            List<String> nations = new ArrayList<>();
+            List<int[]> residents = new ArrayList<>();
+            List<int[]> chunks = new ArrayList<>();
             StringBuilder text = new StringBuilder();
             boolean any = false;
 
             for (String tok : raw.trim().split("\\s+")) {
                 String low = tok.toLowerCase(Locale.ROOT);
-                if (low.equals("nationless") || low.equals("noNation".toLowerCase(Locale.ROOT))) {
-                    nationless = true; any = true; continue;
-                }
-                if (low.startsWith("nation:") && low.length() > 7) {
-                    nation = tok.substring(7); any = true; continue;
+                if (low.equals("nationless")) { nationless = true; any = true; continue; }
+                if ((low.startsWith("nation:") || low.startsWith("nations:"))) {
+                    String list = tok.substring(tok.indexOf(':') + 1);
+                    for (String n : list.split(",")) {          // nation:germany,france,egypt
+                        String t = n.trim();
+                        if (!t.isEmpty()) nations.add(t.toLowerCase(Locale.ROOT));
+                    }
+                    if (!nations.isEmpty()) any = true;
+                    continue;
                 }
                 Matcher m = NUMERIC.matcher(tok);
                 if (m.matches()) {
-                    String field = m.group(1).toLowerCase(Locale.ROOT);
-                    int v;
-                    try { v = Integer.parseInt(m.group(3)); } catch (NumberFormatException e) { continue; }
-                    if (field.equals("residents")) { rOp = m.group(2); rVal = v; }
-                    else { cOp = m.group(2); cVal = v; }
+                    List<int[]> target = m.group(1).toLowerCase(Locale.ROOT).equals("residents")
+                            ? residents : chunks;
+                    Matcher c = CLAUSE.matcher(m.group(2));
+                    while (c.find()) {
+                        int op = opOf(c.group(1));
+                        try { target.add(new int[]{op, Integer.parseInt(c.group(2))}); }
+                        catch (NumberFormatException ignored) { /* skip a clause we can't read */ }
+                    }
                     any = true;
                     continue;
                 }
                 if (!text.isEmpty()) text.append(' ');
                 text.append(low);
             }
-            return any ? new Filters(nationless, nation, rOp, rVal, cOp, cVal, text.toString()) : null;
+            return any ? new Filters(nationless, List.copyOf(nations), List.copyOf(residents),
+                    List.copyOf(chunks), text.toString()) : null;
         }
 
-        static boolean compare(int actual, String op, int target) {
+        private static int opOf(String op) {
+            if (op == null) return OP_EQ;
             return switch (op) {
-                case ">"  -> actual > target;
-                case "<"  -> actual < target;
-                case ">=" -> actual >= target;
-                case "<=" -> actual <= target;
-                default   -> actual == target;
+                case ">"  -> OP_GT;
+                case "<"  -> OP_LT;
+                case ">=" -> OP_GE;
+                case "<=" -> OP_LE;
+                default   -> OP_EQ;
             };
+        }
+
+        /** Every clause must hold, so ">30,<60" reads as a range rather than as alternatives. */
+        static boolean passes(int actual, List<int[]> clauses) {
+            for (int[] c : clauses) {
+                boolean ok = switch (c[0]) {
+                    case OP_GT -> actual > c[1];
+                    case OP_LT -> actual < c[1];
+                    case OP_GE -> actual >= c[1];
+                    case OP_LE -> actual <= c[1];
+                    default    -> actual == c[1];
+                };
+                if (!ok) return false;
+            }
+            return true;
         }
     }
 
+    /** Runs a property filter over every town, newest-largest first, and labels each hit with why it matched. */
     // Towns matching the active property filter, published so the map can black out everything else.
     private static volatile java.util.Set<String> filterMatchKeys = java.util.Set.of();
     private static volatile int filterVersion = 0;
@@ -1477,6 +1528,14 @@ public final class TownSearchOverlay {
     /** Bumps whenever the filter or its matches change, so the map's recolour memo rebuilds. */
     public static int filterVersion() { return filterVersion; }
 
+    /** Closes the dropdown but keeps the query and the map dimming, so a filter survives panning. */
+    public static void unfocusKeepingFilter() {
+        focused = false;
+        selAnchor = -1;
+        textDragging = false;
+        clearSelection();
+    }
+
     /** Drops the filter highlight — called whenever the bar is cleared or dismissed. */
     public static void clearFilterHighlight() {
         publishFilterMatches(false, java.util.Set.of());
@@ -1489,7 +1548,7 @@ public final class TownSearchOverlay {
         filterVersion++;
     }
 
-    /** Runs a property filter over every town, newest-largest first, and labels each hit with why it matched. */
+    /** Runs a property filter over every town, biggest first, labelling each hit with why it matched. */
     private static List<Result> filterTowns(List<TownData> towns, Filters f) {
         record Hit(Result result, int sortKey) {}
         List<Hit> hits = new ArrayList<>();
@@ -1499,24 +1558,27 @@ public final class TownSearchOverlay {
             String key = town.key();
             String nation = TownyMapMod.townNationOf(key);
             if (f.nationless() && nation != null) continue;
-            if (f.nation() != null
-                    && (nation == null || !nation.toLowerCase(Locale.ROOT)
-                            .contains(f.nation().toLowerCase(Locale.ROOT)))) continue;
+            if (!f.nations().isEmpty()) {
+                if (nation == null) continue;
+                String low = nation.toLowerCase(Locale.ROOT);
+                boolean hit = false;
+                for (String want : f.nations()) if (low.contains(want)) { hit = true; break; }
+                if (!hit) continue;                       // nation:a,b,c matches any of them
+            }
             if (!f.text().isEmpty() && !town.name().toLowerCase(Locale.ROOT).contains(f.text())) continue;
 
             int residents = TownyMapMod.townResidentsOf(key);
-            if (f.residentsOp() != null
-                    && (residents < 0 || !Filters.compare(residents, f.residentsOp(), f.residentsVal()))) continue;
+            if (!f.residents().isEmpty()
+                    && (residents < 0 || !Filters.passes(residents, f.residents()))) continue;
 
             int chunks = town.approximateChunks();
-            if (f.chunksOp() != null && !Filters.compare(chunks, f.chunksOp(), f.chunksVal())) continue;
+            if (!f.chunks().isEmpty() && !Filters.passes(chunks, f.chunks())) continue;
 
-            // Show whichever numbers the filter asked about, so a hit explains itself.
             StringBuilder detail = new StringBuilder();
-            if (f.residentsOp() != null || residents >= 0) {
-                detail.append(residents < 0 ? "?" : residents).append(residents == 1 ? " resident" : " residents");
+            if (residents >= 0) {
+                detail.append(residents).append(residents == 1 ? " resident" : " residents");
             }
-            if (f.chunksOp() != null) {
+            if (!f.chunks().isEmpty()) {
                 if (!detail.isEmpty()) detail.append(", ");
                 detail.append(chunks).append(" chunks");
             }
@@ -1530,7 +1592,7 @@ public final class TownSearchOverlay {
             hits.add(new Hit(new Result(label,
                     new MapJumpTarget(town.name(), town.centerX(), town.centerZ()),
                     0, "town", town.name()),
-                    f.chunksOp() != null ? chunks : Math.max(residents, 0)));
+                    !f.chunks().isEmpty() ? chunks : Math.max(residents, 0)));
         }
 
         // The map dims everything that didn't match — all of them, not just the ones that fit the list.

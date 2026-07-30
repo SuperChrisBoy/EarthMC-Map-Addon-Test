@@ -816,6 +816,12 @@ public class TownyMapMod implements ClientModInitializer {
     public static void dismissOnMapClick() {
         armedMapDismiss = false;
         dismissTownInfo();
+        // A filter is a view of the map, not a transient lookup: clicking away should let you pan and zoom
+        // around the highlighted towns. Only the bar's focus is dropped, so the dimming survives.
+        if (net.townymap.gui.TownSearchOverlay.isFilterActive()) {
+            net.townymap.gui.TownSearchOverlay.unfocusKeepingFilter();
+            return;
+        }
         TownSearchOverlay.reset();
     }
 

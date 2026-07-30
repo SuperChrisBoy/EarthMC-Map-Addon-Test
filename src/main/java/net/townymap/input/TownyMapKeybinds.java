@@ -29,7 +29,7 @@ public final class TownyMapKeybinds {
         cycleMapMode = register("cycle_map_mode");
         toggleChunkCounter = register("toggle_chunk_counter");
         refreshTowns = register("refresh_towns");
-        mapScreenshot = register("map_screenshot");
+        mapScreenshot = register("map_screenshot", GLFW.GLFW_KEY_P);
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (toggleSquaremap.wasPressed()) TownyMapMod.toggleSquaremapBackground();
@@ -49,11 +49,44 @@ public final class TownyMapKeybinds {
     }
 
     private static KeyBinding register(String id) {
+        return register(id, GLFW.GLFW_KEY_UNKNOWN);
+    }
+
+    private static KeyBinding register(String id, int defaultKey) {
         return KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.townymapaddon." + id,
                 InputUtil.Type.KEYSYM,
-                GLFW.GLFW_KEY_UNKNOWN,
+                defaultKey,
                 CATEGORY
         ));
+    }
+
+    /** The screenshot bind's current key, for the settings row. */
+    public static KeyBinding mapScreenshotBinding() {
+        return mapScreenshot;
+    }
+
+    /** Display name of the bound key, e.g. "P" or "Not bound". */
+    public static String mapScreenshotKeyName() {
+        if (mapScreenshot == null) return "—";
+        return mapScreenshot.isUnbound()
+                ? "Not bound"
+                : mapScreenshot.getBoundKeyLocalizedText().getString();
+    }
+
+    /**
+     * Rebinds the screenshot key from our own settings screen.
+     *
+     * <p>Writes through to the same KeyBinding vanilla's Controls screen edits and saves options, so the two
+     * always agree — this is a second door onto one setting, not a copy of it.
+     */
+    public static void setMapScreenshotKey(int keyCode) {
+        if (mapScreenshot == null) return;
+        mapScreenshot.setBoundKey(keyCode == GLFW.GLFW_KEY_UNKNOWN
+                ? InputUtil.UNKNOWN_KEY
+                : InputUtil.Type.KEYSYM.createFromCode(keyCode));
+        KeyBinding.updateKeysByCode();
+        net.minecraft.client.MinecraftClient mc = net.minecraft.client.MinecraftClient.getInstance();
+        if (mc != null && mc.options != null) mc.options.write();
     }
 }
