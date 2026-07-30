@@ -306,6 +306,18 @@ public class TownyMapConfigScreen extends Screen {
                 () -> cfg.screenshotHideDimmedTowns == DEFAULTS.screenshotHideDimmedTowns,
                 () -> cfg.screenshotHideDimmedTowns = DEFAULTS.screenshotHideDimmedTowns);
 
+        // The screenshot bind, editable here as well as in vanilla Controls — both write the same KeyBinding.
+        screenshotKeyButton = ButtonWidget.builder(screenshotKeyLabel(), b -> {
+            awaitingScreenshotKey = true;
+            b.setMessage(Text.literal("> Press a key <"));
+        }).dimensions(ctrlX, 0, CTRL_W, 20).build();
+        option("Map Screenshot Key", screenshotKeyButton,
+                () -> "P".equalsIgnoreCase(net.townymap.input.TownyMapKeybinds.mapScreenshotKeyName()),
+                () -> {
+                    net.townymap.input.TownyMapKeybinds.setMapScreenshotKey(GLFW.GLFW_KEY_P);
+                    screenshotKeyButton.setMessage(screenshotKeyLabel());
+                });
+
         section("Advanced");
         option("UI Scale", new PanelScaleSlider(ctrlX, 0, CTRL_W, 20, cfg),
                 () -> cfg.infoPanelScale == DEFAULTS.infoPanelScale,
@@ -324,17 +336,6 @@ public class TownyMapConfigScreen extends Screen {
         archiveField.setMaxLength(14);
         inputRow("View Archive", archiveField);
 
-        // The screenshot bind, editable here as well as in vanilla Controls — both write the same KeyBinding.
-        screenshotKeyButton = ButtonWidget.builder(screenshotKeyLabel(), b -> {
-            awaitingScreenshotKey = true;
-            b.setMessage(Text.literal("> Press a key <"));
-        }).dimensions(ctrlX, 0, CTRL_W, 20).build();
-        option("Map Screenshot Key", screenshotKeyButton,
-                () -> "P".equalsIgnoreCase(net.townymap.input.TownyMapKeybinds.mapScreenshotKeyName()),
-                () -> {
-                    net.townymap.input.TownyMapKeybinds.setMapScreenshotKey(GLFW.GLFW_KEY_P);
-                    screenshotKeyButton.setMessage(screenshotKeyLabel());
-                });
 
         this.addDrawableChild(
                 ButtonWidget.builder(Text.literal("Reset All"), b -> {
