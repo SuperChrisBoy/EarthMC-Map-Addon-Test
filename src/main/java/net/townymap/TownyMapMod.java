@@ -808,53 +808,14 @@ public class TownyMapMod implements ClientModInitializer {
     /**
      * Called by MixinGuiMap every frame while Xaero's WorldMap is open.
      */
-    // ── World wrap (antimeridian) ────────────────────────────────────────────
-    // The EarthMC map is an equirectangular projection exactly 129,024 blocks wide, so x = +64512 and
-    // x = -64512 are the same meridian: panning east should continue into the Pacific.
-    public static final double WORLD_WIDTH = 129_024.0;
-
-    /** Folds a world X into [-W/2, W/2), so any copy of the world maps back onto the real one. */
-    public static double wrapWorldX(double x) {
-        return x - Math.round(x / WORLD_WIDTH) * WORLD_WIDTH;
-    }
-
-    /**
-     * Camera positions our layers should be drawn at: the wrapped camera, plus the neighbouring copy when
-     * the view straddles a seam. Every renderer already takes the camera as a parameter, so drawing the
-     * overlay twice is all wrapping needs.
-     *
-     * <p>Returns a single camera whenever the whole world already fits on screen — at that zoom a second
-     * copy adds nothing visible, and it used to double the tile working set every frame, which thrashed the
-     * texture cache badly enough that nothing finished loading.
-     */
-    public static double[] wrapCameras(double cameraX, int screenW, double blockScale) {
-        double base = wrapWorldX(cameraX);
-        if (blockScale <= 0) return new double[]{base};
-        double span = screenW / blockScale;
-        if (span >= WORLD_WIDTH) return new double[]{base};   // whole world visible: nothing to wrap
-        double halfView = span / 2.0;
-        double half = WORLD_WIDTH / 2.0;
-        if (base + halfView > half) return new double[]{base, base - WORLD_WIDTH};
-        if (base - halfView < -half) return new double[]{base, base + WORLD_WIDTH};
-        return new double[]{base};
-    }
-
-    public static void renderSquaremapBackdrop(DrawContext ctx, int screenW, int screenH) {
-        if (!isActiveOnCurrentServer() || renderer == null) return;
-        renderer.renderSquaremapBackdrop(ctx, screenW, screenH);
-    }
-
-    public static void renderSquaremapDarken(DrawContext ctx, int screenW, int screenH) {
-        if (!isActiveOnCurrentServer() || renderer == null) return;
-        renderer.renderSquaremapDarken(ctx, screenW, screenH);
-    }
-
-    public static void renderSquaremapTiles(DrawContext ctx,
-                                            double cameraX, double cameraZ,
-                                            double scale, int screenW, int screenH) {
-        if (!isActiveOnCurrentServer() || renderer == null) return;
-        boolean moving = updateWorldMapMovement(cameraX, cameraZ, scale);
-        renderer.renderSquaremapTiles(ctx, cameraX, cameraZ, scale, screenW, screenH, moving);
+    public static void renderSquaremapBackground(DrawContext ctx,
+                                                 double cameraX, double cameraZ,
+                                                 double scale, int screenW, int screenH) {
+        if (!isActiveOnCurrentServer()) return;
+        if (renderer != null) {
+            boolean moving = updateWorldMapMovement(cameraX, cameraZ, scale);
+            renderer.renderSquaremapBackground(ctx, cameraX, cameraZ, scale, screenW, screenH, moving);
+        }
     }
 
     // ── Search dismiss ─────────────────────────────────────────────────────────
