@@ -396,9 +396,10 @@ public abstract class MixinGuiMap {
     private void onKeyPressed(KeyInput input,
                               CallbackInfoReturnable<Boolean> cir) {
         try {
-            // P takes a clean screenshot of the map — but only when the search bar isn't focused, or it
-            // would swallow the letter mid-word.
-            if (input.key() == org.lwjgl.glfw.GLFW.GLFW_KEY_P && !TownSearchOverlay.isFocused()) {
+            // The clean-screenshot key is a normal rebindable keybind (Options -> Controls). Screens
+            // swallow key presses, so match it here too — but never while the search bar has focus.
+            if (!TownSearchOverlay.isFocused()
+                    && net.townymap.input.TownyMapKeybinds.isMapScreenshotKey(input)) {
                 TownyMapMod.armMapScreenshot();
                 cir.setReturnValue(true);
                 return;

@@ -408,7 +408,6 @@ public final class DetailPages {
                 new Col("Capital", n.capital().isBlank() ? "—" : n.capital(),
                         n.capital().isBlank() ? null : new Ref(Kind.TOWN, n.capital())),
                 new Col("Founded", date(n.registeredMs())))));
-        addAllianceBlocks(b, n.name());
 
         if (!n.board().isBlank()) b.add(new DetailScreen.Wide("Board", n.board()));
         b.add(new Rule());
@@ -433,6 +432,8 @@ public final class DetailPages {
         addNames(b, "Sanctioned", n.sanctioned(), Kind.NATION);
         addNames(b, "Outlaws", n.outlaws(), Kind.PLAYER);
         addNames(b, "Residents", n.residents(), Kind.PLAYER);
+        // Blocs sit with the other collapsible lists rather than up in the summary rows.
+        addAllianceBlocks(b, n.name());
         addRanks(b, n.occupiedRanks());
 
         if (!n.pacts().isEmpty()) {

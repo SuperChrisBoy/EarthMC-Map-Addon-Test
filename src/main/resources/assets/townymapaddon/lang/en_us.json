@@ -4,5 +4,6 @@
   "key.townymapaddon.cycle_borders": "Cycle Border Overlay",
   "key.townymapaddon.cycle_map_mode": "Cycle Town Map Mode",
   "key.townymapaddon.toggle_chunk_counter": "Toggle Chunk Counter",
-  "key.townymapaddon.refresh_towns": "Refresh Town Claims"
+  "key.townymapaddon.refresh_towns": "Refresh Town Claims",
+  "key.townymapaddon.map_screenshot": "Screenshot Map (clean)"
 }

@@ -465,10 +465,12 @@ public class TownyMapMod implements ClientModInitializer {
     // what anyone wants to paste into Discord. Arming this hides our own UI for one frame and captures the
     // map on its own; the countdown gives the frame time to render before the framebuffer is read.
     private static volatile int cleanShotFrames = 0;
+    private static volatile boolean cleanShotReady = false;
 
-    /** Arms a clean map screenshot: our overlays are hidden for the next frame, then the map is captured. */
+    /** Arms a clean map screenshot: our overlays are hidden for the next frames, then the map is captured. */
     public static void armMapScreenshot() {
-        cleanShotFrames = 2;
+        cleanShotReady = false;
+        cleanShotFrames = 3;
     }
 
     /** True while a clean shot is pending, so the map's own chrome is skipped this frame. */
@@ -476,10 +478,24 @@ public class TownyMapMod implements ClientModInitializer {
         return cleanShotFrames > 0;
     }
 
-    /** Called after the map has drawn: counts the armed frames down and captures on the last one. */
+    /** Called at the end of the map's own draw: counts down, then marks the frame ready to be captured. */
     public static void captureMapScreenshotIfArmed() {
         if (cleanShotFrames <= 0) return;
-        if (--cleanShotFrames > 0) return;   // let one frame render without our chrome first
+        if (--cleanShotFrames > 0) return;
+        cleanShotReady = true;   // this frame drew the map without our chrome; grab it between frames
+    }
+
+    /**
+     * Takes the pending capture, from a client tick rather than mid-render.
+     *
+     * <p>This build of Minecraft records GUI draws into a render state and only submits them at the end of
+     * the frame, so reading the framebuffer during rendering caught Xaero's map but none of our own layers —
+     * the squaremap overlay, town borders and player dots were all still queued. Between frames the
+     * framebuffer holds the finished picture, which is what we want anyway.
+     */
+    public static void captureMapScreenshotIfReady() {
+        if (!cleanShotReady) return;
+        cleanShotReady = false;
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null) return;
         try {

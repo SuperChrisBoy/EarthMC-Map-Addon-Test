@@ -92,6 +92,7 @@ public final class TownSearchOverlay {
                 return;
             }
             query = "";
+            clearFilterHighlight();
             focused = true;                          // straight into typing
             selected = 0;
         } else if (before == PlanningOverlay.MODE) {
@@ -583,6 +584,7 @@ public final class TownSearchOverlay {
         // all 5,600 towns costs nothing extra.
         Filters filters = Filters.parse(query);
         if (filters != null) return filterTowns(towns, filters);
+        publishFilterMatches(false, java.util.Set.of());
 
         if (needle.equals(cachedNeedle)
                 && cachedTownCount == towns.size()
@@ -811,6 +813,7 @@ public final class TownSearchOverlay {
         if ("archive".equals(result.type())) {
             clearSelection();
             query = "";
+            clearFilterHighlight();
             caret = 0;
             selAnchor = -1;
             invalidateResults();
@@ -845,6 +848,7 @@ public final class TownSearchOverlay {
      *  map is reopened or panned, so a stale search/selection doesn't linger. */
     public static void reset() {
         query = "";
+        clearFilterHighlight();
         focused = false;
         selected = 0;
         caret = 0;
@@ -870,6 +874,11 @@ public final class TownSearchOverlay {
      * for the clicked entity.  The camera is left where it is.
      */
     private static void activateLink(InfoLink link) {
+        // A bloc has no search entry of its own — go straight to its expanded panel.
+        if ("alliance".equals(link.type())) {
+            TownyMapMod.openDetail(DetailScreen.Kind.ALLIANCE, link.name(), null);
+            return;
+        }
         openSearch(link.type(), link.name());
     }
 
@@ -1085,11 +1094,13 @@ public final class TownSearchOverlay {
             boolean archive = TownyMapMod.isArchiveMode();
             if (!details.capitalName().isBlank()) lines.add(InfoRow.link("§7Capital: §f", details.capitalName(), "town"));
             if (!archive) {   // alliance/meganation membership is only known live, not for the archived date
-                List<String> nationMegas = TownyMapMod.meganationsForNation(selectedName);
-                if (!nationMegas.isEmpty()) lines.add(InfoRow.text("§7Meganation: §f" + String.join(", ", nationMegas)));
-                List<String> nationAllis = TownyMapMod.alliancesForNation(selectedName);
-                if (!nationAllis.isEmpty())
-                    lines.add(InfoRow.text("§7Alliance" + (nationAllis.size() > 1 ? "s" : "") + ": §f" + String.join(", ", nationAllis)));
+                // One row per bloc, each a link straight into that bloc's own panel.
+                for (String mega : TownyMapMod.meganationsForNation(selectedName)) {
+                    lines.add(InfoRow.link("§7Meganation: §f", mega, "alliance"));
+                }
+                for (String alli : TownyMapMod.alliancesForNation(selectedName)) {
+                    lines.add(InfoRow.link("§7Alliance: §f", alli, "alliance"));
+                }
             }
             if (!details.kingName().isBlank()) lines.add(InfoRow.link("§7King: §f", details.kingName(), "player"));
             if (!details.founded().isBlank()) lines.add(InfoRow.text("§7Founded: §f" + details.founded()));
@@ -1452,10 +1463,37 @@ public final class TownSearchOverlay {
         }
     }
 
+    // Towns matching the active property filter, published so the map can black out everything else.
+    private static volatile java.util.Set<String> filterMatchKeys = java.util.Set.of();
+    private static volatile int filterVersion = 0;
+    private static volatile boolean filterActive = false;
+
+    /** True while the search bar holds a property filter (so the map should dim non-matching towns). */
+    public static boolean isFilterActive() { return filterActive; }
+
+    /** Lower-case keys of the towns matching the active filter. */
+    public static java.util.Set<String> filterMatches() { return filterMatchKeys; }
+
+    /** Bumps whenever the filter or its matches change, so the map's recolour memo rebuilds. */
+    public static int filterVersion() { return filterVersion; }
+
+    /** Drops the filter highlight — called whenever the bar is cleared or dismissed. */
+    public static void clearFilterHighlight() {
+        publishFilterMatches(false, java.util.Set.of());
+    }
+
+    private static void publishFilterMatches(boolean active, java.util.Set<String> keys) {
+        if (active == filterActive && keys.equals(filterMatchKeys)) return;
+        filterActive = active;
+        filterMatchKeys = keys;
+        filterVersion++;
+    }
+
     /** Runs a property filter over every town, newest-largest first, and labels each hit with why it matched. */
     private static List<Result> filterTowns(List<TownData> towns, Filters f) {
         record Hit(Result result, int sortKey) {}
         List<Hit> hits = new ArrayList<>();
+        java.util.Set<String> matched = new java.util.HashSet<>();
 
         for (TownData town : towns) {
             String key = town.key();
@@ -1488,11 +1526,15 @@ public final class TownSearchOverlay {
             }
 
             String label = "Town: " + town.name() + (detail.isEmpty() ? "" : "  (" + detail + ")");
+            matched.add(key);
             hits.add(new Hit(new Result(label,
                     new MapJumpTarget(town.name(), town.centerX(), town.centerZ()),
                     0, "town", town.name()),
                     f.chunksOp() != null ? chunks : Math.max(residents, 0)));
         }
+
+        // The map dims everything that didn't match — all of them, not just the ones that fit the list.
+        publishFilterMatches(true, java.util.Set.copyOf(matched));
 
         // Biggest first — when you filter by a number, the extremes are what you were looking for.
         hits.sort(Comparator.comparingInt(Hit::sortKey).reversed()

@@ -208,6 +208,10 @@ public class WorldMapRenderer {
     private List<TownData> recoloredBase;
     private int recoloredMode = -1;
     private int recoloredVersion = -1;
+    // Same memo pattern for the search-filter dim, keyed on the filter's own version.
+    private List<TownData> filtered;
+    private List<TownData> filteredBase;
+    private int filteredVersion = -1;
 
 
     public WorldMapRenderer(TownyMapConfig config, SquaremapApiClient api) {
@@ -1466,6 +1470,24 @@ public class WorldMapRenderer {
         // LIVE feed, which doesn't know the archived towns, so applying it here would black the whole snapshot
         // out (and make leaving archive look like nothing changed). Always show the snapshot as-is.
         if (TownyMapMod.isArchiveMode()) return base;
+
+        // A property filter in the search bar dims the map the same way an alliance layer does: matches keep
+        // their colour, everything else goes black, so the result set reads at a glance instead of being a
+        // list you have to cross-reference. Takes precedence — you filtered, that's what you want to see.
+        if (net.townymap.gui.TownSearchOverlay.isFilterActive()) {
+            java.util.Set<String> keep = net.townymap.gui.TownSearchOverlay.filterMatches();
+            int fVersion = net.townymap.gui.TownSearchOverlay.filterVersion();
+            if (base == filteredBase && fVersion == filteredVersion && filtered != null) return filtered;
+            ArrayList<TownData> out = new ArrayList<>(base.size());
+            for (TownData t : base) {
+                out.add(keep.contains(t.key()) ? t : t.withColors(0x000000, 0x000000));
+            }
+            filteredBase = base;
+            filteredVersion = fVersion;
+            filtered = List.copyOf(out);
+            return filtered;
+        }
+
         int mode = config == null ? 0 : config.townStatusOverlayMode;
         if (mode != 4 && mode != 5) return base;   // not an alliance layer → identity preserved (no rebuild)
         int version = TownyMapMod.allianceDataVersion();

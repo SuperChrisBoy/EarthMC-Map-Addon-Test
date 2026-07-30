@@ -18,6 +18,7 @@ public final class TownyMapKeybinds {
     private static KeyBinding cycleMapMode;
     private static KeyBinding toggleChunkCounter;
     private static KeyBinding refreshTowns;
+    private static KeyBinding mapScreenshot;
 
     private TownyMapKeybinds() {
     }
@@ -28,6 +29,7 @@ public final class TownyMapKeybinds {
         cycleMapMode = register("cycle_map_mode");
         toggleChunkCounter = register("toggle_chunk_counter");
         refreshTowns = register("refresh_towns");
+        mapScreenshot = register("map_screenshot");
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (toggleSquaremap.wasPressed()) TownyMapMod.toggleSquaremapBackground();
@@ -35,7 +37,15 @@ public final class TownyMapKeybinds {
             while (cycleMapMode.wasPressed()) TownyMapMod.cycleTownStatusOverlayMode();
             while (toggleChunkCounter.wasPressed()) TownyMapMod.toggleChunkCounter();
             while (refreshTowns.wasPressed()) TownyMapMod.refreshTownClaimsFromKeybind();
+            while (mapScreenshot.wasPressed()) TownyMapMod.armMapScreenshot();
+            // The capture itself waits for a frame drawn without our chrome; see TownyMapMod.
+            TownyMapMod.captureMapScreenshotIfReady();
         });
+    }
+
+    /** True if this key press matches the (rebindable) clean-screenshot bind, for use inside map screens. */
+    public static boolean isMapScreenshotKey(net.minecraft.client.input.KeyInput input) {
+        return mapScreenshot != null && !mapScreenshot.isUnbound() && mapScreenshot.matchesKey(input);
     }
 
     private static KeyBinding register(String id) {
