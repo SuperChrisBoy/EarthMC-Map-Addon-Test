@@ -24,6 +24,10 @@ public final class ChunkCounterOverlay {
     private static final int CHUNK_SIZE = 16;
     private static final int MODE_MULTI = 2;
     private static final int MAX_GROUPS = 7;
+    private static final int SHAPE_ADD_FILL   = 0x3A6FD3A0;
+    private static final int SHAPE_ADD_BORDER = 0xCC6FD3A0;
+    private static final int SHAPE_DEL_FILL   = 0x3AE2564E;
+    private static final int SHAPE_DEL_BORDER = 0xCCE2564E;
     private static final int PREVIEW_FILL = 0x26FFFFFF;
     private static final int PREVIEW_BORDER = 0xB8FFFFFF;
     private static final double LOW_ZOOM_CHUNK_PIXELS = 2.0;
@@ -39,6 +43,12 @@ public final class ChunkCounterOverlay {
     private static long lastRightDownKey = Long.MIN_VALUE;
     private static long lastPersistMs;
     private static boolean rightDragSelecting = true;
+    // ── Shape select ─────────────────────────────────────────────────────────
+    // Hold Shift and right-drag to sweep out a rectangle instead of painting chunk by chunk. Same add/remove
+    // rule as painting: starting on an empty chunk fills the box, starting on a selected one clears it.
+    private static boolean shapeDragging;
+    private static boolean shapeAdding = true;
+    private static int shapeAnchorX, shapeAnchorZ, shapeCurrentX, shapeCurrentZ;
     private static boolean persistDirty;
     private static boolean activeGroupEmptiedByRemoval;
 
@@ -306,17 +316,72 @@ public final class ChunkCounterOverlay {
     public static boolean handleRightClick(double worldX, double worldZ) {
         TownyMapConfig config = TownyMapMod.getConfig();
         SelectionState selection = activeSelection(config);
-        long key = key(floorToChunk(worldX), floorToChunk(worldZ));
+        int cx = floorToChunk(worldX);
+        int cz = floorToChunk(worldZ);
+        long key = key(cx, cz);
+
+        if (shiftDown()) {   // rectangle sweep: nothing is committed until the button comes back up
+            shapeDragging = true;
+            shapeAdding = !selection.chunks.contains(key);
+            shapeAnchorX = shapeCurrentX = cx;
+            shapeAnchorZ = shapeCurrentZ = cz;
+            lastRightDownKey = key;
+            return true;
+        }
+
         rightDragSelecting = !selection.chunks.contains(key);
         applyDragAction(selection, key);
         lastRightDownKey = key;
         return true;
     }
 
+    private static boolean shiftDown() {
+        Minecraft client = Minecraft.getInstance();
+        if (client == null || client.getWindow() == null) return false;
+        long h = client.getWindow().handle();
+        return GLFW.glfwGetKey(h, GLFW.GLFW_KEY_LEFT_SHIFT) == GLFW.GLFW_PRESS
+                || GLFW.glfwGetKey(h, GLFW.GLFW_KEY_RIGHT_SHIFT) == GLFW.GLFW_PRESS;
+    }
+
+    /** True while a rectangle is being swept, so the map can preview it. */
+    public static boolean isShapeDragging() { return shapeDragging; }
+
+    /** Chunks the pending rectangle covers, for the preview count. */
+    public static int shapeChunkCount() {
+        if (!shapeDragging) return 0;
+        return (Math.abs(shapeCurrentX - shapeAnchorX) + 1) * (Math.abs(shapeCurrentZ - shapeAnchorZ) + 1);
+    }
+
+    private static void commitShape() {
+        TownyMapConfig config = TownyMapMod.getConfig();
+        SelectionState selection = activeSelection(config);
+        int x0 = Math.min(shapeAnchorX, shapeCurrentX), x1 = Math.max(shapeAnchorX, shapeCurrentX);
+        int z0 = Math.min(shapeAnchorZ, shapeCurrentZ), z1 = Math.max(shapeAnchorZ, shapeCurrentZ);
+        rightDragSelecting = shapeAdding;
+        for (int x = x0; x <= x1; x++) {
+            for (int z = z0; z <= z1; z++) applyDragAction(selection, key(x, z));
+        }
+        shapeDragging = false;
+    }
+
     public static void tickDrag(double worldX, double worldZ) {
         Minecraft client = Minecraft.getInstance();
         if (client == null || client.getWindow() == null) return;
         long handle = client.getWindow().handle();
+        if (shapeDragging) {   // sweeping a rectangle: track the far corner, commit on release
+            if (GLFW.glfwGetMouseButton(handle, GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS) {
+                shapeCurrentX = floorToChunk(worldX);
+                shapeCurrentZ = floorToChunk(worldZ);
+            } else {
+                commitShape();
+                lastRightDownKey = Long.MIN_VALUE;
+                rightDragSelecting = true;
+                compactEmptyGroups(TownyMapMod.getConfig(), !activeGroupEmptiedByRemoval);
+                activeGroupEmptiedByRemoval = false;
+                flushSelection();
+            }
+            return;
+        }
         if (GLFW.glfwGetMouseButton(handle, GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS) {
             long key = key(floorToChunk(worldX), floorToChunk(worldZ));
             if (key != lastRightDownKey) {
@@ -350,9 +415,34 @@ public final class ChunkCounterOverlay {
         drawOverlapBadges(ctx, cameraX, cameraZ, blockScale, sw, sh);
 
         drawRegionLabels(ctx, cameraX, cameraZ, blockScale, sw, sh, config);
-        if (preview) {
+        if (shapeDragging) {
+            // Show the whole box while it's being swept, plus its size, so you commit what you meant to.
+            int x0 = Math.min(shapeAnchorX, shapeCurrentX), x1 = Math.max(shapeAnchorX, shapeCurrentX);
+            int z0 = Math.min(shapeAnchorZ, shapeCurrentZ), z1 = Math.max(shapeAnchorZ, shapeCurrentZ);
+            int fill = shapeAdding ? SHAPE_ADD_FILL : SHAPE_DEL_FILL;
+            int line = shapeAdding ? SHAPE_ADD_BORDER : SHAPE_DEL_BORDER;
+            for (int x = x0; x <= x1; x++) {
+                for (int z = z0; z <= z1; z++) {
+                    drawChunk(ctx, x, z, cameraX, cameraZ, blockScale, sw, sh, fill, line, false);
+                }
+            }
+            drawShapeSizeLabel(ctx, x0, z0, x1, z1, cameraX, cameraZ, blockScale, sw, sh);
+        } else if (preview && !TownyMapMod.composingScreenshot()) {
+            // Selected chunks belong in a screenshot; the chunk under the cursor does not.
             drawChunk(ctx, floorToChunk(mouseWorldX), floorToChunk(mouseWorldZ),
                     cameraX, cameraZ, blockScale, sw, sh, PREVIEW_FILL, PREVIEW_BORDER, true);
+            // Box select isn't guessable, so say so — but only until the first chunks are picked, and never
+            // in a screenshot.
+            if (!hasSelection() && !TownyMapMod.composingScreenshot()) {
+                Minecraft client = Minecraft.getInstance();
+                if (client != null) {
+                    String hint = "§7Right-drag to paint  ·  §fShift§7+drag = box";
+                    int y = MapToggleOverlay.togglesTop(sh) - 14;
+                    int tw = client.font.width(hint);
+                    ctx.fill(5, y - 2, 11 + tw, y + 10, 0xC0101114);
+                    ctx.text(client.font, hint, 8, y, 0xFFE5E7EB, false);
+                }
+            }
         }
     }
 
@@ -814,6 +904,23 @@ public final class ChunkCounterOverlay {
             return GROUPS.get(activeGroup);
         }
         return GROUPS.get(Math.max(0, Math.min(MAX_GROUPS - 1, activeGroup)));
+    }
+
+    /** "12 x 8 = 96" above the swept box, so the size is known before the button is released. */
+    private static void drawShapeSizeLabel(GuiGraphicsExtractor ctx, int x0, int z0, int x1, int z1,
+                                           double cameraX, double cameraZ, double blockScale,
+                                           int sw, int sh) {
+        Minecraft client = Minecraft.getInstance();
+        if (client == null) return;
+        int w = x1 - x0 + 1, h = z1 - z0 + 1;
+        String text = w + " x " + h + " = " + (w * h) + (shapeAdding ? "" : "  (remove)");
+        int tw = client.font.width(text);
+        int cx = (int) Math.round(((x0 + (w / 2.0)) * 16 - cameraX) * blockScale + sw / 2.0);
+        int cy = (int) Math.round((z0 * 16 - cameraZ) * blockScale + sh / 2.0) - 14;
+        cx = Math.max(4, Math.min(sw - tw - 8, cx - tw / 2));
+        cy = Math.max(4, Math.min(sh - 14, cy));
+        ctx.fill(cx - 3, cy - 2, cx + tw + 3, cy + 10, 0xC0101114);
+        ctx.text(client.font, text, cx, cy, shapeAdding ? 0xFF6FD3A0 : 0xFFE2564E, false);
     }
 
     private static int normalizedActiveGroup(TownyMapConfig config) {

@@ -55,6 +55,10 @@ public class SquaremapApiClient {
             Pattern.compile("(?is)<b[^>]*>(.*?)</b>");
     private static final Pattern HTML_TAG =
             Pattern.compile("(?is)<[^>]+>");
+    // The same popups carry "Residents: <b>N</b>". Parsing it here gives a resident count for EVERY town
+    // for free, where the /towns API would only cover the handful of towns we have fetched details for.
+    private static final Pattern POPUP_RESIDENTS =
+            Pattern.compile("(?is)Residents\\s*:?\\s*</?[^>]*>?\\s*(\\d+)");
     // squaremap town popups carry "Mayor: <b>Name</b>" — parse it so hover can show the mayor instantly
     // (no per-town API call). See parseMarkers / getTownMayor.
     private static final Pattern POPUP_MAYOR =
@@ -73,6 +77,7 @@ public class SquaremapApiClient {
     private volatile List<PlayerMarker> players      = List.of();
     private volatile Map<String, PlayerHistoryEntry> playerHistory = Map.of();
     private volatile Map<String, String> townMayors  = Map.of();   // townKey → mayor, parsed from popups
+    private volatile Map<String, Integer> townResidents = Map.of(); // townKey → resident count, from popups
     private volatile Map<String, String> townNations = Map.of();   // townKey → nation, parsed from tooltips
 
     private final AtomicBoolean markerFetchRunning = new AtomicBoolean(false);
@@ -116,6 +121,13 @@ public class SquaremapApiClient {
     public boolean isArchiveActive()            { return archiveTowns != null; }
     public void setArchiveTowns(List<TownData> t) { archiveTowns = t == null ? null : List.copyOf(t); }
     public void clearArchive()                  { archiveTowns = null; lastMarkerFetchMs = 0; }
+    /** Resident count parsed from the squaremap popup, or -1 if that town's popup had none. */
+    public int getTownResidents(String townKey) {
+        if (townKey == null) return -1;
+        Integer n = townResidents.get(townKey);
+        return n == null ? -1 : n;
+    }
+
     /** Mayor parsed from the squaremap popup for this town key, or null if unknown. */
     public String getTownMayor(String townKey) { return townKey == null ? null : townMayors.get(townKey); }
     public String getTownNation(String townKey) { return townKey == null ? null : townNations.get(townKey); }
@@ -318,6 +330,8 @@ public class SquaremapApiClient {
     private List<TownData> parseMarkers(String json) {
         List<TownData> towns = new ArrayList<>();
         Map<String, String> mayors = new HashMap<>();
+        Map<String, Integer> residents = new HashMap<>();
+        int markerFailures = 0;
         Map<String, String> nations = new HashMap<>();
         try {
             JsonElement root = JsonParser.parseString(json);
@@ -336,6 +350,7 @@ public class SquaremapApiClient {
                 for (JsonElement markerEl : markers) {
                     if (!markerEl.isJsonObject()) continue;
                     JsonObject m = markerEl.getAsJsonObject();
+                    try {
 
                     if (!"polygon".equalsIgnoreCase(getString(m, "type"))) continue;
 
@@ -347,6 +362,11 @@ public class SquaremapApiClient {
                     String mayor = extractPopupMayor(getString(m, "popup"));
                     if (mayor != null && !name.equals("?")) {
                         mayors.put(name.toLowerCase(Locale.ROOT), mayor);
+                    }
+
+                    int res = extractPopupResidents(getString(m, "popup"));
+                    if (res >= 0 && !name.equals("?")) {
+                        residents.put(name.toLowerCase(Locale.ROOT), res);
                     }
 
                     String nation = extractNation(tooltip);
@@ -378,13 +398,22 @@ public class SquaremapApiClient {
                     if (!rings.isEmpty()) {
                         towns.add(new TownData(name, rgb, fillRgb, List.copyOf(rings)));
                     }
+                    } catch (Exception e) {
+                        // One malformed marker must not discard the rest of the map — this loop
+                        // carries all 5,600 towns, and the outer catch would have dropped them all.
+                        markerFailures++;
+                    }
                 }
             }
         } catch (Exception e) {
             LOGGER.error("[TownyMap] Failed to parse markers.json", e);
         }
+        if (markerFailures > 0) {
+            LOGGER.warn("[TownyMap] Skipped {} unparseable town markers", markerFailures);
+        }
         townMayors = Map.copyOf(mayors);
         townNations = Map.copyOf(nations);
+        townResidents = Map.copyOf(residents);
         return towns;
     }
 
@@ -394,7 +423,7 @@ public class SquaremapApiClient {
             if (el.isJsonObject()) {
                 JsonObject o = el.getAsJsonObject();
                 if (o.has("x") && o.has("z")) {
-                    pts.add(new int[]{o.get("x").getAsInt(), o.get("z").getAsInt()});
+                    pts.add(new int[]{intOf(o, "x", 0), intOf(o, "z", 0)});
                 }
             } else if (el.isJsonArray()) {
                 JsonArray a = el.getAsJsonArray();
@@ -436,11 +465,11 @@ public class SquaremapApiClient {
                 int x, z;
                 if (p.has("position") && p.get("position").isJsonObject()) {
                     JsonObject pos = p.getAsJsonObject("position");
-                    x = pos.get("x").getAsInt();
-                    z = pos.get("z").getAsInt();
+                    x = intOf(pos, "x", 0);
+                    z = intOf(pos, "z", 0);
                 } else if (p.has("x") && p.has("z")) {
-                    x = p.get("x").getAsInt();
-                    z = p.get("z").getAsInt();
+                    x = intOf(p, "x", 0);
+                    z = intOf(p, "z", 0);
                 } else {
                     continue;
                 }
@@ -465,6 +494,27 @@ public class SquaremapApiClient {
         if (bold != null) return bold;
         String stripped = stripHtml(html);
         return stripped == null || stripped.isBlank() ? null : stripped;
+    }
+
+    /** Null-safe int read: has() is true for a JSON null, and getAsInt() on that throws. */
+    private static int intOf(JsonObject obj, String key, int fallback) {
+        try {
+            JsonElement el = obj.get(key);
+            return el != null && el.isJsonPrimitive() ? el.getAsInt() : fallback;
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    private static int extractPopupResidents(String popupHtml) {
+        if (popupHtml == null) return -1;
+        Matcher m = POPUP_RESIDENTS.matcher(popupHtml);
+        if (!m.find()) return -1;
+        try {
+            return Integer.parseInt(m.group(1));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
     }
 
     private static String extractPopupMayor(String popupHtml) {

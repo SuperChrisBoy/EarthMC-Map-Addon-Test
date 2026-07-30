@@ -27,12 +27,22 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.Map;
 import java.util.Set;
 
 public final class TownSearchOverlay {
 
-    private static final int WIDTH = 180;
+    private static final int WIDTH = 180;          // minimum; the bar grows to fit its contents
+    private static final int MAX_WIDTH = 460;
+    /** Current bar width, recomputed each frame from the query and results so nothing is cut off. */
+    private static volatile int panelWidth = WIDTH;
+    /** What an empty bar advertises. The short forms are the ones worth teaching, so they come first. */
+    private static final List<String> HINTS = List.of(
+            "§7Filter: §fnationless§7, §fn:germany,france",
+            "§7Filter: §fr>30,<60§7, §fchunks>500",
+            "§7Type §fdd/mm/yyyy §7= archive");
     private static final int FAVORITES_WIDTH = 74;
     private static final int ROW_HEIGHT = 20;
     private static final int MAX_RESULTS = 7;
@@ -46,6 +56,9 @@ public final class TownSearchOverlay {
             DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.ENGLISH);
 
     private static boolean focused;
+
+    /** True while the search bar has keyboard focus (typing goes to it, not to map shortcuts). */
+    public static boolean isFocused() { return focused; }
     private static String query = "";
     private static int caret = 0;             // cursor position within query (0..length)
     private static int selAnchor = -1;        // other end of a selection; -1 = none. Selection = [lo, hi]
@@ -87,6 +100,7 @@ public final class TownSearchOverlay {
                 return;
             }
             query = "";
+            clearFilterHighlight();
             focused = true;                          // straight into typing
             selected = 0;
         } else if (before == PlanningOverlay.MODE) {
@@ -112,6 +126,12 @@ public final class TownSearchOverlay {
     private static int infoExpandX, infoExpandY, infoExpandW, infoExpandH;
     private static boolean infoExpandVisible;
     private static int infoRangeX, infoRangeY, infoRangeW, infoRangeH;
+    private static int infoStarX, infoStarY, infoStarW, infoStarH;
+    private static boolean infoStarVisible;
+    // Hover labels are drawn after everything else in the panel: the info rows are drawn last and were
+    // painting over them (the player's name sat straight across "Favourite").
+    private static String pendingTipText;
+    private static int pendingTipX, pendingTipY;
     private static boolean infoRangeVisible;
     private static int infoAnchorX, infoAnchorY;   // the right-side panel's top-left, for UI-Scale hit-testing
     private static boolean infoDiscordVisible;
@@ -136,14 +156,23 @@ public final class TownSearchOverlay {
         Minecraft mc = Minecraft.getInstance();
         Font tr = mc.font;
         tickTextDrag(mc, sw);   // follow a left-drag over the bar (updates the caret/selection)
+
+        // Results are needed before layout: the bar widens to fit the longest row, so nothing is ellipsised.
+        List<Result> results = focused
+                ? results(towns, players, townDetails, apiPlayers, playerDetails, playerHistory,
+                          apiNations, nationDetails)
+                : List.of();
+        panelWidth = computePanelWidth(tr, results, sw);
+        final int W = panelWidth;
+
         int x = left(sw);
         int y = top();
         boolean scaled = UiScale.active();   // shrink around the bar's CENTRE so a centred bar stays centred
-        if (scaled) UiScale.push(ctx, x + WIDTH / 2f, y + ROW_HEIGHT / 2f);
+        if (scaled) UiScale.push(ctx, x + W / 2f, y + ROW_HEIGHT / 2f);
         int border = focused ? ACTIVE_BORDER : BORDER;
 
-        ctx.fill(x - 1, y - 1, x + WIDTH + 1, y + ROW_HEIGHT + 1, border);
-        ctx.fill(x, y, x + WIDTH, y + ROW_HEIGHT, BG);
+        ctx.fill(x - 1, y - 1, x + W + 1, y + ROW_HEIGHT + 1, border);
+        ctx.fill(x, y, x + W, y + ROW_HEIGHT, BG);
 
         String display = query.isEmpty() && !focused ? "Search towns/nations/players" : query;
         int color = query.isEmpty() && !focused ? 0xFFAAAAAA : 0xFFFFFFFF;
@@ -165,26 +194,26 @@ public final class TownSearchOverlay {
         // are mutually exclusive — focusing clears the selection, selecting unfocuses
         // — so they are never on screen at the same time.
         if (focused) {
-            List<Result> results = results(towns, players, townDetails, apiPlayers,
-                    playerDetails, playerHistory, apiNations, nationDetails);
             for (int i = 0; i < results.size(); i++) {
                 Result result = results.get(i);
                 int rowY = resultRowY(y, i);
-                ctx.fill(x - 1, rowY - 1, x + WIDTH + 1, rowY + ROW_HEIGHT + 1, BORDER);
-                ctx.fill(x, rowY, x + WIDTH, rowY + ROW_HEIGHT, i == selected ? HOVER : BG);
-                ctx.text(tr, trimToWidth(tr, result.label(), WIDTH - 14), x + 7, rowY + 5, 0xFFFFFFFF, true);
+                ctx.fill(x - 1, rowY - 1, x + W + 1, rowY + ROW_HEIGHT + 1, BORDER);
+                ctx.fill(x, rowY, x + W, rowY + ROW_HEIGHT, i == selected ? HOVER : BG);
+                ctx.text(tr, trimToWidth(tr, result.label(), W - 14), x + 7, rowY + 5, 0xFFFFFFFF, true);
             }
-            // Empty bar: tell players how to open the historical archive (there's no other discoverable entry).
-            // Kept short so the row lines up with the search bar's own width.
+            // Empty bar: advertise what the bar can do beyond names — filters first, archive last, since
+            // the archive row was the only hint before and stays where players already expect it.
             if (query.isEmpty()) {
-                // Planning mode needs a nation before it can do anything, so it takes over this row until
-                // one is chosen; otherwise the row advertises the archive.
                 boolean planningPrompt = PlanningOverlay.isActive() && !PlanningOverlay.hasNation();
-                String hint = planningPrompt ? "§fPlease enter a nation" : "§7Type §fdd/mm/yyyy §7= archive";
-                int rowY = resultRowY(y, 0);
-                ctx.fill(x - 1, rowY - 1, x + WIDTH + 1, rowY + ROW_HEIGHT + 1, BORDER);
-                ctx.fill(x, rowY, x + WIDTH, rowY + ROW_HEIGHT, BG);
-                ctx.text(tr, trimToWidth(tr, hint, WIDTH - 14), x + 7, rowY + 5, 0xFFFFFFFF, true);
+                List<String> hints = planningPrompt
+                        ? List.of("§fPlease enter a nation")
+                        : HINTS;
+                for (int i = 0; i < hints.size(); i++) {
+                    int rowY = resultRowY(y, i);
+                    ctx.fill(x - 1, rowY - 1, x + W + 1, rowY + ROW_HEIGHT + 1, BORDER);
+                    ctx.fill(x, rowY, x + W, rowY + ROW_HEIGHT, BG);
+                    ctx.text(tr, trimToWidth(tr, hints.get(i), W - 14), x + 7, rowY + 5, 0xFFFFFFFF, true);
+                }
             }
         }
         // The selected info panel is tied to the search bar: an empty bar means no lingering right-clicked
@@ -211,13 +240,17 @@ public final class TownSearchOverlay {
         // mouse for each separately. The caret uses the RAW mouse (charIndexAtX un-scales it itself).
         double barMx = mouseX, barMy = mouseY, infoMx = mouseX, infoMy = mouseY;
         if (UiScale.active()) {
-            barMx = UiScale.unscale(mouseX, x + WIDTH / 2.0); barMy = UiScale.unscale(mouseY, y + ROW_HEIGHT / 2.0);
+            barMx = UiScale.unscale(mouseX, x + panelWidth / 2.0); barMy = UiScale.unscale(mouseY, y + ROW_HEIGHT / 2.0);
             infoMx = UiScale.unscale(mouseX, infoAnchorX);    infoMy = UiScale.unscale(mouseY, infoAnchorY);
         }
         ClickResult favoriteClick = favoriteClick(barMx, barMy, favoritesX(x), y, towns, favoriteTowns);
         if (favoriteClick.consumed()) return favoriteClick;
         if (infoDiscordVisible && inside(infoMx, infoMy, infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH)) {
             TownInfoOverlay.openDiscord(infoDiscordUrl);
+            return ClickResult.consumedResult();
+        }
+        if (infoStarVisible && inside(infoMx, infoMy, infoStarX, infoStarY, infoStarW, infoStarH)) {
+            TownyMapMod.toggleFavoriteEntity(selectedType, selectedName);
             return ClickResult.consumedResult();
         }
         if (infoRangeVisible && inside(infoMx, infoMy, infoRangeX, infoRangeY, infoRangeW, infoRangeH)) {
@@ -241,7 +274,7 @@ public final class TownSearchOverlay {
             }
         }
 
-        if (inside(barMx, barMy, x, y, WIDTH, ROW_HEIGHT)) {
+        if (inside(barMx, barMy, x, y, panelWidth, ROW_HEIGHT)) {
             focused = true;
             selected = 0;
             caret = charIndexAtX(sw, mouseX);   // place the cursor where they clicked (raw mouse)
@@ -256,7 +289,7 @@ public final class TownSearchOverlay {
                     playerDetails, playerHistory, apiNations, nationDetails);
             for (int i = 0; i < results.size(); i++) {
                 int rowY = resultRowY(y, i);
-                if (inside(barMx, barMy, x, rowY, WIDTH, ROW_HEIGHT)) {
+                if (inside(barMx, barMy, x, rowY, panelWidth, ROW_HEIGHT)) {
                     selected = i;
                     Result result = results.get(i);
                     focused = false;
@@ -298,7 +331,7 @@ public final class TownSearchOverlay {
     /** The caret index nearest a screen-space x within the bar (0..length). */
     private static int charIndexAtX(int sw, double mouseX) {
         Font tr = Minecraft.getInstance().font;
-        if (UiScale.active()) mouseX = UiScale.unscale(mouseX, left(sw) + WIDTH / 2.0);   // scaled around the bar centre
+        if (UiScale.active()) mouseX = UiScale.unscale(mouseX, left(sw) + panelWidth / 2.0);   // scaled around the bar centre
         double target = mouseX - (left(sw) + 7);
         if (target <= 0) return 0;
         for (int i = 1; i <= query.length(); i++) {
@@ -573,6 +606,13 @@ public final class TownSearchOverlay {
             return List.of(new Result("View archive: " + archiveDateLabel(archiveDate),
                     null, 0, "archive", String.valueOf(archiveDate)));
         }
+        // Filter query ("nationless", "residents>20", "chunks<10", "nation:Germany") — searches by property
+        // rather than by name. Everything it needs is already parsed from the squaremap markers, so filtering
+        // all 5,600 towns costs nothing extra.
+        Filters filters = Filters.parse(query);
+        if (filters != null) return filterTowns(towns, filters);
+        publishFilterMatches(false, java.util.Set.of());
+
         if (needle.equals(cachedNeedle)
                 && cachedTownCount == towns.size()
                 && cachedTownDetailCount == townDetails.size()
@@ -800,6 +840,7 @@ public final class TownSearchOverlay {
         if ("archive".equals(result.type())) {
             clearSelection();
             query = "";
+            clearFilterHighlight();
             caret = 0;
             selAnchor = -1;
             invalidateResults();
@@ -834,6 +875,7 @@ public final class TownSearchOverlay {
      *  map is reopened or panned, so a stale search/selection doesn't linger. */
     public static void reset() {
         query = "";
+        clearFilterHighlight();
         focused = false;
         selected = 0;
         caret = 0;
@@ -859,6 +901,11 @@ public final class TownSearchOverlay {
      * for the clicked entity.  The camera is left where it is.
      */
     private static void activateLink(InfoLink link) {
+        // A bloc has no search entry of its own — go straight to its expanded panel.
+        if ("alliance".equals(link.type())) {
+            TownyMapMod.openDetail(DetailScreen.Kind.ALLIANCE, link.name(), null);
+            return;
+        }
         openSearch(link.type(), link.name());
     }
 
@@ -957,6 +1004,27 @@ public final class TownSearchOverlay {
         int mx = scaled ? (int) Math.round(UiScale.unscale(scaledMouseX(), infoAnchorX)) : scaledMouseX();
         int my = scaled ? (int) Math.round(UiScale.unscale(scaledMouseY(), infoAnchorY)) : scaledMouseY();
 
+        // Star (favourite). Worked out before the range ring so the ring's hover label knows to clear it.
+        // On players it sits left of the head rather than over it.
+        pendingTipText = null;
+        infoStarVisible = false;
+        int starD = 13;
+        if ("nation".equals(selectedType) || "player".equals(selectedType)) {
+            infoStarVisible = true;
+            infoStarW = starD;
+            infoStarH = starD;
+            infoStarY = y + 5;
+            boolean nationRing = "nation".equals(selectedType)
+                    && TownyMapMod.getConfig().nationRangeEnabled;
+            if (nationRing) {
+                infoStarX = x + boxW - 6 - 13 - 4 - starD;      // left of the range ring
+            } else if ("player".equals(selectedType)) {
+                infoStarX = x + boxW - 5 - 16 - 4 - starD;      // left of the 16px head
+            } else {
+                infoStarX = x + boxW - 6 - starD;
+            }
+        }
+
         // Join-range toggle: a small ring in the top-right of a nation's panel. Labels itself on hover so the
         // icon doesn't need explaining, and stays lit while its zone is on the map.
         infoRangeVisible = false;
@@ -974,13 +1042,27 @@ public final class TownSearchOverlay {
             if (on) ctx.fill(infoRangeX + d / 2 - 1, infoRangeY + d / 2 - 1,
                              infoRangeX + d / 2 + 1, infoRangeY + d / 2 + 1, ring);
             if (hov) {   // left of the ring, so it never runs off the screen edge
-                String label = "Nation Range";
-                int lw = tr.width(label);
-                int lx = infoRangeX - 4 - lw, ly = infoRangeY + 3;
-                ctx.fill(lx - 3, ly - 3, lx + lw + 3, ly + 10, 0xE0101114);
-                ctx.text(tr, label, lx, ly, 0xFFFFFFFF, false);
+                pendingTipText = "Nation Range";
+                pendingTipX = (infoStarVisible ? infoStarX : infoRangeX) - 4;
+                pendingTipY = infoRangeY + 3;
             }
         }
+        // Star: nations and players can be favourited too, not just towns. Sits left of the range ring
+        // when there is one, otherwise takes the top-right corner itself.
+        if (infoStarVisible) {
+            boolean on = TownyMapMod.isFavoriteEntity(selectedType, selectedName);
+            boolean hov = inside(mx, my, infoStarX, infoStarY, starD, starD);
+            int col = on ? 0xFFFFD24A : hov ? 0xFFFFFFFF : 0xFF9AA0A8;
+            String star = on ? "\u2605" : "\u2606";
+            int swid = tr.width(star);
+            ctx.text(tr, star, infoStarX + (starD - swid) / 2, infoStarY + 3, col, false);
+            if (hov) {
+                pendingTipText = on ? "Unfavourite" : "Favourite";
+                pendingTipX = infoStarX - 4;
+                pendingTipY = infoStarY + 3;
+            }
+        }
+
         int ty = y + 7;
         for (InfoRow row : lines) {
             if (row.hasLink()) {
@@ -1021,6 +1103,14 @@ public final class TownSearchOverlay {
                 infoExpandVisible = true;
                 drawPanelButton(ctx, infoExpandX, infoExpandY, infoExpandW, infoExpandH, "Expand");
             }
+        }
+        // Hover labels last, so nothing in the panel can paint over them.
+        if (pendingTipText != null) {
+            int lw = tr.width(pendingTipText);
+            int lx = pendingTipX - lw;
+            int ly = pendingTipY;
+            ctx.fill(lx - 3, ly - 3, lx + lw + 3, ly + 10, 0xF0101114);
+            ctx.text(tr, pendingTipText, lx, ly, 0xFFFFFFFF, false);
         }
         if (scaled) UiScale.pop(ctx);
     }
@@ -1074,11 +1164,13 @@ public final class TownSearchOverlay {
             boolean archive = TownyMapMod.isArchiveMode();
             if (!details.capitalName().isBlank()) lines.add(InfoRow.link("§7Capital: §f", details.capitalName(), "town"));
             if (!archive) {   // alliance/meganation membership is only known live, not for the archived date
-                List<String> nationMegas = TownyMapMod.meganationsForNation(selectedName);
-                if (!nationMegas.isEmpty()) lines.add(InfoRow.text("§7Meganation: §f" + String.join(", ", nationMegas)));
-                List<String> nationAllis = TownyMapMod.alliancesForNation(selectedName);
-                if (!nationAllis.isEmpty())
-                    lines.add(InfoRow.text("§7Alliance" + (nationAllis.size() > 1 ? "s" : "") + ": §f" + String.join(", ", nationAllis)));
+                // One row per bloc, each a link straight into that bloc's own panel.
+                for (String mega : TownyMapMod.meganationsForNation(selectedName)) {
+                    lines.add(InfoRow.link("§7Meganation: §f", mega, "alliance"));
+                }
+                for (String alli : TownyMapMod.alliancesForNation(selectedName)) {
+                    lines.add(InfoRow.link("§7Alliance: §f", alli, "alliance"));
+                }
             }
             if (!details.kingName().isBlank()) lines.add(InfoRow.link("§7King: §f", details.kingName(), "player"));
             if (!details.founded().isBlank()) lines.add(InfoRow.text("§7Founded: §f" + details.founded()));
@@ -1279,14 +1371,22 @@ public final class TownSearchOverlay {
         }
         if (!favoritesOpen) return;
 
-        List<TownData> favorites = favoriteTowns(towns, favoriteTowns);
+        List<FavEntry> favorites = favoriteEntries(towns, favoriteTowns);
         int rows = Math.min(MAX_RESULTS, favorites.size());
         for (int i = 0; i < rows; i++) {
-            TownData town = favorites.get(i);
+            FavEntry fav = favorites.get(i);
             int ty = resultRowY(y, i);
             ctx.fill(x - 1, ty - 1, x + FAVORITES_WIDTH + 1, ty + ROW_HEIGHT + 1, BORDER);
             ctx.fill(x, ty, x + FAVORITES_WIDTH, ty + ROW_HEIGHT, BG);
-            ctx.text(tr, trimToWidth(tr, town.name(), FAVORITES_WIDTH - 14), x + 7, ty + 5, 0xFFFFFFFF, true);
+            // A one-letter tag keeps the narrow row readable when the three kinds share a name.
+            int tag = switch (fav.type()) {
+                case "nation" -> 0xFF7FB2FF;
+                case "player" -> 0xFFFFD24A;
+                default -> 0xFF9AA0A8;
+            };
+            String letter = fav.type().substring(0, 1).toUpperCase(Locale.ROOT);
+            ctx.text(tr, letter, x + 5, ty + 5, tag, true);
+            ctx.text(tr, trimToWidth(tr, fav.name(), FAVORITES_WIDTH - 22), x + 14, ty + 5, 0xFFFFFFFF, true);
         }
         if (favorites.isEmpty()) {
             int rowY = resultRowY(y, 0);
@@ -1305,19 +1405,69 @@ public final class TownSearchOverlay {
         }
 
         if (favoritesOpen) {
-            List<TownData> favorites = favoriteTowns(towns, favoriteTowns);
+            List<FavEntry> favorites = favoriteEntries(towns, favoriteTowns);
             int rows = Math.min(MAX_RESULTS, favorites.size());
             for (int i = 0; i < rows; i++) {
                 int ty = resultRowY(y, i);
                 if (inside(mouseX, mouseY, x, ty, FAVORITES_WIDTH, ROW_HEIGHT)) {
-                    TownData town = favorites.get(i);
+                    FavEntry fav = favorites.get(i);
                     favoritesOpen = false;
                     focused = false;
-                    return ClickResult.jump(town);
+                    if (fav.town() != null) return ClickResult.jump(fav.town());
+                    // Nations go to their capital, players to where they are — a favourite should take you
+                    // somewhere, the same way a favourite town does.
+                    MapJumpTarget target = favoriteTarget(fav, towns);
+                    if (target != null) {
+                        openSearch(fav.type(), fav.name());   // also show the panel for what we jumped to
+                        return ClickResult.jump(target);
+                    }
+                    openSearch(fav.type(), fav.name());
+                    return ClickResult.consumedResult();
                 }
             }
         }
         return ClickResult.none();
+    }
+
+    /** One row of the favourites dropdown. Towns jump straight to their claim; the other kinds open a panel. */
+    private record FavEntry(String type, String name, TownData town) {}
+
+    /**
+     * Where a favourited nation or player lives on the map: a nation's capital, a player's current position.
+     * Falls back to their last-seen spot, so a player who has just gone offline (or hidden) still leads
+     * somewhere rather than doing nothing.
+     */
+    private static MapJumpTarget favoriteTarget(FavEntry fav, List<TownData> towns) {
+        if ("nation".equals(fav.type())) {
+            EarthMcNationData nd = TownyMapMod.nationDetails(fav.name());
+            if (nd != null && !nd.capitalName().isBlank()) {
+                TownData capital = townByName(towns, nd.capitalName());
+                if (capital != null) {
+                    return new MapJumpTarget(fav.name(), capital.centerX(), capital.centerZ());
+                }
+            }
+            if (nd != null && nd.hasSpawn()) {
+                return new MapJumpTarget(fav.name(), nd.spawnX(), nd.spawnZ());
+            }
+            return null;
+        }
+        if ("player".equals(fav.type())) {
+            return TownyMapMod.playerJumpTarget(fav.name());
+        }
+        return null;
+    }
+
+    /** Towns, then nations, then players — each alphabetical, so the list is stable as it grows. */
+    private static List<FavEntry> favoriteEntries(List<TownData> towns, List<String> favoriteNames) {
+        List<FavEntry> out = new ArrayList<>();
+        for (TownData t : favoriteTowns(towns, favoriteNames)) out.add(new FavEntry("town", t.name(), t));
+        List<String> nations = new ArrayList<>(TownyMapMod.favoriteNations());
+        nations.sort(String.CASE_INSENSITIVE_ORDER);
+        for (String n : nations) out.add(new FavEntry("nation", n, null));
+        List<String> players = new ArrayList<>(TownyMapMod.favoritePlayers());
+        players.sort(String.CASE_INSENSITIVE_ORDER);
+        for (String pl : players) out.add(new FavEntry("player", pl, null));
+        return out;
     }
 
     private static List<TownData> favoriteTowns(List<TownData> towns, List<String> favoriteNames) {
@@ -1363,7 +1513,18 @@ public final class TownSearchOverlay {
     }
 
     private static int left(int sw) {
-        return Math.max(8, sw / 2 - WIDTH / 2);
+        return Math.max(8, sw / 2 - panelWidth / 2);
+    }
+
+    /** Widens the bar to fit whichever is longest: the typed query or a result row. Capped, and grows only. */
+    private static int computePanelWidth(Font tr, List<Result> results, int sw) {
+        int needed = tr.width(query) + 20;
+        for (Result r : results) needed = Math.max(needed, tr.width(r.label()) + 20);
+        // An empty focused bar shows the hint rows, which are wider than the default bar.
+        if (focused && query.isEmpty()) {
+            for (String h : HINTS) needed = Math.max(needed, tr.width(h) + 20);
+        }
+        return Math.max(WIDTH, Math.min(Math.min(MAX_WIDTH, Math.max(WIDTH, sw - 24)), needed));
     }
 
     private static int top() {
@@ -1381,6 +1542,191 @@ public final class TownSearchOverlay {
     }
 
     private record Result(String label, MapJumpTarget target, int score, String type, String name) {}
+
+    // ── Property filters ─────────────────────────────────────────────────────
+
+    /**
+     * A property search over towns, e.g. {@code nationless}, {@code residents>20 nation:Germany}.
+     *
+     * <p>Every field here comes from the squaremap markers the map already downloads — the resident count is
+     * parsed out of the town popup — so a filter never triggers an API call, however many towns it scans.
+     */
+    private record Filters(boolean nationless, List<String> nations,
+                           List<int[]> residents, List<int[]> chunks, String text) {
+
+        // "residents>30", and "residents>30,<60" for a range — each comma-separated clause must hold.
+        // "residents>30" or the short "r>30" / "r:>30"; chunks keeps its full name.
+        private static final Pattern NUMERIC =
+                Pattern.compile("^(residents|r|chunks):?((?:(?:>=|<=|>|<|=)\\d+)(?:,(?:>=|<=|>|<|=)?\\d+)*)$",
+                        Pattern.CASE_INSENSITIVE);
+        private static final Pattern CLAUSE = Pattern.compile("(>=|<=|>|<|=)?(\\d+)");
+
+        static final int OP_GT = 0, OP_LT = 1, OP_GE = 2, OP_LE = 3, OP_EQ = 4;
+
+        /** Parses a query, or returns null if it holds no filter terms (so the normal name search runs). */
+        static Filters parse(String raw) {
+            if (raw == null || raw.isBlank()) return null;
+            boolean nationless = false;
+            List<String> nations = new ArrayList<>();
+            List<int[]> residents = new ArrayList<>();
+            List<int[]> chunks = new ArrayList<>();
+            StringBuilder text = new StringBuilder();
+            boolean any = false;
+
+            for (String tok : raw.trim().split("\\s+")) {
+                String low = tok.toLowerCase(Locale.ROOT);
+                if (low.equals("nationless")) { nationless = true; any = true; continue; }
+                if (low.startsWith("nation:") || low.startsWith("nations:") || low.startsWith("n:")) {
+                    String list = tok.substring(tok.indexOf(':') + 1);
+                    for (String n : list.split(",")) {          // nation:germany,france,egypt
+                        String t = n.trim();
+                        if (!t.isEmpty()) nations.add(t.toLowerCase(Locale.ROOT));
+                    }
+                    if (!nations.isEmpty()) any = true;
+                    continue;
+                }
+                Matcher m = NUMERIC.matcher(tok);
+                if (m.matches()) {
+                    String field = m.group(1).toLowerCase(Locale.ROOT);
+                    List<int[]> target = field.equals("chunks") ? chunks : residents;   // "r" = residents
+                    Matcher c = CLAUSE.matcher(m.group(2));
+                    while (c.find()) {
+                        int op = opOf(c.group(1));
+                        try { target.add(new int[]{op, Integer.parseInt(c.group(2))}); }
+                        catch (NumberFormatException ignored) { /* skip a clause we can't read */ }
+                    }
+                    any = true;
+                    continue;
+                }
+                if (!text.isEmpty()) text.append(' ');
+                text.append(low);
+            }
+            return any ? new Filters(nationless, List.copyOf(nations), List.copyOf(residents),
+                    List.copyOf(chunks), text.toString()) : null;
+        }
+
+        private static int opOf(String op) {
+            if (op == null) return OP_EQ;
+            return switch (op) {
+                case ">"  -> OP_GT;
+                case "<"  -> OP_LT;
+                case ">=" -> OP_GE;
+                case "<=" -> OP_LE;
+                default   -> OP_EQ;
+            };
+        }
+
+        /** Every clause must hold, so ">30,<60" reads as a range rather than as alternatives. */
+        static boolean passes(int actual, List<int[]> clauses) {
+            for (int[] c : clauses) {
+                boolean ok = switch (c[0]) {
+                    case OP_GT -> actual > c[1];
+                    case OP_LT -> actual < c[1];
+                    case OP_GE -> actual >= c[1];
+                    case OP_LE -> actual <= c[1];
+                    default    -> actual == c[1];
+                };
+                if (!ok) return false;
+            }
+            return true;
+        }
+    }
+
+    /** Runs a property filter over every town, newest-largest first, and labels each hit with why it matched. */
+    // Towns matching the active property filter, published so the map can black out everything else.
+    private static volatile java.util.Set<String> filterMatchKeys = java.util.Set.of();
+    private static volatile int filterVersion = 0;
+    private static volatile boolean filterActive = false;
+
+    /** True while the search bar holds a property filter (so the map should dim non-matching towns). */
+    public static boolean isFilterActive() { return filterActive; }
+
+    /** Lower-case keys of the towns matching the active filter. */
+    public static java.util.Set<String> filterMatches() { return filterMatchKeys; }
+
+    /** Bumps whenever the filter or its matches change, so the map's recolour memo rebuilds. */
+    public static int filterVersion() { return filterVersion; }
+
+    /** Closes the dropdown but keeps the query and the map dimming, so a filter survives panning. */
+    public static void unfocusKeepingFilter() {
+        focused = false;
+        selAnchor = -1;
+        textDragging = false;
+        clearSelection();
+    }
+
+    /** Drops the filter highlight — called whenever the bar is cleared or dismissed. */
+    public static void clearFilterHighlight() {
+        publishFilterMatches(false, java.util.Set.of());
+    }
+
+    private static void publishFilterMatches(boolean active, java.util.Set<String> keys) {
+        if (active == filterActive && keys.equals(filterMatchKeys)) return;
+        filterActive = active;
+        filterMatchKeys = keys;
+        filterVersion++;
+    }
+
+    /** Runs a property filter over every town, biggest first, labelling each hit with why it matched. */
+    private static List<Result> filterTowns(List<TownData> towns, Filters f) {
+        record Hit(Result result, int sortKey) {}
+        List<Hit> hits = new ArrayList<>();
+        java.util.Set<String> matched = new java.util.HashSet<>();
+
+        for (TownData town : towns) {
+            String key = town.key();
+            String nation = TownyMapMod.townNationOf(key);
+            if (f.nationless() && nation != null) continue;
+            if (!f.nations().isEmpty()) {
+                if (nation == null) continue;
+                String low = nation.toLowerCase(Locale.ROOT);
+                boolean hit = false;
+                for (String want : f.nations()) if (low.contains(want)) { hit = true; break; }
+                if (!hit) continue;                       // nation:a,b,c matches any of them
+            }
+            if (!f.text().isEmpty() && !town.name().toLowerCase(Locale.ROOT).contains(f.text())) continue;
+
+            int residents = TownyMapMod.townResidentsOf(key);
+            if (!f.residents().isEmpty()
+                    && (residents < 0 || !Filters.passes(residents, f.residents()))) continue;
+
+            int chunks = town.approximateChunks();
+            if (!f.chunks().isEmpty() && !Filters.passes(chunks, f.chunks())) continue;
+
+            StringBuilder detail = new StringBuilder();
+            if (residents >= 0) {
+                detail.append(residents).append(residents == 1 ? " resident" : " residents");
+            }
+            if (!f.chunks().isEmpty()) {
+                if (!detail.isEmpty()) detail.append(", ");
+                detail.append(chunks).append(" chunks");
+            }
+            if (nation == null) {
+                if (!detail.isEmpty()) detail.append(", ");
+                detail.append("nationless");
+            }
+
+            String label = "Town: " + town.name() + (detail.isEmpty() ? "" : "  (" + detail + ")");
+            matched.add(key);
+            hits.add(new Hit(new Result(label,
+                    new MapJumpTarget(town.name(), town.centerX(), town.centerZ()),
+                    0, "town", town.name()),
+                    !f.chunks().isEmpty() ? chunks : Math.max(residents, 0)));
+        }
+
+        // The map dims everything that didn't match — all of them, not just the ones that fit the list.
+        publishFilterMatches(true, java.util.Set.copyOf(matched));
+
+        // Biggest first — when you filter by a number, the extremes are what you were looking for.
+        hits.sort(Comparator.comparingInt(Hit::sortKey).reversed()
+                .thenComparing(h -> h.result().name(), String.CASE_INSENSITIVE_ORDER));
+        List<Result> out = new ArrayList<>(Math.min(MAX_RESULTS, hits.size()));
+        for (Hit h : hits) {
+            if (out.size() >= MAX_RESULTS) break;
+            out.add(h.result());
+        }
+        return out;
+    }
 
     /** A clickable name span in the info panel: bounds + what to search for. */
     private record InfoLink(int x, int y, int w, int h, String type, String name) {

@@ -288,10 +288,20 @@ public final class ArchiveClient {
             if (!el.isJsonObject()) continue;
             JsonObject o = el.getAsJsonObject();
             if (o.has("x") && o.has("z")) {
-                pts.add(new int[]{o.get("x").getAsInt(), o.get("z").getAsInt()});
+                pts.add(new int[]{intOf(o, "x", 0), intOf(o, "z", 0)});
             }
         }
         if (pts.size() >= 3) rings.add(pts.toArray(new int[pts.size()][]));
+    }
+
+    /** Null-safe int read: has() is true for a JSON null, and getAsInt() on that throws. */
+    private static int intOf(JsonObject obj, String key, int fallback) {
+        try {
+            JsonElement el = obj.get(key);
+            return el != null && el.isJsonPrimitive() ? el.getAsInt() : fallback;
+        } catch (Exception e) {
+            return fallback;
+        }
     }
 
     private static String str(JsonObject o, String key) {
