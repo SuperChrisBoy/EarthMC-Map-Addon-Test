@@ -37,7 +37,11 @@ public final class TownyMapKeybinds {
             while (cycleMapMode.wasPressed()) TownyMapMod.cycleTownStatusOverlayMode();
             while (toggleChunkCounter.wasPressed()) TownyMapMod.toggleChunkCounter();
             while (refreshTowns.wasPressed()) TownyMapMod.refreshTownClaimsFromKeybind();
-            while (mapScreenshot.wasPressed()) TownyMapMod.armMapScreenshot();
+            // Only meaningful with the world map open — the countdown advances in its render. Arming with
+            // it closed used to leave the "hide our UI" flag set indefinitely.
+            while (mapScreenshot.wasPressed()) {
+                if (TownyMapMod.isWorldMapOpen()) TownyMapMod.armMapScreenshot();
+            }
             // The capture itself waits for a frame drawn without our chrome; see TownyMapMod.
             TownyMapMod.captureMapScreenshotIfReady();
         });

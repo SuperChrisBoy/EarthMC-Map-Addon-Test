@@ -466,11 +466,37 @@ public class TownyMapMod implements ClientModInitializer {
     // map on its own; the countdown gives the frame time to render before the framebuffer is read.
     private static volatile int cleanShotFrames = 0;
     private static volatile boolean cleanShotReady = false;
+    private static volatile long cleanShotArmedAtMs = 0L;
+    /** A shot that hasn't completed in this long is abandoned — see armMapScreenshot. */
+    private static final long CLEAN_SHOT_TIMEOUT_MS = 2_000L;
 
-    /** Arms a clean map screenshot: our overlays are hidden for the next frames, then the map is captured. */
+    /**
+     * Arms a clean map screenshot: our overlays are hidden for the next frames, then the map is captured.
+     *
+     * <p>The countdown only advances while the world map is drawing, so arming with the map closed would
+     * otherwise leave the "hide everything" flag set forever — which is exactly what happened when the
+     * default key (P) was pressed in-game. The timestamp lets the state expire on its own instead.
+     */
     public static void armMapScreenshot() {
         cleanShotReady = false;
         cleanShotFrames = 3;
+        cleanShotArmedAtMs = System.currentTimeMillis();
+    }
+
+    /** True when Xaero's world map is the active screen. */
+    public static boolean isWorldMapOpen() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        return client != null && client.currentScreen != null
+                && client.currentScreen.getClass().getName().startsWith("xaero.map.gui.GuiMap");
+    }
+
+    /** True once an armed shot has outlived its window, so the hidden state can never stick. */
+    private static boolean cleanShotExpired() {
+        if (cleanShotFrames <= 0 && !cleanShotReady) return false;
+        if (System.currentTimeMillis() - cleanShotArmedAtMs <= CLEAN_SHOT_TIMEOUT_MS) return false;
+        cleanShotFrames = 0;
+        cleanShotReady = false;
+        return true;
     }
 
     /**
@@ -481,11 +507,13 @@ public class TownyMapMod implements ClientModInitializer {
      * captured had the buttons back on it.
      */
     public static boolean hideChromeForScreenshot() {
+        if (cleanShotExpired()) return false;
         return cleanShotFrames > 0 || cleanShotReady;
     }
 
     /** True while the frame being drawn is one that will be captured. */
     public static boolean composingScreenshot() {
+        if (cleanShotExpired()) return false;
         return cleanShotFrames > 0 || cleanShotReady;
     }
 
