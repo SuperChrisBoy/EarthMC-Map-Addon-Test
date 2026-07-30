@@ -38,6 +38,11 @@ public final class TownSearchOverlay {
     private static final int MAX_WIDTH = 460;
     /** Current bar width, recomputed each frame from the query and results so nothing is cut off. */
     private static volatile int panelWidth = WIDTH;
+    /** What an empty bar advertises. The short forms are the ones worth teaching, so they come first. */
+    private static final List<String> HINTS = List.of(
+            "§7Filter: §fnationless§7, §fn:germany,france",
+            "§7Filter: §fr>30,<60§7, §fchunks>500",
+            "§7Type §fdd/mm/yyyy §7= archive");
     private static final int FAVORITES_WIDTH = 74;
     private static final int ROW_HEIGHT = 20;
     private static final int MAX_RESULTS = 7;
@@ -196,9 +201,7 @@ public final class TownSearchOverlay {
                 boolean planningPrompt = PlanningOverlay.isActive() && !PlanningOverlay.hasNation();
                 List<String> hints = planningPrompt
                         ? List.of("§fPlease enter a nation")
-                        : List.of("§7Filter: §fnationless§7, §fnation:a,b",
-                                  "§7Filter: §fresidents>30,<60§7, §fchunks>500",
-                                  "§7Type §fdd/mm/yyyy §7= archive");
+                        : HINTS;
                 for (int i = 0; i < hints.size(); i++) {
                     int rowY = resultRowY(y, i);
                     ctx.fill(x - 1, rowY - 1, x + W + 1, rowY + ROW_HEIGHT + 1, BORDER);
@@ -1406,6 +1409,10 @@ public final class TownSearchOverlay {
     private static int computePanelWidth(TextRenderer tr, List<Result> results, int sw) {
         int needed = tr.getWidth(query) + 20;
         for (Result r : results) needed = Math.max(needed, tr.getWidth(r.label()) + 20);
+        // An empty focused bar shows the hint rows, which are wider than the default bar.
+        if (focused && query.isEmpty()) {
+            for (String h : HINTS) needed = Math.max(needed, tr.getWidth(h) + 20);
+        }
         return Math.max(WIDTH, Math.min(Math.min(MAX_WIDTH, Math.max(WIDTH, sw - 24)), needed));
     }
 
@@ -1437,8 +1444,9 @@ public final class TownSearchOverlay {
                            List<int[]> residents, List<int[]> chunks, String text) {
 
         // "residents>30", and "residents>30,<60" for a range — each comma-separated clause must hold.
+        // "residents>30" or the short "r>30" / "r:>30"; chunks keeps its full name.
         private static final Pattern NUMERIC =
-                Pattern.compile("^(residents|chunks)((?:(?:>=|<=|>|<|=)\\d+)(?:,(?:>=|<=|>|<|=)?\\d+)*)$",
+                Pattern.compile("^(residents|r|chunks):?((?:(?:>=|<=|>|<|=)\\d+)(?:,(?:>=|<=|>|<|=)?\\d+)*)$",
                         Pattern.CASE_INSENSITIVE);
         private static final Pattern CLAUSE = Pattern.compile("(>=|<=|>|<|=)?(\\d+)");
 
@@ -1457,7 +1465,7 @@ public final class TownSearchOverlay {
             for (String tok : raw.trim().split("\\s+")) {
                 String low = tok.toLowerCase(Locale.ROOT);
                 if (low.equals("nationless")) { nationless = true; any = true; continue; }
-                if ((low.startsWith("nation:") || low.startsWith("nations:"))) {
+                if (low.startsWith("nation:") || low.startsWith("nations:") || low.startsWith("n:")) {
                     String list = tok.substring(tok.indexOf(':') + 1);
                     for (String n : list.split(",")) {          // nation:germany,france,egypt
                         String t = n.trim();
@@ -1468,8 +1476,8 @@ public final class TownSearchOverlay {
                 }
                 Matcher m = NUMERIC.matcher(tok);
                 if (m.matches()) {
-                    List<int[]> target = m.group(1).toLowerCase(Locale.ROOT).equals("residents")
-                            ? residents : chunks;
+                    String field = m.group(1).toLowerCase(Locale.ROOT);
+                    List<int[]> target = field.equals("chunks") ? chunks : residents;   // "r" = residents
                     Matcher c = CLAUSE.matcher(m.group(2));
                     while (c.find()) {
                         int op = opOf(c.group(1));

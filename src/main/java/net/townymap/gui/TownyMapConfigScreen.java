@@ -111,6 +111,13 @@ public class TownyMapConfigScreen extends Screen {
             Map.entry("UI Scale",
                     "Scales all of this mod's GUIs — buttons, panels, this settings screen — smaller. 100% keeps "
                     + "the current sizing; lower shrinks the text and the gaps, independent of your Minecraft GUI scale."),
+            Map.entry("Screenshot Players",
+                    "Include live player dots in the map screenshot. Off gives a picture of the map itself."),
+            Map.entry("Screenshot Nation Stars",
+                    "Keep the nation capital stars in the map screenshot."),
+            Map.entry("Screenshot Hides Dimmed Towns",
+                    "While filtering or in an alliance layer, leave the blacked-out towns out of the "
+                    + "screenshot entirely instead of capturing them as black shapes."),
             Map.entry("Map Screenshot Key",
                     "Key that saves a clean picture of the world map — no buttons, search bar or panels. "
                     + "The same bind as Options > Controls; changing it in either place changes both."),
@@ -285,6 +292,19 @@ public class TownyMapConfigScreen extends Screen {
         option("Nearest Town (Wilderness)", onOff(cfg.infoDisplayNearestTownEnabled, v -> cfg.infoDisplayNearestTownEnabled = v),
                 () -> cfg.infoDisplayNearestTownEnabled == DEFAULTS.infoDisplayNearestTownEnabled,
                 () -> cfg.infoDisplayNearestTownEnabled = DEFAULTS.infoDisplayNearestTownEnabled);
+
+        section("Screenshots");
+        option("Screenshot Players", onOff(cfg.screenshotPlayers, v -> cfg.screenshotPlayers = v),
+                () -> cfg.screenshotPlayers == DEFAULTS.screenshotPlayers,
+                () -> cfg.screenshotPlayers = DEFAULTS.screenshotPlayers);
+        option("Screenshot Nation Stars",
+                onOff(cfg.screenshotNationStars, v -> cfg.screenshotNationStars = v),
+                () -> cfg.screenshotNationStars == DEFAULTS.screenshotNationStars,
+                () -> cfg.screenshotNationStars = DEFAULTS.screenshotNationStars);
+        option("Screenshot Hides Dimmed Towns",
+                onOff(cfg.screenshotHideDimmedTowns, v -> cfg.screenshotHideDimmedTowns = v),
+                () -> cfg.screenshotHideDimmedTowns == DEFAULTS.screenshotHideDimmedTowns,
+                () -> cfg.screenshotHideDimmedTowns = DEFAULTS.screenshotHideDimmedTowns);
 
         section("Advanced");
         option("UI Scale", new PanelScaleSlider(ctrlX, 0, CTRL_W, 20, cfg),

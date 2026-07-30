@@ -478,6 +478,26 @@ public class TownyMapMod implements ClientModInitializer {
         return cleanShotFrames > 0;
     }
 
+    /** True while the frame being drawn is the one that will be captured. */
+    public static boolean composingScreenshot() {
+        return cleanShotFrames > 0;
+    }
+
+    /** Whether player dots belong in the screenshot being composed. */
+    public static boolean screenshotWantsPlayers() {
+        return config == null || config.screenshotPlayers;
+    }
+
+    /** Whether nation stars belong in the screenshot being composed. */
+    public static boolean screenshotWantsNationStars() {
+        return config == null || config.screenshotNationStars;
+    }
+
+    /** Whether dimmed (blacked-out) towns should be dropped from the screenshot rather than shot black. */
+    public static boolean screenshotHidesDimmedTowns() {
+        return config != null && config.screenshotHideDimmedTowns;
+    }
+
     /** Called at the end of the map's own draw: counts down, then marks the frame ready to be captured. */
     public static void captureMapScreenshotIfArmed() {
         if (cleanShotFrames <= 0) return;
@@ -876,6 +896,7 @@ public class TownyMapMod implements ClientModInitializer {
                 renderer.renderNationJoinRange(ctx, rangeNation, nd, cameraX, cameraZ, scale, screenW, screenH);
             }
         }
+        if (composingScreenshot() && !screenshotWantsPlayers()) return;   // a map picture, not a who's-online
         renderer.renderPlayersLayer(ctx, cameraX, cameraZ, scale, screenW, screenH, playerDetailsCache);
     }
 

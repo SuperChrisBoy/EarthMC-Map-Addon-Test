@@ -1477,11 +1477,16 @@ public class WorldMapRenderer {
         if (net.townymap.gui.TownSearchOverlay.isFilterActive()) {
             java.util.Set<String> keep = net.townymap.gui.TownSearchOverlay.filterMatches();
             int fVersion = net.townymap.gui.TownSearchOverlay.filterVersion();
-            if (base == filteredBase && fVersion == filteredVersion && filtered != null) return filtered;
+            boolean dropDimmed = TownyMapMod.composingScreenshot() && TownyMapMod.screenshotHidesDimmedTowns();
+            if (!dropDimmed && base == filteredBase && fVersion == filteredVersion && filtered != null) {
+                return filtered;
+            }
             ArrayList<TownData> out = new ArrayList<>(base.size());
             for (TownData t : base) {
-                out.add(keep.contains(t.key()) ? t : t.withColors(0x000000, 0x000000));
+                if (keep.contains(t.key())) out.add(t);
+                else if (!dropDimmed) out.add(t.withColors(0x000000, 0x000000));
             }
+            if (dropDimmed) return List.copyOf(out);   // one-off for the capture; don't poison the cache
             filteredBase = base;
             filteredVersion = fVersion;
             filtered = List.copyOf(out);
@@ -1492,7 +1497,10 @@ public class WorldMapRenderer {
         if (mode != 4 && mode != 5) return base;   // not an alliance layer → identity preserved (no rebuild)
         int version = TownyMapMod.allianceDataVersion();
         if (version == 0) return base;             // alliance data not loaded yet → keep normal colours
-        if (base == recoloredBase && mode == recoloredMode && version == recoloredVersion && recolored != null) {
+        boolean dropDimmedAlliance =
+                TownyMapMod.composingScreenshot() && TownyMapMod.screenshotHidesDimmedTowns();
+        if (!dropDimmedAlliance && base == recoloredBase && mode == recoloredMode
+                && version == recoloredVersion && recolored != null) {
             return recolored;
         }
         boolean mega = (mode == 4);
@@ -1501,8 +1509,10 @@ public class WorldMapRenderer {
             int[] c = TownyMapMod.allianceColorsForNation(TownyMapMod.bareTownNation(t.name()), mega);
             // In an alliance layer, towns that belong to one show its colour; every other town (nationless,
             // or in a nation that isn't in this layer) is blacked out so the alliances stand alone.
-            out.add(c != null ? t.withColors(c[0], c[1]) : t.withColors(0x000000, 0x000000));
+            if (c != null) out.add(t.withColors(c[0], c[1]));
+            else if (!dropDimmedAlliance) out.add(t.withColors(0x000000, 0x000000));
         }
+        if (dropDimmedAlliance) return List.copyOf(out);   // one-off for the capture
         recoloredBase = base;
         recoloredMode = mode;
         recoloredVersion = version;
@@ -1843,6 +1853,10 @@ public class WorldMapRenderer {
                                           double worldLeft, double worldRight,
                                           double worldTop, double worldBottom,
                                           Map<String, EarthMcNationData> nationDetails) {
+        if (TownyMapMod.composingScreenshot() && !TownyMapMod.screenshotWantsNationStars()) {
+            nationStarHits = List.of();
+            return;
+        }
         if (!config.townsEnabled || !config.nationStarsEnabled || nationDetails.isEmpty()) {
             nationStarHits = List.of();
             return;
