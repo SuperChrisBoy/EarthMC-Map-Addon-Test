@@ -1880,6 +1880,306 @@ public class WorldMapRenderer {
         return town == null ? null : town.data();
     }
 
+    // ── Nation join-range overlay ────────────────────────────────────────────
+    // EarthMC lets a town join a nation within 5k of the capital, and every existing town extends the
+    // reachable frontier by 1.5k around itself; the union of those circles is the joinable area. Every
+    // centre comes from already-cached data (the nation's own spawn + the town geometry we render anyway
+    // + the tooltip-parsed town→nation map), so this costs no extra requests — unlike the old version.
+    private static final int NATION_JOIN_RANGE = 5000;
+    private static final int TOWN_JOIN_RANGE   = 1500;
+    private static final long RANGE_REBUILD_MS = 500;   // cap the full-town-list scan to twice a second
+
+    // Memoised join-range circles in WORLD space for the selected nation, so the ~40k-town scan runs at most
+    // twice a second (on nation change / data refresh) instead of every frame — only the cheap projection is.
+    private String rangeCacheNation = null;
+    private long rangeCacheBuiltAt = 0;
+    private int rangeCachePlanVersion = -1;
+    private int rangeCacheRgb = 0x3BAAFF;
+    private List<int[]> rangeCacheCircles = List.of();   // {worldX, worldZ, worldRadius}
+    // Per circle, the angular spans of its rim that no OTHER circle covers — i.e. the outline of the union.
+    // Overlap geometry is scale-independent, so this is computed with the circle set and reused every frame;
+    // only the tessellation density changes with zoom, which is what keeps the edge smooth instead of blocky.
+    private List<double[]> rangeCacheArcs = List.of();   // {circleIndex, startAngle, endAngle}
+
+    /** Draws the joinable-area union for one nation on the world map. {@code nd} may be null (details not yet
+     *  loaded) — then the capital's 5k circle is skipped and every town gets a 1.5k circle until it arrives. */
+    public void renderNationJoinRange(DrawContext ctx, String nationName, EarthMcNationData nd,
+                                      double cameraX, double cameraZ, double blockScale, int sw, int sh) {
+        if (nationName == null || nationName.isBlank() || blockScale <= 0 || api == null) return;
+        drawJoinZone(ctx, nationName, nd, cameraX, cameraZ, blockScale, sw, sh);
+        // Markers draw even when the zone itself is empty or off-screen, so a planned town is never invisible.
+        renderPlannedMarkers(ctx, nationName, cameraX, cameraZ, blockScale, sw, sh);
+    }
+
+    private void drawJoinZone(DrawContext ctx, String nationName, EarthMcNationData nd,
+                              double cameraX, double cameraZ, double blockScale, int sw, int sh) {
+        long now = System.currentTimeMillis();
+        int planVersion = net.townymap.gui.PlanningOverlay.version();
+        if (!nationName.equalsIgnoreCase(rangeCacheNation) || planVersion != rangeCachePlanVersion
+                || now - rangeCacheBuiltAt > RANGE_REBUILD_MS) {
+            rebuildNationRange(nationName, nd);
+            rangeCacheNation = nationName;
+            rangeCachePlanVersion = planVersion;
+            rangeCacheBuiltAt = now;
+        }
+        if (rangeCacheCircles.isEmpty()) return;
+
+        // Project the cached world circles to screen each frame (cheap). Keep full-precision centres so the
+        // outline doesn't wobble between frames, and keep off-screen circles' geometry for the fill pass.
+        int n = rangeCacheCircles.size();
+        double[] scx = new double[n], scy = new double[n], sr = new double[n];
+        List<int[]> onScreen = new java.util.ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            int[] c = rangeCacheCircles.get(i);
+            scx[i] = (c[0] - cameraX) * blockScale + sw / 2.0;
+            scy[i] = (c[1] - cameraZ) * blockScale + sh / 2.0;
+            sr[i]  = c[2] * blockScale;
+            if (sr[i] > 0 && scx[i] + sr[i] >= 0 && scx[i] - sr[i] <= sw
+                    && scy[i] + sr[i] >= 0 && scy[i] - sr[i] <= sh) {
+                onScreen.add(new int[]{(int) Math.round(scx[i]), (int) Math.round(scy[i]),
+                                       (int) Math.round(sr[i])});
+            }
+        }
+        if (onScreen.isEmpty()) return;
+
+        // Interior shading first, inset by a pixel so its stair-stepped edge stays behind the smooth outline.
+        List<int[]> inset = new java.util.ArrayList<>(onScreen.size());
+        for (int[] c : onScreen) if (c[2] > 1) inset.add(new int[]{c[0], c[1], c[2] - 1});
+        if (!inset.isEmpty()) fillCircleUnion(ctx, inset, sw, sh, (0x38 << 24) | rangeCacheRgb);
+
+        // Smooth union outline: draw only the arcs no other circle covers, as sub-pixel-positioned line
+        // segments (rotated-quad, like the minimap ring) so the boundary reads as a true curve at any zoom.
+        int edge = (0xF0 << 24) | rangeCacheRgb;
+        for (double[] arc : rangeCacheArcs) {
+            int i = (int) arc[0];
+            double r = sr[i];
+            if (r <= 0.5) continue;
+            double a0 = arc[1], a1 = arc[2];
+            double span = a1 - a0;
+            // ~2px per segment along the arc, clamped, so smoothness tracks the on-screen size.
+            int steps = Math.max(2, Math.min(512, (int) Math.ceil(span * r / 2.0)));
+            double prevX = scx[i] + Math.cos(a0) * r, prevY = scy[i] + Math.sin(a0) * r;
+            for (int s = 1; s <= steps; s++) {
+                double ang = a0 + span * s / steps;
+                double x = scx[i] + Math.cos(ang) * r, y = scy[i] + Math.sin(ang) * r;
+                // Cull segments fully outside the viewport; the rest are cheap.
+                if (!((prevX < 0 && x < 0) || (prevX > sw && x > sw)
+                        || (prevY < 0 && y < 0) || (prevY > sh && y > sh))) {
+                    drawSmoothLine(ctx, prevX, prevY, x, y, edge);
+                }
+                prevX = x; prevY = y;
+            }
+        }
+    }
+
+    /**
+     * Labelled pins for planned towns (T1, T2 …). Red means the spot is outside the nation's reachable area
+     * and has to be moved; hovering its chip in the counter makes the matching pin stand out.
+     */
+    private void renderPlannedMarkers(DrawContext ctx, String nationName,
+                                      double cameraX, double cameraZ, double blockScale, int sw, int sh) {
+        if (!net.townymap.gui.PlanningOverlay.isActive()
+                || !nationName.equalsIgnoreCase(net.townymap.gui.PlanningOverlay.nation())) return;
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null) return;
+        List<int[]> pts = net.townymap.gui.PlanningOverlay.plannedPoints();
+        int hoverIdx = net.townymap.gui.PlanningOverlay.hoveredIndex();
+
+        for (int i = 0; i < pts.size(); i++) {
+            int[] p = pts.get(i);
+            int x = toScreenX(p[0], cameraX, blockScale, sw);
+            int y = toScreenY(p[1], cameraZ, blockScale, sh);
+            if (x < -40 || x > sw + 40 || y < -40 || y > sh + 40) continue;
+
+            boolean ok = net.townymap.gui.PlanningOverlay.isValid(i);
+            boolean hot = i == hoverIdx;
+            int accent = ok ? 0xFF6FD3A0 : 0xFFE2564E;
+            String label = "T" + (i + 1);
+            int lw = client.textRenderer.getWidth(label);
+
+            // A hovered pin gets a halo ring so it's obvious which chip points where.
+            if (hot) {
+                drawSmoothRing(ctx, x, y, 9.0, accent);
+                drawSmoothRing(ctx, x, y, 10.0, accent);
+            }
+            // Cross-hair marker at the exact spot.
+            ctx.fill(x - 4, y - 1, x + 4, y + 1, accent);
+            ctx.fill(x - 1, y - 4, x + 1, y + 4, accent);
+            ctx.fill(x - 2, y - 2, x + 2, y + 2, 0xFF101114);
+
+            // Label sits just above, on its own plate so it stays readable over any terrain.
+            int lx = x - lw / 2, ly = y - 16;
+            ctx.fill(lx - 3, ly - 2, lx + lw + 3, ly + 10, hot ? 0xF0101114 : 0xC0101114);
+            ctx.fill(lx - 3, ly - 2, lx + lw + 3, ly - 1, accent);
+            ctx.drawText(client.textRenderer, label, lx, ly, ok ? 0xFFFFFFFF : accent, false);
+        }
+    }
+
+    /** A smooth 1px ring built from the same rotated-quad segments as the range outline. */
+    private static void drawSmoothRing(DrawContext ctx, double cx, double cy, double r, int color) {
+        int segments = Math.max(20, Math.min(96, (int) Math.round(r * 6)));
+        double px = cx + r, py = cy;
+        for (int i = 1; i <= segments; i++) {
+            double a = Math.PI * 2 * i / segments;
+            double nx = cx + Math.cos(a) * r, ny = cy + Math.sin(a) * r;
+            drawSmoothLine(ctx, px, py, nx, ny, color);
+            px = nx; py = ny;
+        }
+    }
+
+    /** A 1px line at any angle, drawn as a rotated quad so diagonals don't stair-step (same trick the
+     *  minimap's circular frame uses). */
+    private static void drawSmoothLine(DrawContext ctx, double x1, double y1, double x2, double y2, int color) {
+        double dx = x2 - x1, dy = y2 - y1;
+        double length = Math.hypot(dx, dy);
+        if (length < 0.01) return;
+        org.joml.Matrix3x2fStack m = ctx.getMatrices();
+        m.pushMatrix();
+        try {
+            m.translate((float) x1, (float) y1);
+            m.rotate((float) Math.atan2(dy, dx));
+            m.scale((float) length, 1f);
+            ctx.fill(0, 0, 1, 1, color);   // unit quad stretched to the exact sub-pixel length
+        } finally {
+            m.popMatrix();
+        }
+    }
+
+    /** Rebuilds the world-space circle set: capital 5k + each town 1.5k, all from cached data. */
+    private void rebuildNationRange(String nationName, EarthMcNationData nd) {
+        String capitalName = nd != null ? nd.capitalName() : null;
+        List<int[]> circles = new java.util.ArrayList<>();
+        if (nd != null && nd.hasSpawn()) {
+            circles.add(new int[]{nd.spawnX(), nd.spawnZ(), NATION_JOIN_RANGE});
+        } else if (capitalName != null) {
+            TownData cap = townByName(capitalName);
+            if (cap != null) circles.add(new int[]{cap.centerX(), cap.centerZ(), NATION_JOIN_RANGE});
+        }
+        for (TownData t : api.getTowns()) {
+            String tn = api.getTownNation(t.key());
+            if (tn == null || !tn.equalsIgnoreCase(nationName)) continue;
+            if (capitalName != null && t.name().equalsIgnoreCase(capitalName)) continue;   // capital is the 5k circle
+            circles.add(new int[]{t.centerX(), t.centerZ(), TOWN_JOIN_RANGE});
+        }
+        // Planning mode: hypothetical towns extend the frontier exactly like real ones do — but only the ones
+        // that are themselves reachable. resolve() works that out and flags the rest for the red markers.
+        if (net.townymap.gui.PlanningOverlay.isActive()
+                && nationName.equalsIgnoreCase(net.townymap.gui.PlanningOverlay.nation())) {
+            circles.addAll(net.townymap.gui.PlanningOverlay.resolve(circles));
+        }
+        rangeCacheCircles = circles;
+        rangeCacheArcs = computeUnionArcs(circles);
+
+        // Tint the zone with the nation's own colour (its capital town's outline colour) so it reads as theirs.
+        rangeCacheRgb = 0x3BAAFF;
+        TownData capTown = capitalName != null ? townByName(capitalName) : null;
+        if (capTown != null) rangeCacheRgb = capTown.rgbColor() & 0xFFFFFF;
+    }
+
+    /**
+     * For each circle, the angular spans of its rim that lie outside every other circle — the outline of the
+     * union. Done in world space once per rebuild: a circle j hides the arc of circle i centred on the
+     * direction i→j with half-width acos((d² + ri² − rj²) / (2·d·ri)).
+     */
+    private static List<double[]> computeUnionArcs(List<int[]> circles) {
+        List<double[]> arcs = new java.util.ArrayList<>();
+        int n = circles.size();
+        for (int i = 0; i < n; i++) {
+            double xi = circles.get(i)[0], yi = circles.get(i)[1], ri = circles.get(i)[2];
+            if (ri <= 0) continue;
+            List<double[]> covered = new java.util.ArrayList<>();
+            boolean swallowed = false;
+            for (int j = 0; j < n && !swallowed; j++) {
+                if (j == i) continue;
+                double xj = circles.get(j)[0], yj = circles.get(j)[1], rj = circles.get(j)[2];
+                double d = Math.hypot(xj - xi, yj - yi);
+                if (d >= ri + rj) continue;              // disjoint: hides nothing
+                if (d + ri <= rj) { swallowed = true; break; }   // i lies wholly inside j: no visible rim
+                if (d + rj <= ri) continue;              // j inside i: doesn't touch i's rim
+                double cos = (d * d + ri * ri - rj * rj) / (2.0 * d * ri);
+                if (cos > 1.0 || cos < -1.0) continue;
+                double mid = Math.atan2(yj - yi, xj - xi);
+                double half = Math.acos(cos);
+                covered.add(new double[]{mid - half, mid + half});
+            }
+            if (swallowed) continue;
+            for (double[] visible : invertSpans(normaliseSpans(covered))) {
+                arcs.add(new double[]{i, visible[0], visible[1]});
+            }
+        }
+        return arcs;
+    }
+
+    /** Wraps spans into [0, 2π), splitting any that cross the seam, then merges overlaps. */
+    private static List<double[]> normaliseSpans(List<double[]> spans) {
+        List<double[]> out = new java.util.ArrayList<>();
+        for (double[] s : spans) {
+            double a = s[0], b = s[1];
+            if (b - a >= Math.PI * 2) { out.clear(); out.add(new double[]{0, Math.PI * 2}); return out; }
+            a = ((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+            b = a + (s[1] - s[0]);
+            if (b > Math.PI * 2) { out.add(new double[]{a, Math.PI * 2}); out.add(new double[]{0, b - Math.PI * 2}); }
+            else out.add(new double[]{a, b});
+        }
+        out.sort((p, q) -> Double.compare(p[0], q[0]));
+        List<double[]> merged = new java.util.ArrayList<>();
+        for (double[] s : out) {
+            if (!merged.isEmpty() && s[0] <= merged.get(merged.size() - 1)[1] + 1e-9) {
+                double[] last = merged.get(merged.size() - 1);
+                if (s[1] > last[1]) last[1] = s[1];
+            } else merged.add(new double[]{s[0], s[1]});
+        }
+        return merged;
+    }
+
+    /** The complement of merged covered spans within [0, 2π) — the arcs that are actually on the outline. */
+    private static List<double[]> invertSpans(List<double[]> covered) {
+        List<double[]> out = new java.util.ArrayList<>();
+        double cursor = 0;
+        for (double[] s : covered) {
+            if (s[0] > cursor + 1e-6) out.add(new double[]{cursor, s[0]});
+            cursor = Math.max(cursor, s[1]);
+        }
+        if (cursor < Math.PI * 2 - 1e-6) out.add(new double[]{cursor, Math.PI * 2});
+        return out;
+    }
+
+    /** Fills the union of the circles with a single flat alpha (no overlap compounding) by scanning rows and
+     *  merging each row's x-intervals. The visible boundary is drawn separately as smooth arcs. */
+    private static void fillCircleUnion(DrawContext ctx, List<int[]> circles, int sw, int sh, int fillArgb) {
+        int top = sh, bot = 0;
+        for (int[] c : circles) { top = Math.min(top, c[1] - c[2]); bot = Math.max(bot, c[1] + c[2]); }
+        top = Math.max(0, top); bot = Math.min(sh, bot);
+        int n = circles.size();
+        int[] lo = new int[n], hi = new int[n];
+        for (int y = top; y < bot; y++) {
+            int m = 0;
+            for (int[] c : circles) {
+                int dy = y - c[1], rr = c[2];
+                if (dy < -rr || dy > rr) continue;
+                int dx = (int) Math.sqrt((double) rr * rr - (double) dy * dy);
+                lo[m] = c[0] - dx; hi[m] = c[0] + dx; m++;
+            }
+            if (m == 0) continue;
+            for (int i = 1; i < m; i++) {   // insertion sort by interval start
+                int a = lo[i], b = hi[i], j = i - 1;
+                while (j >= 0 && lo[j] > a) { lo[j + 1] = lo[j]; hi[j + 1] = hi[j]; j--; }
+                lo[j + 1] = a; hi[j + 1] = b;
+            }
+            int curL = lo[0], curR = hi[0];
+            for (int i = 1; i < m; i++) {
+                if (lo[i] <= curR) { if (hi[i] > curR) curR = hi[i]; }
+                else { emitUnionRow(ctx, curL, curR, y, sw, fillArgb); curL = lo[i]; curR = hi[i]; }
+            }
+            emitUnionRow(ctx, curL, curR, y, sw, fillArgb);
+        }
+    }
+
+    private static void emitUnionRow(DrawContext ctx, int x1, int x2, int y, int sw, int fillArgb) {
+        int a = Math.max(0, x1), b = Math.min(sw, x2);
+        if (b > a) ctx.fill(a, y, b, y + 1, fillArgb);
+    }
+
     // ── Player rendering ─────────────────────────────────────────────────────
 
     private void renderPlayers(DrawContext ctx,

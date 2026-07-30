@@ -54,6 +54,50 @@ public final class TownSearchOverlay {
     private static String selectedType = "";
     private static String selectedName = "";
     private static boolean favoritesOpen;
+
+    /** The nation currently selected in the panel (via a capital-star click or a nation search), else null. */
+    public static String selectedNationName() {
+        return "nation".equals(selectedType) && selectedName != null && !selectedName.isBlank()
+                ? selectedName : null;
+    }
+
+    // The nation whose join-range zone is being shown, toggled by the ◯ button in the panel's top-right.
+    // Explicit rather than "whatever is selected", so the zone stays up while you look around the map.
+    private static String rangeNation = null;
+
+    /** The nation whose join range should be drawn, or null when the overlay is off. */
+    public static String rangeNationName() { return rangeNation; }
+
+    /** Turns the join-range overlay on for {@code nation} (null/blank clears it). */
+    public static void showNationRange(String nation) {
+        rangeNation = nation == null || nation.isBlank() ? null : nation;
+    }
+
+    /**
+     * Entering Planning puts the bar straight into typing mode as a nation picker — unless a nation is
+     * already on screen (e.g. you came from the info panel's range button), in which case it adopts that one
+     * and skips the search entirely. Leaving the mode throws the plan away.
+     */
+    public static void onStatusModeChanged(int before, int after) {
+        if (after == PlanningOverlay.MODE) {
+            String preset = selectedNationName();
+            if (preset == null) preset = rangeNation;
+            if (preset != null && !preset.isBlank()) {
+                PlanningOverlay.setNation(preset);   // already know the nation: no search step needed
+                return;
+            }
+            query = "";
+            focused = true;                          // straight into typing
+            selected = 0;
+        } else if (before == PlanningOverlay.MODE) {
+            PlanningOverlay.reset();
+            rangeNation = null;
+        }
+    }
+
+    private static void toggleNationRange(String nation) {
+        rangeNation = nation.equalsIgnoreCase(rangeNation == null ? "" : rangeNation) ? null : nation;
+    }
     private static String cachedNeedle = null;
     private static int cachedTownCount = -1;
     private static int cachedTownDetailCount = -1;
@@ -67,6 +111,8 @@ public final class TownSearchOverlay {
     private static int infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH;
     private static int infoExpandX, infoExpandY, infoExpandW, infoExpandH;
     private static boolean infoExpandVisible;
+    private static int infoRangeX, infoRangeY, infoRangeW, infoRangeH;
+    private static boolean infoRangeVisible;
     private static int infoAnchorX, infoAnchorY;   // the right-side panel's top-left, for UI-Scale hit-testing
     private static boolean infoDiscordVisible;
     private static String infoDiscordUrl = "";
@@ -131,11 +177,14 @@ public final class TownSearchOverlay {
             // Empty bar: tell players how to open the historical archive (there's no other discoverable entry).
             // Kept short so the row lines up with the search bar's own width.
             if (query.isEmpty()) {
+                // Planning mode needs a nation before it can do anything, so it takes over this row until
+                // one is chosen; otherwise the row advertises the archive.
+                boolean planningPrompt = PlanningOverlay.isActive() && !PlanningOverlay.hasNation();
+                String hint = planningPrompt ? "§fPlease enter a nation" : "§7Type §fdd/mm/yyyy §7= archive";
                 int rowY = resultRowY(y, 0);
                 ctx.fill(x - 1, rowY - 1, x + WIDTH + 1, rowY + ROW_HEIGHT + 1, BORDER);
                 ctx.fill(x, rowY, x + WIDTH, rowY + ROW_HEIGHT, BG);
-                ctx.drawText(tr, trimToWidth(tr, "§7Type §fdd/mm/yyyy §7= archive", WIDTH - 14),
-                        x + 7, rowY + 5, 0xFFFFFFFF, true);
+                ctx.drawText(tr, trimToWidth(tr, hint, WIDTH - 14), x + 7, rowY + 5, 0xFFFFFFFF, true);
             }
         }
         // The selected info panel is tied to the search bar: an empty bar means no lingering right-clicked
@@ -169,6 +218,10 @@ public final class TownSearchOverlay {
         if (favoriteClick.consumed()) return favoriteClick;
         if (infoDiscordVisible && inside(infoMx, infoMy, infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH)) {
             TownInfoOverlay.openDiscord(infoDiscordUrl);
+            return ClickResult.consumedResult();
+        }
+        if (infoRangeVisible && inside(infoMx, infoMy, infoRangeX, infoRangeY, infoRangeW, infoRangeH)) {
+            toggleNationRange(selectedName);
             return ClickResult.consumedResult();
         }
         if (infoExpandVisible && inside(infoMx, infoMy, infoExpandX, infoExpandY, infoExpandW, infoExpandH)) {
@@ -502,6 +555,18 @@ public final class TownSearchOverlay {
         String needle = query.trim().toLowerCase(Locale.ROOT);
         if (needle.isEmpty()) return List.of();
 
+        // While Planning waits for a nation the bar is a nation picker: no archive shortcut, no other types.
+        boolean planningPick = PlanningOverlay.isActive() && !PlanningOverlay.hasNation();
+        if (planningPick) {
+            List<Result> out = new ArrayList<>();
+            for (EarthMcNationData n : apiNations) {
+                if (n.name() == null || !n.name().toLowerCase(Locale.ROOT).contains(needle)) continue;
+                out.add(new Result(n.name(), null, 0, "nation", n.name()));
+                if (out.size() >= MAX_RESULTS) break;
+            }
+            return out;
+        }
+
         // A dd/mm/yyyy query is an archive request: load the Wayback snapshot nearest that date.
         int archiveDate = parseArchiveDate(query.trim());
         if (archiveDate > 0) {
@@ -750,6 +815,9 @@ public final class TownSearchOverlay {
         }
         selectedType = result.type();
         selectedName = result.name();
+        if ("nation".equals(result.type()) && PlanningOverlay.isActive()) {
+            PlanningOverlay.setNation(result.name());   // the prompt clears once a nation is picked
+        }
         TownInfoOverlay.dismiss();
     }
 
@@ -819,6 +887,32 @@ public final class TownSearchOverlay {
         infoLinks.clear();
     }
 
+    /** A smooth 1px ring, drawn as short rotated quads so it reads as a circle rather than a stair-stepped box. */
+    private static void drawRing(DrawContext ctx, double cx, double cy, double r, int color) {
+        if (r < 1.0) return;
+        int segments = Math.max(16, Math.min(64, (int) Math.round(r * 6)));
+        org.joml.Matrix3x2fStack m = ctx.getMatrices();
+        double px = cx + r, py = cy;
+        for (int i = 1; i <= segments; i++) {
+            double a = Math.PI * 2 * i / segments;
+            double nx = cx + Math.cos(a) * r, ny = cy + Math.sin(a) * r;
+            double dx = nx - px, dy = ny - py;
+            double len = Math.hypot(dx, dy);
+            if (len >= 0.01) {
+                m.pushMatrix();
+                try {
+                    m.translate((float) px, (float) py);
+                    m.rotate((float) Math.atan2(dy, dx));
+                    m.scale((float) len, 1f);
+                    ctx.fill(0, 0, 1, 1, color);
+                } finally {
+                    m.popMatrix();
+                }
+            }
+            px = nx; py = ny;
+        }
+    }
+
     private static void renderSelectedInfo(DrawContext ctx, TextRenderer tr, int sw, int sh,
                                            List<TownData> towns, List<PlayerMarker> players,
                                            Map<String, TownPopupData> townDetails,
@@ -862,6 +956,31 @@ public final class TownSearchOverlay {
 
         int mx = scaled ? (int) Math.round(UiScale.unscale(scaledMouseX(), infoAnchorX)) : scaledMouseX();
         int my = scaled ? (int) Math.round(UiScale.unscale(scaledMouseY(), infoAnchorY)) : scaledMouseY();
+
+        // Join-range toggle: a small ring in the top-right of a nation's panel. Labels itself on hover so the
+        // icon doesn't need explaining, and stays lit while its zone is on the map.
+        infoRangeVisible = false;
+        if ("nation".equals(selectedType) && TownyMapMod.getConfig().nationRangeEnabled) {
+            int d = 13;
+            infoRangeX = x + boxW - 6 - d;
+            infoRangeY = y + 5;
+            infoRangeW = d;
+            infoRangeH = d;
+            infoRangeVisible = true;
+            boolean on = selectedName.equalsIgnoreCase(rangeNation == null ? "" : rangeNation);
+            boolean hov = inside(mx, my, infoRangeX, infoRangeY, d, d);
+            int ring = on ? 0xFF6FD3A0 : hov ? 0xFFFFFFFF : 0xFF9AA0A8;
+            drawRing(ctx, infoRangeX + d / 2.0, infoRangeY + d / 2.0, d / 2.0 - 1.0, ring);
+            if (on) ctx.fill(infoRangeX + d / 2 - 1, infoRangeY + d / 2 - 1,
+                             infoRangeX + d / 2 + 1, infoRangeY + d / 2 + 1, ring);
+            if (hov) {   // left of the ring, so it never runs off the screen edge
+                String label = "Nation Range";
+                int lw = tr.getWidth(label);
+                int lx = infoRangeX - 4 - lw, ly = infoRangeY + 3;
+                ctx.fill(lx - 3, ly - 3, lx + lw + 3, ly + 10, 0xE0101114);
+                ctx.drawText(tr, label, lx, ly, 0xFFFFFFFF, false);
+            }
+        }
         int ty = y + 7;
         for (InfoRow row : lines) {
             if (row.hasLink()) {

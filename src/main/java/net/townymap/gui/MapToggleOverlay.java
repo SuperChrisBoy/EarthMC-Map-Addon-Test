@@ -85,7 +85,11 @@ public final class MapToggleOverlay {
             switch (row) {
                 case 0 -> config.squaremapBackgroundEnabled = !config.squaremapBackgroundEnabled;
                 case 1 -> config.borderOverlayMode = (config.borderOverlayMode + (backward ? 2 : 1)) % 3;
-                case 2 -> config.townStatusOverlayMode = TownyMapMod.nextStatusMode(config.townStatusOverlayMode, backward);
+                case 2 -> {
+                    int before = config.townStatusOverlayMode;
+                    config.townStatusOverlayMode = TownyMapMod.nextStatusMode(before, backward);
+                    TownSearchOverlay.onStatusModeChanged(before, config.townStatusOverlayMode);
+                }
                 case 3 -> config.chunkGridEnabled = !config.chunkGridEnabled;
                 case 4 -> {
                     if (config.chunkCounterEnabled) ChunkCounterOverlay.flushSelection();
@@ -145,7 +149,8 @@ public final class MapToggleOverlay {
         return -1;
     }
 
-    private static int togglesTop(int sh) {
+    /** Top edge of the toggle column — other left-side HUD must stay above this. */
+    public static int togglesTop(int sh) {
         int totalHeight = TOGGLE_ROWS * HEIGHT + (TOGGLE_ROWS - 1) * GAP + SETTINGS_GAP + HEIGHT;
         return Math.max(8, (sh - totalHeight) / 2);
     }
@@ -281,6 +286,7 @@ public final class MapToggleOverlay {
             case 3 -> "Open";
             case 4 -> "Meganations";
             case 5 -> "Alliances";
+            case 6 -> "Planning";
             default -> "None";
         };
     }

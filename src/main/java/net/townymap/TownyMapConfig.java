@@ -56,6 +56,9 @@ public class TownyMapConfig {
     // keeping it centred on the camera) so you can zoom out to see the whole EarthMC map. On by default.
     public boolean worldMapOverview = true;
     public boolean nationStarsEnabled = true;
+    /** Show a nation's join-range zone on the world map when it's selected: a 5k circle around the capital
+     *  plus a 1.5k circle around every town, whose union is where a town could join that nation. */
+    public boolean nationRangeEnabled = true;
     /** At far zoom, collapse small towns to a single crisp dot instead of drawing their outline. Off =
      *  always draw the real outline (towns keep their shape until they're literally sub-pixel). */
     public boolean farZoomTownDots = false;
