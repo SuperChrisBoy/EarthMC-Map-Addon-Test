@@ -38,7 +38,10 @@ public final class TownyMinimapOverlay {
     // outline entirely and the one at the cutoff got a half-drawn box; which towns lost out shifted as the
     // window snapped while walking, which is what made the borders look glitchy.
     private static final int MAX_CHUNK_EDGES_PER_FRAME = 24_000;
-    private static final int MAX_CHUNK_CELLS_PER_FRAME = 7000;
+    // Cells in the cached chunk mask. Only rebuilt when the window or the town data changes, so this can be
+    // generous; at 7000 (~83x83 chunks) a zoomed-out enlarged minimap exceeded it and the overlay bailed out
+    // entirely, which looked like the town borders randomly vanishing.
+    private static final int MAX_CHUNK_CELLS_PER_FRAME = 40_000;
     private static final int MAX_MINIMAP_CHUNK_GRID_LINES = 260;
     private static final int MAX_MINIMAP_LABELS = 24;
     private static final int MAX_MINIMAP_WAYPOINTS_ON_TOP = 96;
@@ -197,13 +200,31 @@ public final class TownyMinimapOverlay {
         int chunkWidth = maxChunkX - minChunkX + 1;
         int chunkHeight = maxChunkZ - minChunkZ + 1;
         if (chunkWidth <= 0 || chunkHeight <= 0 || chunkWidth * chunkHeight > MAX_CHUNK_CELLS_PER_FRAME) {
+            // Drop the cache padding first — it only exists to make the window change less often.
             minChunkX = rawMinChunkX;
             maxChunkX = rawMaxChunkX;
             minChunkZ = rawMinChunkZ;
             maxChunkZ = rawMaxChunkZ;
             chunkWidth = maxChunkX - minChunkX + 1;
             chunkHeight = maxChunkZ - minChunkZ + 1;
-            if (chunkWidth <= 0 || chunkHeight <= 0 || chunkWidth * chunkHeight > MAX_CHUNK_CELLS_PER_FRAME) {
+        }
+        if (chunkWidth <= 0 || chunkHeight <= 0) {
+            recordMinimapFrameCost(renderStartNs);
+            return;
+        }
+        if (chunkWidth * chunkHeight > MAX_CHUNK_CELLS_PER_FRAME) {
+            // Still too wide: draw the middle rather than nothing. Bailing here meant the whole overlay —
+            // borders, fills and names — disappeared at wide zoom on a large minimap.
+            int halfSpan = (int) ((Math.sqrt(MAX_CHUNK_CELLS_PER_FRAME) - 1) / 2);
+            int playerChunkX = floorToChunk(playerX);
+            int playerChunkZ = floorToChunk(playerZ);
+            minChunkX = Math.max(minChunkX, playerChunkX - halfSpan);
+            maxChunkX = Math.min(maxChunkX, playerChunkX + halfSpan);
+            minChunkZ = Math.max(minChunkZ, playerChunkZ - halfSpan);
+            maxChunkZ = Math.min(maxChunkZ, playerChunkZ + halfSpan);
+            chunkWidth = maxChunkX - minChunkX + 1;
+            chunkHeight = maxChunkZ - minChunkZ + 1;
+            if (chunkWidth <= 0 || chunkHeight <= 0) {
                 recordMinimapFrameCost(renderStartNs);
                 return;
             }
