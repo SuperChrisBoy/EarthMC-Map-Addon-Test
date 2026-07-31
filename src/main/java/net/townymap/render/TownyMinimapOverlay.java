@@ -36,12 +36,21 @@ public final class TownyMinimapOverlay {
     private static final int FAVORITE_OUTLINE = 0xFFFFE066;
     private static final int FAVORITE_FILL = 0x44FFE066;
     private static final double EXTRA_BLOCK_PADDING = 96.0;
-    private static final int MAX_CHUNK_EDGES_PER_FRAME = 1200;
-    private static final int MAX_CHUNK_CELLS_PER_FRAME = 7000;
+    // Edge budget for one cached build (not per frame — buildRenderData only runs when the window or the
+    // town data changes). At 1200 a busy view ran out mid-scan, so towns later in the scan lost their
+    // outline entirely and the one at the cutoff got a half-drawn box; which towns lost out shifted as the
+    // window snapped while walking, which is what made the borders look glitchy.
+    private static final int MAX_CHUNK_EDGES_PER_FRAME = 24_000;
+    // Cells in the cached chunk mask. Only rebuilt when the window or the town data changes, so this can be
+    // generous; at 7000 (~83x83 chunks) a zoomed-out enlarged minimap exceeded it and the overlay bailed out
+    // entirely, which looked like the town borders randomly vanishing.
+    private static final int MAX_CHUNK_CELLS_PER_FRAME = 40_000;
     private static final int MAX_MINIMAP_CHUNK_GRID_LINES = 260;
     private static final int MAX_MINIMAP_LABELS = 24;
     private static final int MINIMAP_CLIP_INSET = 0;
     private static final int MINIMAP_RENDER_CACHE_STEP_CHUNKS = 4;
+    /** Chunks of neighbour context kept outside the drawn window, so boundary chunks know their neighbours. */
+    private static final int EDGE_MARGIN_CHUNKS = 1;
     private static final int MINIMAP_RENDER_CACHE_PADDING_CHUNKS = 4;
     private static final long MINIMAP_SHAPE_CACHE_MS = 100L;
     private static final double MIN_MINIMAP_CHUNK_GRID_SPACING = 3.5;
@@ -177,13 +186,30 @@ public final class TownyMinimapOverlay {
         int chunkWidth = maxChunkX - minChunkX + 1;
         int chunkHeight = maxChunkZ - minChunkZ + 1;
         if (chunkWidth <= 0 || chunkHeight <= 0 || chunkWidth * chunkHeight > MAX_CHUNK_CELLS_PER_FRAME) {
+            // Drop the cache padding first — it only exists to make the window change less often.
             minChunkX = rawMinChunkX;
             maxChunkX = rawMaxChunkX;
             minChunkZ = rawMinChunkZ;
             maxChunkZ = rawMaxChunkZ;
             chunkWidth = maxChunkX - minChunkX + 1;
             chunkHeight = maxChunkZ - minChunkZ + 1;
-            if (chunkWidth <= 0 || chunkHeight <= 0 || chunkWidth * chunkHeight > MAX_CHUNK_CELLS_PER_FRAME) {
+        }
+        if (chunkWidth <= 0 || chunkHeight <= 0) {
+            return;
+        }
+        if (chunkWidth * chunkHeight > MAX_CHUNK_CELLS_PER_FRAME) {
+            // Still too wide: draw the middle rather than nothing. Bailing here meant the whole overlay —
+            // borders, fills and names — disappeared at wide zoom on a large minimap.
+            int halfSpan = (int) ((Math.sqrt(MAX_CHUNK_CELLS_PER_FRAME) - 1) / 2);
+            int playerChunkX = floorToChunk(playerX);
+            int playerChunkZ = floorToChunk(playerZ);
+            minChunkX = Math.max(minChunkX, playerChunkX - halfSpan);
+            maxChunkX = Math.min(maxChunkX, playerChunkX + halfSpan);
+            minChunkZ = Math.max(minChunkZ, playerChunkZ - halfSpan);
+            maxChunkZ = Math.min(maxChunkZ, playerChunkZ + halfSpan);
+            chunkWidth = maxChunkX - minChunkX + 1;
+            chunkHeight = maxChunkZ - minChunkZ + 1;
+            if (chunkWidth <= 0 || chunkHeight <= 0) {
                 return;
             }
         }
@@ -573,9 +599,17 @@ public final class TownyMinimapOverlay {
             return cachedRenderData;
         }
 
-        TownData[] chunkTowns = buildVisibleChunkMask(towns, minChunkX, minChunkZ, chunkWidth, chunkHeight);
-        closeOneChunkHoles(chunkTowns, chunkWidth, chunkHeight);
-        VisibleRenderData renderData = buildRenderData(chunkTowns, minChunkX, minChunkZ, chunkWidth, chunkHeight);
+        // One chunk of margin around the window: without it a town that continues past the edge looks like
+        // it ends there, and a border was drawn along the window boundary — a line that moved with the
+        // window as you walked rather than sitting on the real claim edge.
+        int padMinChunkX = minChunkX - EDGE_MARGIN_CHUNKS;
+        int padMinChunkZ = minChunkZ - EDGE_MARGIN_CHUNKS;
+        int padWidth = chunkWidth + 2 * EDGE_MARGIN_CHUNKS;
+        int padHeight = chunkHeight + 2 * EDGE_MARGIN_CHUNKS;
+        TownData[] chunkTowns = buildVisibleChunkMask(towns, padMinChunkX, padMinChunkZ, padWidth, padHeight);
+        closeOneChunkHoles(chunkTowns, padWidth, padHeight);
+        VisibleRenderData renderData = buildRenderData(chunkTowns, padMinChunkX, padMinChunkZ,
+                padWidth, padHeight, EDGE_MARGIN_CHUNKS);
         cachedTownSource = towns;
         cachedMinChunkX = minChunkX;
         cachedMinChunkZ = minChunkZ;
@@ -586,17 +620,17 @@ public final class TownyMinimapOverlay {
     }
 
     private static VisibleRenderData buildRenderData(TownData[] chunkTowns, int minChunkX, int minChunkZ,
-                                                     int chunkWidth, int chunkHeight) {
+                                                     int chunkWidth, int chunkHeight, int margin) {
         ArrayList<ChunkFill> fillSpans = new ArrayList<>();
         ArrayList<ChunkEdge> edges = new ArrayList<>();
         Map<String, LabelAnchor> anchors = new LinkedHashMap<>();
 
-        for (int z = 0; z < chunkHeight; z++) {
+        for (int z = margin; z < chunkHeight - margin; z++) {
             int blockZ = (minChunkZ + z) * CHUNK_SIZE;
             double labelZ = blockZ + CHUNK_SIZE / 2.0;
             TownData runTown = null;
-            int runStartX = 0;
-            for (int x = 0; x < chunkWidth; x++) {
+            int runStartX = margin;
+            for (int x = margin; x < chunkWidth - margin; x++) {
                 TownData town = chunkTowns[index(x, z, chunkWidth)];
                 int blockX = (minChunkX + x) * CHUNK_SIZE;
 
@@ -613,26 +647,25 @@ public final class TownyMinimapOverlay {
                 anchors.computeIfAbsent(town.name(), LabelAnchor::new)
                         .add(blockX + CHUNK_SIZE / 2.0, labelZ);
 
-                if (edges.size() >= MAX_CHUNK_EDGES_PER_FRAME) continue;
-                if (!sameTown(town, getTown(chunkTowns, x, z - 1, chunkWidth, chunkHeight))) {
-                    edges.add(new ChunkEdge(blockX, blockZ, blockX + CHUNK_SIZE, blockZ, town));
-                }
-                if (edges.size() >= MAX_CHUNK_EDGES_PER_FRAME) continue;
-                if (!sameTown(town, getTown(chunkTowns, x + 1, z, chunkWidth, chunkHeight))) {
-                    edges.add(new ChunkEdge(blockX + CHUNK_SIZE, blockZ, blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE, town));
-                }
-                if (edges.size() >= MAX_CHUNK_EDGES_PER_FRAME) continue;
-                if (!sameTown(town, getTown(chunkTowns, x, z + 1, chunkWidth, chunkHeight))) {
-                    edges.add(new ChunkEdge(blockX, blockZ + CHUNK_SIZE, blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE, town));
-                }
-                if (edges.size() >= MAX_CHUNK_EDGES_PER_FRAME) continue;
-                if (!sameTown(town, getTown(chunkTowns, x - 1, z, chunkWidth, chunkHeight))) {
-                    edges.add(new ChunkEdge(blockX, blockZ, blockX, blockZ + CHUNK_SIZE, town));
+                // All four sides or none: a partial set draws a box with a missing wall.
+                if (edges.size() + 4 <= MAX_CHUNK_EDGES_PER_FRAME) {
+                    if (!sameTown(town, getTown(chunkTowns, x, z - 1, chunkWidth, chunkHeight))) {
+                        edges.add(new ChunkEdge(blockX, blockZ, blockX + CHUNK_SIZE, blockZ, town));
+                    }
+                    if (!sameTown(town, getTown(chunkTowns, x + 1, z, chunkWidth, chunkHeight))) {
+                        edges.add(new ChunkEdge(blockX + CHUNK_SIZE, blockZ, blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE, town));
+                    }
+                    if (!sameTown(town, getTown(chunkTowns, x, z + 1, chunkWidth, chunkHeight))) {
+                        edges.add(new ChunkEdge(blockX, blockZ + CHUNK_SIZE, blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE, town));
+                    }
+                    if (!sameTown(town, getTown(chunkTowns, x - 1, z, chunkWidth, chunkHeight))) {
+                        edges.add(new ChunkEdge(blockX, blockZ, blockX, blockZ + CHUNK_SIZE, town));
+                    }
                 }
             }
             if (runTown != null) {
                 fillSpans.add(new ChunkFill((minChunkX + runStartX) * CHUNK_SIZE, blockZ,
-                        (chunkWidth - runStartX) * CHUNK_SIZE, runTown));
+                        ((chunkWidth - margin) - runStartX) * CHUNK_SIZE, runTown));
             }
         }
 

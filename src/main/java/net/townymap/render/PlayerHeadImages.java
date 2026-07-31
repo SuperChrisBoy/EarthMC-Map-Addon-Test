@@ -32,7 +32,11 @@ public final class PlayerHeadImages {
 
     private static final HttpClient HTTP = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10)).build();
-    private static final ConcurrentHashMap<String, Identifier> LOADED = new ConcurrentHashMap<>();
+    /** Cap on cached head textures. Each is a GPU texture that has to be released, not just dropped. */
+    private static final int MAX_HEADS = 256;
+    /** Access-ordered so the least recently drawn head is the one evicted. Guarded by its own monitor. */
+    private static final java.util.LinkedHashMap<String, Identifier> LOADED =
+            new java.util.LinkedHashMap<>(64, 0.75f, true);
     private static final Set<String> INFLIGHT = ConcurrentHashMap.newKeySet();
     private static final Map<String, Long> FAILED_AT = new ConcurrentHashMap<>();
 
@@ -42,7 +46,10 @@ public final class PlayerHeadImages {
     public static Identifier get(String name) {
         if (name == null || name.isBlank()) return null;
         String key = name.toLowerCase(Locale.ROOT);
-        Identifier id = LOADED.get(key);
+        Identifier id;
+        synchronized (LOADED) {
+            id = LOADED.get(key);
+        }
         if (id != null) return id;
         Long failed = FAILED_AT.get(key);
         if (failed != null && System.currentTimeMillis() - failed < RETRY_MS) return null;   // back off
@@ -73,7 +80,17 @@ public final class PlayerHeadImages {
                     NativeImage img = NativeImage.read(data);   // texture upload must run on the render thread
                     Identifier id = Identifier.fromNamespaceAndPath("townymapaddon", "head/" + key.replaceAll("[^a-z0-9_]", "_"));
                     mc.getTextureManager().register(id, new DynamicTexture(() -> "head " + key, img));
-                    LOADED.put(key, id);
+                    Identifier evicted = null;
+                    synchronized (LOADED) {
+                        LOADED.put(key, id);
+                        if (LOADED.size() > MAX_HEADS) {
+                            var eldest = LOADED.entrySet().iterator().next();
+                            evicted = eldest.getValue();
+                            LOADED.remove(eldest.getKey());
+                        }
+                    }
+                    // Release on the render thread, where we already are.
+                    if (evicted != null) mc.getTextureManager().release(evicted);
                     FAILED_AT.remove(key);
                 } catch (Exception e) {
                     FAILED_AT.put(key, System.currentTimeMillis());
