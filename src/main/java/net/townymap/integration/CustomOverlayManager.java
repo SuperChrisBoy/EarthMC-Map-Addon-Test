@@ -308,15 +308,22 @@ public final class CustomOverlayManager {
         }
         if (el.isJsonObject()) {
             JsonObject o = el.getAsJsonObject();
-            if (o.has("x") && o.has("z")) {
-                return new int[]{(int) Math.round(o.get("x").getAsDouble()), (int) Math.round(o.get("z").getAsDouble())};
+            if (isNum(o, "x") && isNum(o, "z")) {
+                return new int[]{(int) Math.round(o.get("x").getAsDouble()),
+                                 (int) Math.round(o.get("z").getAsDouble())};
             }
         }
         return null;
     }
 
+    /** True when the key holds an actual number — has() alone is true for a JSON null, which then throws. */
+    private static boolean isNum(JsonObject o, String key) {
+        JsonElement el = o.get(key);
+        return el != null && el.isJsonPrimitive() && el.getAsJsonPrimitive().isNumber();
+    }
+
     private static Marker markerOf(JsonObject o) {
-        if (o.has("x") && o.has("z")) {
+        if (isNum(o, "x") && isNum(o, "z")) {
             return new Marker(nameOf(o),
                     (int) Math.round(o.get("x").getAsDouble()), (int) Math.round(o.get("z").getAsDouble()));
         }

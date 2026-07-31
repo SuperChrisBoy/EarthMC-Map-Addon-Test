@@ -66,7 +66,7 @@ public abstract class MixinGuiMap {
 
     // ── All overlay rendering at HEAD (clean GL/matrix state) ─────────────────
 
-    @Inject(
+    @Inject(require = 0, 
             method = "extractRenderState",
             at = @At(
                     value = "FIELD",
@@ -130,7 +130,7 @@ public abstract class MixinGuiMap {
                 : original;
     }
 
-    @Inject(method = "renderPreDropdown", at = @At("HEAD"), remap = false)
+    @Inject(require = 0, method = "renderPreDropdown", at = @At("HEAD"), remap = false)
     private void onRenderPreDropdown(GuiGraphicsExtractor ctx, int mouseX, int mouseY,
                                      float delta, CallbackInfo ci) {
         try {
@@ -281,7 +281,7 @@ public abstract class MixinGuiMap {
 
     // ── Mouse click ───────────────────────────────────────────────────────────
 
-    @Inject(method = "mouseClicked", at = @At("HEAD"), remap = false, cancellable = true)
+    @Inject(require = 0, method = "mouseClicked", at = @At("HEAD"), remap = false, cancellable = true)
     private void onMouseClicked(MouseButtonEvent click, boolean bl,
                                 CallbackInfoReturnable<Boolean> cir) {
         try {
@@ -405,7 +405,7 @@ public abstract class MixinGuiMap {
         }
     }
 
-    @Inject(method = "keyPressed", at = @At("HEAD"), remap = false, cancellable = true)
+    @Inject(require = 0, method = "keyPressed", at = @At("HEAD"), remap = false, cancellable = true)
     private void onKeyPressed(KeyEvent input,
                               CallbackInfoReturnable<Boolean> cir) {
         try {
@@ -427,7 +427,7 @@ public abstract class MixinGuiMap {
         }
     }
 
-    @Inject(method = "charTyped", at = @At("HEAD"), remap = false, cancellable = true)
+    @Inject(require = 0, method = "charTyped", at = @At("HEAD"), remap = false, cancellable = true)
     private void onCharTyped(CharacterEvent input, CallbackInfoReturnable<Boolean> cir) {
         try {
             if (!input.isAllowedChatCharacter()) return;

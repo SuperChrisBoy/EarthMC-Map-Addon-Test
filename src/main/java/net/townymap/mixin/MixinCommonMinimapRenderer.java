@@ -12,7 +12,7 @@ import xaero.hud.minimap.module.MinimapSession;
 @Mixin(value = xaero.common.minimap.render.MinimapRenderer.class, remap = false)
 public abstract class MixinCommonMinimapRenderer {
 
-    @Inject(
+    @Inject(require = 0, 
             method = "renderMinimap(Lxaero/hud/minimap/module/MinimapSession;Lxaero/common/minimap/MinimapProcessor;IIIIDFIFLxaero/lib/client/graphics/XaeroBufferProvider;)V",
             at = @At("HEAD"),
             remap = false
@@ -32,7 +32,7 @@ public abstract class MixinCommonMinimapRenderer {
         TownyMapMod.setSuppressNativeMinimapCompass(session);
     }
 
-    @Inject(
+    @Inject(require = 0, 
             method = "renderMinimap(Lxaero/hud/minimap/module/MinimapSession;Lxaero/common/minimap/MinimapProcessor;IIIIDFIFLxaero/lib/client/graphics/XaeroBufferProvider;)V",
             at = @At("RETURN"),
             remap = false
@@ -52,7 +52,7 @@ public abstract class MixinCommonMinimapRenderer {
         TownyMapMod.clearSuppressNativeMinimapCompass();
     }
 
-    @Inject(
+    @Inject(require = 0, 
             method = "renderCompass(Lcom/mojang/blaze3d/vertex/PoseStack;Lxaero/common/settings/ModSettings;Lxaero/lib/client/config/ClientConfigManager;Lxaero/lib/client/graphics/XaeroBufferProvider;IIIDDZF)V",
             at = @At("HEAD"),
             cancellable = true,
