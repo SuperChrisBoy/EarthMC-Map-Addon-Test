@@ -90,6 +90,19 @@ public final class TownyMinimapOverlay {
         cachedRenderData = new VisibleRenderData(new TownData[0], List.of(), List.of(), List.of(), List.of());
     }
 
+    /**
+     * How many blocks span the width of the minimap.
+     * <p>
+     * Xaero applies its zoom as a <em>magnification</em> of the map quad, so a higher zoom
+     * makes each block bigger and shrinks the visible span — the span is the map size
+     * divided by the zoom, not multiplied by it. Both agree at zoom 1 (the default), which
+     * is why getting this backwards only misaligned the overlay for players who had zoomed in.
+     */
+    private static double minimapBlocksAcross(MinimapSession session) {
+        double zoom = Math.max(0.25, session.getProcessor().getMinimapZoom());
+        return Math.max(8.0, session.getProcessor().getMinimapSize() / zoom);
+    }
+
     public static void render(DrawContext ctx, MinimapSession session, ModuleRenderContext rc) {
         render(ctx, session, rc.x, rc.y, Math.min(rc.w, rc.h));
     }
@@ -113,8 +126,7 @@ public final class TownyMinimapOverlay {
         if (size <= 12) return;
 
         if (session.getProcessor().isCaveModeDisplayed()) return;
-        double zoom = Math.max(0.25, session.getProcessor().getMinimapZoom());
-        double blocksAcross = Math.max(64.0, session.getProcessor().getMinimapSize() * zoom);
+        double blocksAcross = minimapBlocksAcross(session);
         double pixelsPerBlock = size / blocksAcross;
         if (pixelsPerBlock <= 0) return;
 
@@ -350,8 +362,7 @@ public final class TownyMinimapOverlay {
         boolean dimensionScaleDistance = waypointConfig.dimensionScaleDistance();
         double maxDistance = waypointConfig.maxDistance();
 
-        double zoom = Math.max(0.25, session.getProcessor().getMinimapZoom());
-        double blocksAcross = Math.max(64.0, session.getProcessor().getMinimapSize() * zoom);
+        double blocksAcross = minimapBlocksAcross(session);
         double pixelsPerBlock = size / blocksAcross;
         if (pixelsPerBlock <= 0) return;
 
@@ -1439,8 +1450,7 @@ public final class TownyMinimapOverlay {
         ClientPlayerEntity player = client.player;
         if (player == null || client.world == null || size <= 12) return;
 
-        double zoom = Math.max(0.25, session.getProcessor().getMinimapZoom());
-        double blocksAcross = Math.max(64.0, session.getProcessor().getMinimapSize() * zoom);
+        double blocksAcross = minimapBlocksAcross(session);
         double pixelsPerBlock = size / blocksAcross;
         if (pixelsPerBlock <= 0) return;
 
@@ -1576,10 +1586,17 @@ public final class TownyMinimapOverlay {
         return Math.toRadians(180.0 - client.gameRenderer.getCamera().getYaw());
     }
 
+    /**
+     * Mirrors Xaero's own call, which is {@code getEffectiveNorthLocked(minimapSize / 2, SHAPE)}.
+     * The shape matters: Xaero force-locks north on a <em>square</em> minimap larger than 180,
+     * but leaves a circular one free to rotate. Passing a hard-coded 0 (square) here made us
+     * treat a large circular minimap as north-locked, so the overlay stayed north-up while
+     * Xaero's terrain rotated under it.
+     */
     private static boolean isMinimapNorthLocked(MinimapSession session) {
         try {
             return MinimapConfigClientUtils.getEffectiveNorthLocked(
-                    session.getProcessor().getMinimapSize() / 2, 0);
+                    session.getProcessor().getMinimapSize() / 2, xaeroMinimapShape(session));
         } catch (RuntimeException | LinkageError ignored) {
             return false;
         }
