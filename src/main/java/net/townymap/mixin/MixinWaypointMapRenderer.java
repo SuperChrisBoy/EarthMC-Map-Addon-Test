@@ -16,7 +16,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(value = xaero.hud.minimap.waypoint.render.WaypointMapRenderer.class, remap = false)
 public class MixinWaypointMapRenderer {
 
-    @Inject(
+    @Inject(require = 0, 
             method = "shouldRender(Lxaero/hud/minimap/element/render/MinimapElementRenderLocation;)Z",
             at = @At("HEAD"),
             cancellable = true,

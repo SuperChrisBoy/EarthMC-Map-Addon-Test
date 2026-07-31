@@ -14,7 +14,7 @@ import xaero.hud.render.module.ModuleRenderContext;
 @Mixin(value = MinimapRenderer.class, remap = false)
 public class MixinMinimapModuleRenderer {
 
-    @Inject(
+    @Inject(require = 0, 
             method = "render(Lxaero/hud/minimap/module/MinimapSession;Lxaero/hud/render/module/ModuleRenderContext;Lnet/minecraft/class_332;F)V",
             at = @At("HEAD"),
             cancellable = true,
@@ -33,7 +33,7 @@ public class MixinMinimapModuleRenderer {
         TownyMapMod.setSuppressNativeMinimapCompass(session);
     }
 
-    @Inject(
+    @Inject(require = 0, 
             method = "render(Lxaero/hud/minimap/module/MinimapSession;Lxaero/hud/render/module/ModuleRenderContext;Lnet/minecraft/class_332;F)V",
             at = @At("RETURN"),
             remap = false
@@ -46,7 +46,7 @@ public class MixinMinimapModuleRenderer {
         TownyMapMod.clearSuppressNativeMinimapCompass();
     }
 
-    @Redirect(
+    @Redirect(require = 0, 
             method = "render(Lxaero/hud/minimap/module/MinimapSession;Lxaero/hud/render/module/ModuleRenderContext;Lnet/minecraft/class_332;F)V",
             at = @At(
                     value = "INVOKE",

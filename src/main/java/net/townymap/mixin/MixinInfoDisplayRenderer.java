@@ -16,7 +16,7 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 @Mixin(value = xaero.hud.minimap.info.render.InfoDisplayRenderer.class, remap = false)
 public class MixinInfoDisplayRenderer {
 
-    @Redirect(
+    @Redirect(require = 0, 
             method = "render(Lxaero/hud/minimap/module/MinimapSession;Lxaero/hud/minimap/Minimap;IILnet/minecraft/class_2338;IIFLnet/minecraft/class_332;)V",
             at = @At(
                     value = "INVOKE",
