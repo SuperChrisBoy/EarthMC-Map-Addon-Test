@@ -58,6 +58,80 @@ public final class XaeroWaypointBridge {
         return true;
     }
 
+    /**
+     * Adds one temporary shop waypoint. The coordinates are literal in-world positions in the
+     * dimension the player is standing in, so unlike {@link #createRouteWaypoint} they are used
+     * as-is with no overworld conversion.
+     *
+     * @param key packed position, embedded in the symbol so {@link #removeShopWaypoints} can find it
+     *            again without depending on the (user-visible, truncatable) name
+     */
+    public static boolean createShopWaypoint(long key, int x, int y, int z, String label) {
+        WaypointSet set = currentWaypointSet();
+        if (set == null) return false;
+
+        Waypoint waypoint = new Waypoint(
+                x, y, z,
+                cleanLabel(label),
+                shopSymbol(key),
+                WaypointColor.GOLD,
+                WaypointPurpose.NORMAL,
+                true,
+                false
+        );
+        set.add(waypoint, true);
+        touch();
+        return true;
+    }
+
+    /** Removes the shop waypoints matching the given packed positions. */
+    public static void removeShopWaypoints(java.util.Collection<Long> keys) {
+        if (keys == null || keys.isEmpty()) return;
+        WaypointSet set = currentWaypointSet();
+        if (set == null) return;
+
+        java.util.Set<String> wanted = new java.util.HashSet<>();
+        for (Long key : keys) {
+            if (key != null) wanted.add(shopSymbol(key));
+        }
+        List<Waypoint> toRemove = new ArrayList<>();
+        for (Waypoint waypoint : set.getWaypoints()) {
+            if (waypoint.isTemporary()
+                    && waypoint.getName() != null
+                    && waypoint.getName().startsWith(ShopWaypoints.SHOP_PREFIX)
+                    && wanted.contains(waypoint.getSymbol())) {
+                toRemove.add(waypoint);
+            }
+        }
+        if (toRemove.isEmpty()) return;
+        for (Waypoint waypoint : toRemove) {
+            set.remove(waypoint);
+        }
+        touch();
+    }
+
+    /** Short, stable per-position tag. Xaero shows the symbol on the icon, so keep it to two chars. */
+    private static String shopSymbol(long key) {
+        return "$" + Long.toString(Math.floorMod(key, 36L), 36).toUpperCase(java.util.Locale.ROOT);
+    }
+
+    private static WaypointSet currentWaypointSet() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.player == null) return null;
+        MinimapSession session = BuiltInHudModules.MINIMAP.getCurrentSession();
+        if (session == null || session.getWorldManager() == null) return null;
+        MinimapWorld world = session.getWorldManager().getCurrentWorld();
+        if (world == null) return null;
+        return world.getCurrentWaypointSet();
+    }
+
+    private static void touch() {
+        MinimapSession session = BuiltInHudModules.MINIMAP.getCurrentSession();
+        if (session != null && session.getWaypointSession() != null) {
+            session.getWaypointSession().setSetChangedTime(System.currentTimeMillis());
+        }
+    }
+
     private static void removePreviousTownyRoutes(WaypointSet set) {
         List<Waypoint> toRemove = new ArrayList<>();
         for (Waypoint waypoint : set.getWaypoints()) {
