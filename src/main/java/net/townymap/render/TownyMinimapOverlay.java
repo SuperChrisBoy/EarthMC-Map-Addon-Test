@@ -126,25 +126,32 @@ public final class TownyMinimapOverlay {
         if (size <= 12) return;
 
         if (session.getProcessor().isCaveModeDisplayed()) return;
-        double blocksAcross = minimapBlocksAcross(session);
-        double pixelsPerBlock = size / blocksAcross;
-        if (pixelsPerBlock <= 0) return;
 
-        double centerX = mapX + size / 2.0;
-        double centerY = mapY + size / 2.0;
         // The EarthMC map is overworld-only. Outside the overworld (e.g. the Nether) the raw X/Z
-        // would place our overlay at the wrong spot, so apply the configured behaviour. Compute the
-        // scale before reading the coords so playerX/playerZ stay effectively final (captured below).
+        // would place our overlay at the wrong spot, so apply the configured behaviour. Resolved
+        // before the projection below, which needs it for both the coordinates and the block size.
         double dimScale = 1.0;
         if (client.world.getRegistryKey() != World.OVERWORLD) {
             if (config.netherMode == 2 && client.world.getRegistryKey() == World.NETHER) {
-                dimScale = 8.0;                                      // Overworld Coords (Nether x8)
+                dimScale = TownyMapMod.dimensionCoordinateScale();   // Overworld Coords (Nether x8)
             } else if (TownyMapMod.isOnEarthMcServer()) {
                 return;                                              // Hidden
             }
             // Off EarthMC, keep dimScale 1.0 and draw: the overworld-only restriction protects the
             // overlay's alignment with EarthMC's own world, which does not apply on another server.
         }
+
+        double blocksAcross = minimapBlocksAcross(session);
+        // Everything below works in overworld coordinates, so this has to be pixels per *overworld*
+        // block. The minimap spans blocksAcross blocks of the dimension the player is actually in,
+        // which is dimScale times that many overworld blocks. The world map already divides its own
+        // block-scale the same way; the minimap did not, so Nether towns drew 8x oversized against
+        // the terrain while sitting at the right centre.
+        double pixelsPerBlock = size / (blocksAcross * dimScale);
+        if (pixelsPerBlock <= 0) return;
+
+        double centerX = mapX + size / 2.0;
+        double centerY = mapY + size / 2.0;
         double playerX = player.getX() * dimScale;
         double playerZ = player.getZ() * dimScale;
         double angle = minimapAngle(session, client);
@@ -1450,8 +1457,20 @@ public final class TownyMinimapOverlay {
         ClientPlayerEntity player = client.player;
         if (player == null || client.world == null || size <= 12) return;
 
+        // This is the fallback path used when the town overlay above didn't run, so it has to repeat
+        // that method's dimension handling. It previously drew with raw X/Z, which put the squaremap
+        // tiles 8x off from the town borders in the Nether and kept drawing them in "Hidden" mode.
+        double dimScale = 1.0;
+        if (client.world.getRegistryKey() != World.OVERWORLD) {
+            if (config.netherMode == 2 && client.world.getRegistryKey() == World.NETHER) {
+                dimScale = TownyMapMod.dimensionCoordinateScale();
+            } else if (TownyMapMod.isOnEarthMcServer()) {
+                return;
+            }
+        }
+
         double blocksAcross = minimapBlocksAcross(session);
-        double pixelsPerBlock = size / blocksAcross;
+        double pixelsPerBlock = size / (blocksAcross * dimScale);
         if (pixelsPerBlock <= 0) return;
 
         int left = mapX;
@@ -1463,7 +1482,8 @@ public final class TownyMinimapOverlay {
                 right - MINIMAP_CLIP_INSET,
                 bottom - MINIMAP_CLIP_INSET,
                 isCircularMinimap(session));
-        renderSquaremapBackground(ctx, mapX, mapY, size, player.getX(), player.getZ(),
+        renderSquaremapBackground(ctx, mapX, mapY, size,
+                player.getX() * dimScale, player.getZ() * dimScale,
                 pixelsPerBlock, minimapAngle(session, client), clip);
     }
 

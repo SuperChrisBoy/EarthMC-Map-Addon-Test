@@ -37,10 +37,14 @@ public final class XaeroWaypointBridge {
 
         int y = client.player.getBlockY();
         String label = ROUTE_PREFIX + cleanLabel(target.label());
+        // The waypoint goes into the current dimension's set, so the target's EarthMC (overworld)
+        // coordinates have to be brought into that dimension first — otherwise a route created in
+        // the Nether points 8x too far away.
+        double dimScale = net.townymap.TownyMapMod.dimensionCoordinateScale();
         Waypoint waypoint = new Waypoint(
-                target.x(),
+                (int) Math.round(target.x() / dimScale),
                 y,
-                target.z(),
+                (int) Math.round(target.z() / dimScale),
                 label,
                 symbol(target.label()),
                 WaypointColor.PURPLE,
