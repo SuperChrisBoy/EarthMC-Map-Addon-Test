@@ -73,11 +73,16 @@ public final class XaeroWaypointBridge {
         Waypoint waypoint = new Waypoint(
                 x, y, z,
                 cleanLabel(label),
-                shopSymbol(key),
+                // Xaero sizes the icon around this string, so a single character keeps the marker
+                // small. Identity comes from the coordinates instead (see removeShopWaypoints).
+                "$",
                 WaypointColor.GOLD,
                 WaypointPurpose.NORMAL,
-                true,
-                false
+                true,   // temporary
+                // yIncluded. A shop has a real, meaningful Y, so the in-world marker should sit at the
+                // chest's height and show the correct vertical offset as you approach from another
+                // level. Route waypoints leave this off because their Y is just wherever you stood.
+                true
         );
         set.add(waypoint, true);
         touch();
@@ -90,16 +95,16 @@ public final class XaeroWaypointBridge {
         WaypointSet set = currentWaypointSet();
         if (set == null) return;
 
-        java.util.Set<String> wanted = new java.util.HashSet<>();
-        for (Long key : keys) {
-            if (key != null) wanted.add(shopSymbol(key));
-        }
+        java.util.Set<Long> wanted = new java.util.HashSet<>(keys);
         List<Waypoint> toRemove = new ArrayList<>();
         for (Waypoint waypoint : set.getWaypoints()) {
+            // Matched on position rather than an encoded symbol: the symbol has to stay one character
+            // to keep the icon small, and the name is user-visible and truncated, so neither is a
+            // reliable identity. The prefix check still guarantees we only ever remove our own.
             if (waypoint.isTemporary()
                     && waypoint.getName() != null
                     && waypoint.getName().startsWith(ShopWaypoints.SHOP_PREFIX)
-                    && wanted.contains(waypoint.getSymbol())) {
+                    && wanted.contains(ShopWaypoints.pack(waypoint.getX(), waypoint.getY(), waypoint.getZ()))) {
                 toRemove.add(waypoint);
             }
         }
@@ -108,11 +113,6 @@ public final class XaeroWaypointBridge {
             set.remove(waypoint);
         }
         touch();
-    }
-
-    /** Short, stable per-position tag. Xaero shows the symbol on the icon, so keep it to two chars. */
-    private static String shopSymbol(long key) {
-        return "$" + Long.toString(Math.floorMod(key, 36L), 36).toUpperCase(java.util.Locale.ROOT);
     }
 
     private static WaypointSet currentWaypointSet() {
