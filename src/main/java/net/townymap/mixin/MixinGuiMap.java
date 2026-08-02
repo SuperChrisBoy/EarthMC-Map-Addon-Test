@@ -444,18 +444,23 @@ public abstract class MixinGuiMap {
         }
     }
 
+    // Search results carry EarthMC (overworld) coordinates, but Xaero's camera is in the player's
+    // current dimension. Without the divide, jumping to a town from the Nether centred the map 8x
+    // too far out and the target wasn't on screen at all.
     private void jumpTo(TownData town) {
         if (town == null) return;
         TownyMapMod.suppressNextPanClear();   // centring on a selected result isn't a user pan
-        cameraX = town.centerX();
-        cameraZ = town.centerZ();
+        double dimScale = TownyMapMod.dimensionCoordinateScale();
+        cameraX = town.centerX() / dimScale;
+        cameraZ = town.centerZ() / dimScale;
     }
 
     private void jumpTo(MapJumpTarget target) {
         if (target == null) return;
         TownyMapMod.suppressNextPanClear();   // centring on a selected result isn't a user pan
-        cameraX = target.x();
-        cameraZ = target.z();
+        double dimScale = TownyMapMod.dimensionCoordinateScale();
+        cameraX = target.x() / dimScale;
+        cameraZ = target.z() / dimScale;
     }
 
     private void handleJumpOrRoute(MapJumpTarget target) {

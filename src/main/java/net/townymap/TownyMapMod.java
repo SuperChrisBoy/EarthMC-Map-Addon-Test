@@ -1168,8 +1168,13 @@ public class TownyMapMod implements ClientModInitializer {
         Minecraft client = Minecraft.getInstance();
         if (client == null || client.player == null || client.getUser() == null) return 0;
 
-        double px = client.player.getX();
-        double pz = client.player.getZ();
+        // EarthMC town/player coordinates are always overworld, so compare in overworld space: in the
+        // Nether the player's raw X/Z are 8x too small and every lookup below would pick the wrong town.
+        // Distances are divided back down by the same factor so what's shown is blocks the player would
+        // actually travel here, not the overworld span.
+        double dimScale = dimensionCoordinateScale();
+        double px = client.player.getX() * dimScale;
+        double pz = client.player.getZ() * dimScale;
         long now = System.currentTimeMillis();
         java.util.List<TownData> towns = apiClient.getTowns();
         TownData here = TownHoverOverlay.townAt(px, pz, towns);
@@ -1202,14 +1207,14 @@ public class TownyMapMod implements ClientModInitializer {
             java.util.List<Nearby> near = new java.util.ArrayList<>();
             for (PlayerMarker m : apiClient.getPlayers()) {
                 if (m.name() == null || m.name().equalsIgnoreCase(self)) continue;
-                double d = Math.hypot(m.x() - px, m.z() - pz);
+                double d = Math.hypot(m.x() - px, m.z() - pz) / dimScale;
                 if (d <= 100.0) near.add(new Nearby(m.name(), d, false));
             }
             // Recently-departed players at their last-seen position (red), exactly the minimap's ghost data —
             // so you can still see roughly where someone was after they drop off the live feed.
             for (GhostMarker g : lastSeenGhosts()) {
                 if (g.name() == null || g.name().equalsIgnoreCase(self)) continue;
-                double d = Math.hypot(g.x() - px, g.z() - pz);
+                double d = Math.hypot(g.x() - px, g.z() - pz) / dimScale;
                 if (d <= 100.0) near.add(new Nearby(g.name(), d, true));
             }
             near.sort(java.util.Comparator.comparingDouble(Nearby::dist));
@@ -1234,7 +1239,7 @@ public class TownyMapMod implements ClientModInitializer {
             TownData nearest = null;
             double best = Double.MAX_VALUE;
             for (TownData t : towns) {
-                double d = Math.hypot(t.centerX() - px, t.centerZ() - pz);
+                double d = Math.hypot(t.centerX() - px, t.centerZ() - pz) / dimScale;
                 if (d < best) { best = d; nearest = t; }
             }
             if (nearest != null) {
@@ -1391,6 +1396,25 @@ public class TownyMapMod implements ClientModInitializer {
      * also divides its block-scale by this so the overworld overlay lines up over the real tiles),
      * 0.0 = hide.
      */
+    /**
+     * Multiply a coordinate in the player's current dimension by this to get the matching EarthMC
+     * (overworld) coordinate; divide by it to go the other way. 8 in the Nether, 1 everywhere else.
+     *
+     * <p>Unlike {@link #worldMapOverlayScale()} this is a pure unit conversion: it never returns 0 and
+     * carries no "hide the overlay" signal, so callers can multiply or divide by it unconditionally.
+     * Every place where EarthMC town/nation/player coordinates (always overworld) meet the player's
+     * own position or Xaero's camera (always current-dimension) has to go through this, or the two
+     * sides end up a factor of 8 apart in the Nether.
+     */
+    public static double dimensionCoordinateScale() {
+        Minecraft client = Minecraft.getInstance();
+        if (client == null || client.level == null) return 1.0;
+        // The game's own ratio (8 for the Nether) rather than a hardcoded 8, so this stays right if a
+        // server runs a non-standard scale. Guarded because a 0 here would blow up every caller.
+        double scale = client.level.dimensionType().coordinateScale();
+        return scale > 0 ? scale : 1.0;
+    }
+
     public static double worldMapOverlayScale() {
         if (!isActiveOnCurrentServer() || config == null) return 1.0;
         Minecraft client = Minecraft.getInstance();
