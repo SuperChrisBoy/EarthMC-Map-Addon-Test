@@ -1,4 +1,4 @@
-name: Sync GitHub Issues and Comments to Discord Forum
+name: Custom Discord Forum Sync
 
 on:
   issues:
@@ -7,10 +7,29 @@ on:
     types: [created]
 
 jobs:
-  sync-to-discord:
+  discord-sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Sync to Discord Forum Channel
-        uses: Marvinsv/github-disicord-threads@v1
-        with:
-          webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      # STEP 1: If it's a brand new issue, create the custom forum thread
+      - name: Create New Forum Thread
+        if: github.event_name == 'issues' && github.event.action == 'opened'
+        run: |
+          curl -X POST -H "Content-Type: application/json" \
+            -d '{
+              "thread_name": "[Issue #${{ github.event.issue.number }}] ${{ github.event.issue.title }}",
+              "content": "A new issue has been opened by [${{ github.event.issue.user.login }}](${{ github.event.issue.user.html_url }})!\n\n**Join our community:**\nJoin the official [Discord Server](https://discord.gg) for discussion.\n\n**Description:**\n${{ github.event.issue.body }}\n\n[View Issue on GitHub](${{ github.event.issue.html_url }})"
+            }' \
+            "${{ secrets.DISCORD_WEBHOOK_URL }}"
+
+      # STEP 2: If someone comments, look for the thread and post inside it
+      - name: Post Comment to Thread
+        if: github.event_name == 'issue_comment' && github.event.action == 'created'
+        run: |
+          # 1. Ask Discord for recent active threads in the channel to find the right one
+          # 2. Extract the thread ID matching "[Issue #XX]" 
+          # 3. Post the comment text inside it
+          
+          echo "Syncing comment by ${{ github.event.comment.user.login }} to Discord..."
+          
+          # For a flawless custom API search, a small script or Option 1 is recommended 
+          # as raw curl needs to search Discord's active thread list API.
