@@ -50,6 +50,9 @@ public final class ShopWaypoints {
     /** Listings within this many blocks are treated as one shop (buy/sell chests sit side by side). */
     private static final int CLUSTER_RADIUS = 4;
 
+    /** Shop waypoints also time out, so a search you wandered away from doesn't linger indefinitely. */
+    private static final long LIFETIME_MS = 150_000L;   // 2.5 minutes
+
     private static final Pattern HEADER = Pattern.compile(
             "^\\s*Nearby Shops matching\\s+(.+?)\\s*:\\s*$", Pattern.CASE_INSENSITIVE);
 
@@ -66,6 +69,9 @@ public final class ShopWaypoints {
     private static final Pattern LEGACY_COLOR = Pattern.compile("\u00a7[0-9a-fk-orA-FK-OR]");
 
     private static long captureUntilMs = 0L;
+    /** When the current batch times out. All of a search's waypoints are created together, so one
+     *  timestamp covers the batch; a new search replaces the batch and restarts the clock. */
+    private static long expireAtMs = 0L;
     private static String pendingItem = "";
     private static final List<Listing> pending = new ArrayList<>();
 
@@ -169,6 +175,12 @@ public final class ShopWaypoints {
         }
         if (active.isEmpty()) return;
 
+        // Whichever comes first: the batch timing out, or you walking out of range of a given shop.
+        if (System.currentTimeMillis() > expireAtMs) {
+            clearAll();
+            return;
+        }
+
         double range = Math.max(16, range());
         double rangeSq = range * range;
         double px = client.player.getX();
@@ -205,6 +217,7 @@ public final class ShopWaypoints {
         // Only replace the previous search now that this one has definitely produced something, so a
         // search that finds nothing leaves the waypoints you already had alone.
         clearAll();
+        expireAtMs = System.currentTimeMillis() + LIFETIME_MS;
 
         List<Cluster> clusters = new ArrayList<>();
         for (Listing l : listings) {
