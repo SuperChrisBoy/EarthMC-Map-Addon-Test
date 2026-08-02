@@ -13,6 +13,6 @@ jobs:
           curl -X POST -H "Content-Type: application/json" \
             -d '{
               "thread_name": "[Issue #${{ github.event.issue.number }}] ${{ github.event.issue.title }}",
-              "content": "A new issue has been opened by **${{ github.event.issue.user.login }}**!\n\n**Description:**\n${{ github.event.issue.body }}\n\n[View Issue on GitHub](${{ github.event.issue.html_url }})"
+              "content": "A new issue has been opened by [${{ github.event.issue.user.login }}](${{ github.event.issue.user.html_url }})!\n\n**Join our community:**\nJoin the official [Discord Server](https://discord.gg/ZRcuD4BZjJ) for discussion.\n\n**Description:**\n${{ github.event.issue.body }}\n\n[View Issue on GitHub](${{ github.event.issue.html_url }})"
             }' \
             "${{ secrets.DISCORD_WEBHOOK_URL }}"
