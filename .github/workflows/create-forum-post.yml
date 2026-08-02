@@ -1,18 +1,16 @@
-name: Create Discord Forum Post on Issue
+name: Sync GitHub Issues and Comments to Discord Forum
 
 on:
   issues:
     types: [opened]
+  issue_comment:
+    types: [created]
 
 jobs:
-  create-forum-thread:
+  sync-to-discord:
     runs-on: ubuntu-latest
     steps:
-      - name: Open Discord Forum Post
-        run: |
-          curl -X POST -H "Content-Type: application/json" \
-            -d '{
-              "thread_name": "[Issue #${{ github.event.issue.number }}] ${{ github.event.issue.title }}",
-              "content": "A new issue has been opened by [${{ github.event.issue.user.login }}](${{ github.event.issue.user.html_url }})!\n\n**Join our community:**\nJoin the official [Discord Server](https://discord.gg/ZRcuD4BZjJ) for discussion.\n\n**Description:**\n${{ github.event.issue.body }}\n\n[View Issue on GitHub](${{ github.event.issue.html_url }})"
-            }' \
-            "${{ secrets.DISCORD_WEBHOOK_URL }}"
+      - name: Sync to Discord Forum Channel
+        uses: Marvinsv/github-disicord-threads@v1
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
