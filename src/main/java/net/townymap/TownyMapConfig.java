@@ -74,10 +74,6 @@ public class TownyMapConfig {
     public boolean smoothTownOutlines = true;
     public boolean chunkGridEnabled = false;
     public boolean customOverlaysEnabled = false;
-    /** Drop temporary Xaero waypoints on the shops returned by QuickShop's {@code /qs find}. */
-    public boolean shopWaypointsEnabled = true;
-    /** How far from a shop waypoint you can get before it's removed again, in blocks. */
-    public int shopWaypointRange = 250;
     /** 0 off, 1 public outsider-spawn, 2 overclaimed, 3 open, 4 for sale, 5 no nation. */
     public int townStatusOverlayMode = 0;
     public int borderOverlayMode = 0; // 0 off, 1 countries, 2 states + countries

@@ -163,8 +163,6 @@ public class TownyMapMod implements ClientModInitializer {
         TownyMapKeybinds.register();
         ClientSendMessageEvents.COMMAND.register(TownyMapMod::onCommandSent);
         ClientReceiveMessageEvents.GAME.register(TownyMapMod::onGameMessage);
-        net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK
-                .register(c -> net.townymap.integration.ShopWaypoints.tick());
 
         LOGGER.info("TownyMap Addon ready; map refreshes are deferred until map/minimap rendering is active ({})", config.squaremapBaseUrl);
     }
@@ -177,16 +175,11 @@ public class TownyMapMod implements ClientModInitializer {
             rememberPendingClaim();
         } else if (isTownUnclaimCommand(normalized)) {
             refreshTownClaimsAfterCommand();
-        } else if (net.townymap.integration.ShopWaypoints.isShopFindCommand(normalized)) {
-            net.townymap.integration.ShopWaypoints.armCapture();
         }
     }
 
     private static void onGameMessage(Text message, boolean overlay) {
         if (apiClient == null || !isActiveOnCurrentServer() || message == null) return;
-        // Shop results are independent of the claim flow, so they have to be read before the
-        // pending-claim early return below or they'd only ever parse right after a /town claim.
-        if (net.townymap.integration.ShopWaypoints.onGameMessage(message.getString())) return;
         PendingClaim pending = pendingClaim;
         if (pending == null) return;
 

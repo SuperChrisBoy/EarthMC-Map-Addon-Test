@@ -14,8 +14,8 @@ import net.townymap.gui.TownInfoOverlay;
 import net.townymap.gui.TownSearchOverlay;
 import net.townymap.model.MapJumpTarget;
 import net.townymap.model.TownData;
-import org.lwjgl.glfw.GLFW;
 import org.objectweb.asm.Opcodes;
+import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -33,14 +33,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Injects into Xaero's GuiMap.
  *
  * Rendering order inside method_25394 (Screen.render):
- *   1. Squaremap tiles + town overlays (onBeforeMapElements, injected before the element pass)
- *   2. Xaero's MapElementRenderHandler — waypoints, tracked players
+ *   1. renderPreDropdown — waypoints, labels, town overlays (HEAD/RETURN inject here)
+ *   2. Squaremap tile compositing (DrawContext flush in onBeforePlayerArrow)
  *   3. Xaero's player arrow (drawArrowOnMap via vertex buffers)
- *   4. renderPreDropdown — our labels and dots, which must sit above the baked tiles
- *   5. method_25394 RETURN — our arrow re-draw fires here, guaranteed on top of tiles
+ *   4. method_25394 RETURN — our arrow re-draw fires here, guaranteed on top of tiles
  *
- * Our map-surface layers deliberately go in before step 2: the squaremap background is opaque, so
- * drawing it after the element pass painted straight over Xaero's own waypoints.
+ * Town overlays and info UI render at renderPreDropdown HEAD (clean matrix state).
  * The player arrow MUST render at method_25394 RETURN so it lands after the
  * squaremap DrawContext flush, not before it.
  *
@@ -89,33 +87,7 @@ public abstract class MixinGuiMap {
 
     // ── All overlay rendering at HEAD (clean GL/matrix state) ─────────────────
 
-    // Drawn immediately before Xaero renders its map elements, so waypoints, tracked players and the
-    // player arrow all land on top of our layers. This used to hook the player-arrow config read, which
-    // happens *after* the element pass — the opaque squaremap background then painted straight over
-    // Xaero's waypoints and hid them. (The translucent town fills only dimmed them, which is why the
-    // two layers looked like they behaved differently.)
-    @Inject(require = 0,
-            method = "method_25394",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lxaero/map/element/MapElementRenderHandler;render(Lxaero/map/gui/GuiMap;Lnet/minecraft/class_4597$class_4598;Lxaero/map/graphics/renderer/multitexture/MultiTextureRenderTypeRendererProvider;DDIIDDDDDFZLxaero/map/element/HoveredMapElementHolder;Lnet/minecraft/class_310;F)Lxaero/map/element/HoveredMapElementHolder;",
-                    shift = At.Shift.BEFORE
-            ),
-            remap = false
-    )
-    private void onBeforeMapElements(DrawContext ctx, int mouseX, int mouseY,
-                                     float delta, CallbackInfo ci) {
-        townymap$renderMapSurface(ctx, mouseX, mouseY);
-        townymap$surfaceDrawn = true;
-    }
-
-    /**
-     * Fallback at the old injection point. Both hooks are {@code require = 0}, so if a future Xaero
-     * renames or drops the element-render call the hook above silently stops applying — and without
-     * this, that would take the entire world-map overlay with it. Here it degrades instead to the
-     * pre-1.3.8 behaviour: the overlay still draws, it just covers Xaero's waypoints again.
-     */
-    @Inject(require = 0,
+    @Inject(require = 0, 
             method = "method_25394",
             at = @At(
                     value = "FIELD",
@@ -127,17 +99,6 @@ public abstract class MixinGuiMap {
     )
     private void onBeforePlayerArrow(DrawContext ctx, int mouseX, int mouseY,
                                      float delta, CallbackInfo ci) {
-        if (!townymap$surfaceDrawn) {
-            townymap$renderMapSurface(ctx, mouseX, mouseY);
-        }
-        townymap$surfaceDrawn = false;
-    }
-
-    @org.spongepowered.asm.mixin.Unique
-    private boolean townymap$surfaceDrawn = false;
-
-    @org.spongepowered.asm.mixin.Unique
-    private void townymap$renderMapSurface(DrawContext ctx, int mouseX, int mouseY) {
         // Clear the search bar when the map is reopened (new GuiMap instance) or panned. Tracked on the
         // raw camera every frame, regardless of dimension. jumpTo() suppresses the next pan-clear so that
         // centre-on-select doesn't wipe the bar.
@@ -191,7 +152,7 @@ public abstract class MixinGuiMap {
             MinecraftClient mc = MinecraftClient.getInstance();
             int w = mc.getWindow().getScaledWidth();
             int h = mc.getWindow().getScaledHeight();
-            // Player dots here (not in the map-surface tile batch): the tiles are already flushed,
+            // Player dots here (not in the tile batch of onBeforePlayerArrow): the tiles are already flushed,
             // so the dots render on top of them and stop "blinking" behind async tile rebuilds at zoom-out.
             double dimMul = TownyMapMod.worldMapOverlayScale();
             if (dimMul > 0.0) {
@@ -221,11 +182,11 @@ public abstract class MixinGuiMap {
     //
     // Layering requirement: the arrow must sit ABOVE the squaremap tiles but BELOW
     // our UI panels (search bar, town info, toggles).  The chronology in
-    // method_25394 is: townymap$renderMapSurface (tiles drawn + drawDeferredElements
+    // method_25394 is: onBeforePlayerArrow (tiles drawn + drawDeferredElements
     // flush) → renderPreDropdown (our overlays) → RETURN.  Drawing the arrow here,
     // before the UI panels, queues it into the deferred batch ahead of them, so the
-    // arrow renders under the UI; and since the tiles were already flushed by the
-    // map-surface pass, the arrow still renders on top of the tiles.
+    // arrow renders under the UI; and since the tiles were already flushed in
+    // onBeforePlayerArrow, the arrow still renders on top of the tiles.
     //
     // (Previously this drew at method_25394 RETURN, which queued the arrow AFTER the
     // UI panels — making the arrow draw over the search box.)

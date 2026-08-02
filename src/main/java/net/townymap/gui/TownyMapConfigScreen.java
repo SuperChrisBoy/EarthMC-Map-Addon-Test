@@ -329,17 +329,6 @@ public class TownyMapConfigScreen extends Screen {
                 () -> cfg.customOverlaysEnabled == DEFAULTS.customOverlaysEnabled,
                 () -> cfg.customOverlaysEnabled = DEFAULTS.customOverlaysEnabled);
         action("Open Overlays Folder", () -> net.townymap.integration.CustomOverlayManager.openFolder());
-        option("Shop Waypoints", onOff(cfg.shopWaypointsEnabled, v -> {
-                    cfg.shopWaypointsEnabled = v;
-                    if (!v) net.townymap.integration.ShopWaypoints.clearAll();
-                }),
-                () -> cfg.shopWaypointsEnabled == DEFAULTS.shopWaypointsEnabled,
-                () -> cfg.shopWaypointsEnabled = DEFAULTS.shopWaypointsEnabled);
-        option("Shop Waypoint Range", cycle(nearestPreset(cfg.shopWaypointRange, SHOP_RANGES),
-                        new int[]{0, 1, 2}, i -> Text.literal(SHOP_RANGE_LABELS[i]),
-                        i -> cfg.shopWaypointRange = (int) SHOP_RANGES[i]),
-                () -> cfg.shopWaypointRange == DEFAULTS.shopWaypointRange,
-                () -> cfg.shopWaypointRange = DEFAULTS.shopWaypointRange);
         action("Reload Overlays", () -> net.townymap.integration.CustomOverlayManager.reload());
 
         archiveField = new TextFieldWidget(this.textRenderer, ctrlX, 0, CTRL_W, 20, Text.literal("dd/mm/yyyy"));
@@ -408,9 +397,6 @@ public class TownyMapConfigScreen extends Screen {
 
     // ── Preset "adjusters": a few labelled steps instead of a slider ──────────────
     private static final String[] NEAR_MED_FAR = {"Near", "Medium", "Far"};
-    // How far you can wander from a /qs find shop before its waypoint is dropped.
-    private static final double[] SHOP_RANGES = {120, 250, 500};
-    private static final String[] SHOP_RANGE_LABELS = {"120m", "250m", "500m"};
     // Range presets are world-map block-scale thresholds: bigger = must be more zoomed in (Near),
     // smaller = shows from further out (Far).
     static final double[] NAME_RANGES = {0.15, 0.08, 0.035};
