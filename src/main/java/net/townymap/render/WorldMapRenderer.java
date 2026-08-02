@@ -682,13 +682,10 @@ public class WorldMapRenderer {
         // zoom's tiles, or every line that exists in both layers double-draws (thicker + darker) and then
         // visibly thins the moment the fallback stops.
         boolean allReady = true;
-        int readyCount = 0;
         for (int ty = minTy; ty <= maxTy; ty++) {
             for (int tx = minTx; tx <= maxTx; tx++) {
                 long key = outlineTileKey(zoom, tx, ty);
-                if (layer.tiles.containsKey(key)) {
-                    readyCount++;
-                } else if (!layer.empty.contains(key)) {
+                if (!layer.tiles.containsKey(key) && !layer.empty.contains(key)) {
                     requestOutlineTile(layer, key, zoom, tx, ty, tileWorldSize, ppb, density,
                                        snapshot, favSnapshot, statusSnapshot);
                     allReady = false;
@@ -697,8 +694,15 @@ public class WorldMapRenderer {
         }
 
         // Pass 2 — draw exactly ONE layer. Either this zoom's tiles (never mixed with a coarser level), or,
-        // if this zoom has nothing cached yet, the best coarser level so the outlines never vanish.
-        if (readyCount > 0) {
+        // if this zoom isn't fully baked yet, the best coarser level so the outlines never vanish.
+        //
+        // Switching the moment *any* tile of this zoom was ready is what made claims flash on zoom: one
+        // baked tile dropped the coarser fallback, leaving every other tile blank until it caught up, so
+        // most of the map lost its claims mid-zoom and they popped back in a few at a time. Hold the
+        // coarser level until this zoom covers the whole view, then swap in one go. Once this zoom has
+        // been established, keep drawing it even if a tile goes missing later (cache eviction, or panning
+        // into new world at the same zoom) rather than dropping back to a coarser level and oscillating.
+        if (allReady || layer.lastReadyZoom == zoom) {
             for (int ty = minTy; ty <= maxTy; ty++) {
                 for (int tx = minTx; tx <= maxTx; tx++) {
                     Identifier tex = layer.tiles.get(outlineTileKey(zoom, tx, ty));
@@ -739,9 +743,10 @@ public class WorldMapRenderer {
                           density, snapshot, favSnapshot, statusSnapshot);
     }
 
-    /** Blits every visible tile at {@code zoom} (scaled to the current view) — but only if it has full
-     *  coverage (every visible tile is loaded or known-empty), so we never show gaps. Returns false if
-     *  any tile is still missing, so the caller can fall back. */
+    /** Blits whatever is cached at {@code zoom}, scaled to the current view. Partial coverage is drawn
+     *  rather than skipped: zooming out exposes world the finer level never covered, so requiring full
+     *  coverage here meant the stand-in never drew at all. Returns false only if nothing was drawn, so
+     *  the caller can fall back to the overview floor. */
     private boolean blitOutlineTilesAtZoom(GuiGraphicsExtractor ctx, TileLayer layer, int zoom, double cameraX, double cameraZ,
                                            double blockScale, int sw, int sh, double worldLeft,
                                            double worldRight, double worldTop, double worldBottom) {
