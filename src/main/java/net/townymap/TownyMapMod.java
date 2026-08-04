@@ -18,7 +18,6 @@ import net.minecraft.util.Formatting;
 import net.minecraft.world.World;
 import net.townymap.api.EarthMcApiClient;
 import net.townymap.api.SquaremapApiClient;
-import net.townymap.command.TownyMapCommand;
 import net.townymap.gui.ChunkCounterOverlay;
 import net.townymap.gui.MapToggleOverlay;
 import net.townymap.gui.TownHoverOverlay;
@@ -129,6 +128,11 @@ public class TownyMapMod implements ClientModInitializer {
     private static final ThreadLocal<Boolean> suppressNativeMinimapWaypoints =
             ThreadLocal.withInitial(() -> false);
     private static final AtomicBoolean nativeCompassSuppressionLogged = new AtomicBoolean(false);
+    private static final AtomicBoolean playerIndicatorErrorLogged = new AtomicBoolean(false);
+    private static final AtomicBoolean townDetailCacheSaveErrorLogged = new AtomicBoolean(false);
+    private static final AtomicBoolean minimapCompassErrorLogged = new AtomicBoolean(false);
+    private static final AtomicBoolean minimapFrameErrorLogged = new AtomicBoolean(false);
+    private static final AtomicBoolean minimapOutlinesErrorLogged = new AtomicBoolean(false);
     private static volatile long minimapPlayerDetailWindowMs = 0;
     private static volatile int minimapPlayerDetailRequests = 0;
     private static volatile long lastVisibleTownDetailsRequestMs = 0;
@@ -159,7 +163,6 @@ public class TownyMapMod implements ClientModInitializer {
         net.townymap.integration.CustomOverlayManager.reload();
 
         apiClient.start();
-        TownyMapCommand.register();
         TownyMapKeybinds.register();
         ClientSendMessageEvents.COMMAND.register(TownyMapMod::onCommandSent);
         ClientReceiveMessageEvents.GAME.register(TownyMapMod::onGameMessage);
@@ -347,26 +350,39 @@ public class TownyMapMod implements ClientModInitializer {
         return Math.floorDiv((int) Math.floor(blockCoord), 16);
     }
 
+    /**
+     * Manual refresh from the settings screen. Claims already reload on their own interval, so this is
+     * only for not waiting; it exists because removing the keybind and the command left no way to force
+     * one. Confirms in chat, since the settings screen gives no visible sign anything happened.
+     */
+    public static void refreshTownClaimsFromSettings() {
+        if (config == null || !isActiveOnCurrentServer()) return;
+        forceRefreshTownClaims();
+        sendFeedback("Refreshing towns and claims from squaremap...", Formatting.WHITE);
+    }
+
     public static void forceRefreshTownClaims() {
         if (apiClient == null) return;
         invalidateTownRenderCaches();
         apiClient.forceTownMarkerRefresh();
     }
 
-    public static void toggleSquaremapBackground() {
-        if (!canUseKeybindAction()) return;
-        config.squaremapBackgroundEnabled = !config.squaremapBackgroundEnabled;
-        config.save();
-        sendFeedback("Squaremap overlay: " + onOff(config.squaremapBackgroundEnabled),
-                config.squaremapBackgroundEnabled ? Formatting.GREEN : Formatting.RED);
-    }
+    /** Which maps the layer was last shown on, so the quick toggle restores that choice rather than
+     *  flattening a "minimap only" preference into "both" every time it's switched back on. */
+    private static int lastSquaremapBackgroundMode = 3;
 
-    public static void cycleBorderOverlayMode() {
-        if (!canUseKeybindAction()) return;
-        config.borderOverlayMode = (config.borderOverlayMode + 1) % 3;
+    /**
+     * Turns the squaremap layer on or off for the world map alone, leaving the minimap's state as it
+     * is. The on-map button that calls this only exists on the world map, so it should govern that map
+     * rather than flattening a per-map choice back into "both".
+     */
+    public static void setSquaremapOnWorldMap(boolean on) {
+        if (config == null) return;
+        config.squaremapBackgroundMode = (on ? 1 : 0) | (config.squaremapOnMinimap() ? 2 : 0);
+        if (config.squaremapBackgroundMode != 0) {
+            lastSquaremapBackgroundMode = config.squaremapBackgroundMode;
+        }
         config.save();
-        sendFeedback("Borders: " + borderModeLabel(config.borderOverlayMode),
-                config.borderOverlayMode == 0 ? Formatting.RED : Formatting.GREEN);
     }
 
     // Selectable map modes. "Overclaim" (2) is omitted until EarthMC's API exposes active-resident
@@ -384,39 +400,6 @@ public class TownyMapMod implements ClientModInitializer {
         return STATUS_MODES[idx];
     }
 
-    public static void cycleTownStatusOverlayMode() {
-        if (!canUseKeybindAction()) return;
-        config.townStatusOverlayMode = nextStatusMode(config.townStatusOverlayMode, false);
-        config.save();
-        sendFeedback("Map mode: " + townStatusModeLabel(config.townStatusOverlayMode),
-                config.townStatusOverlayMode == 0 ? Formatting.RED : Formatting.GREEN);
-    }
-
-    public static void toggleChunkCounter() {
-        if (!canUseKeybindAction()) return;
-        if (config.chunkCounterEnabled) ChunkCounterOverlay.flushSelection();
-        if (!config.chunkCounterEnabled) {
-            config.chunkCounterEnabled = true;
-            config.chunkCounterMode = 2;
-            ChunkCounterOverlay.prepareMultiMode(config);
-        } else {
-            config.chunkCounterEnabled = false;
-            config.chunkCounterMode = 2;
-        }
-        config.save();
-        sendFeedback("Chunk counter: " + ChunkCounterOverlay.toolbarLabel(config),
-                config.chunkCounterEnabled ? Formatting.GREEN : Formatting.RED);
-    }
-
-    public static void refreshTownClaimsFromKeybind() {
-        if (!canUseKeybindAction()) return;
-        forceRefreshTownClaims();
-        sendFeedback("Refreshing towns and claims from squaremap...", Formatting.WHITE);
-    }
-
-    private static boolean canUseKeybindAction() {
-        return config != null && isActiveOnCurrentServer();
-    }
 
     private static String onOff(boolean enabled) {
         return enabled ? "ON" : "OFF";
@@ -464,7 +447,7 @@ public class TownyMapMod implements ClientModInitializer {
 
     /** The nation a town belongs to (from the squaremap tooltips), or null if it is nationless. */
     public static String townNationOf(String townKey) {
-        return apiClient == null ? null : apiClient.getTownNation(townKey);
+        return townNationAt(townKey);
     }
 
     // ── Clean map screenshot ─────────────────────────────────────────────────
@@ -595,6 +578,13 @@ public class TownyMapMod implements ClientModInitializer {
 
     /** Resident count for a town, parsed from its squaremap popup; -1 if unknown. */
     public static int townResidentsOf(String townKey) {
+        if (townKey != null && isArchiveMode()) {
+            // Same reason as townNationAt: the live resident map isn't swapped for the snapshot, so the
+            // search filter (r>30) was matching archived towns against today's counts.
+            net.townymap.api.ArchiveClient.ArchiveTown at =
+                    archiveTownDetails.get(townKey.toLowerCase(Locale.ROOT));
+            if (at != null) return at.residentCount();
+        }
         return apiClient == null ? -1 : apiClient.getTownResidents(townKey);
     }
 
@@ -653,7 +643,7 @@ public class TownyMapMod implements ClientModInitializer {
     /** A town's nation name with any "Capital of " prefix stripped, for matching against alliance rosters. */
     public static String bareTownNation(String townName) {
         if (apiClient == null || townName == null) return null;
-        String n = apiClient.getTownNation(townKey(townName));
+        String n = townNationAt(townKey(townName));
         if (n == null) return null;
         if (n.regionMatches(true, 0, "Capital of ", 0, 11)) n = n.substring(11);
         return n.trim();
@@ -960,8 +950,18 @@ public class TownyMapMod implements ClientModInitializer {
         renderer.renderPlayersLayer(ctx, cameraX, cameraZ, scale, screenW, screenH, playerDetailsCache);
     }
 
+    /**
+     * Whether we redraw the player arrow on the world map ourselves.
+     *
+     * <p>Not gated on the squaremap layer any more. The gate assumed Xaero's own arrow is visible
+     * whenever that layer is off, but it isn't: our overlay writes depth, Xaero draws its arrow with
+     * depth testing, and the depth clear that used to compensate
+     * ({@code xaero.lib.client.graphics.util.TextureUtils.clearRenderTargetDepth}) no longer exists in
+     * current Xaero, so that reflective helper silently does nothing. The result was no arrow at all
+     * with the layer off. Ours is now the arrow in both cases.
+     */
     public static boolean shouldRenderWorldMapIndicatorOverlay() {
-        return isActiveOnCurrentServer() && config != null && config.squaremapBackgroundEnabled;
+        return isActiveOnCurrentServer() && config != null;
     }
 
     private static boolean updateWorldMapMovement(double cameraX, double cameraZ, double scale) {
@@ -1113,7 +1113,11 @@ public class TownyMapMod implements ClientModInitializer {
             TownyMinimapOverlay.renderPlayerIndicator(ctx,
                     (xaero.hud.minimap.module.MinimapSession) session, mapX, mapY, size);
         } catch (Exception e) {
-            LOGGER.debug("[TownyMap] Failed to render minimap player indicator: {}", e.getMessage());
+            // Warn, not debug: this was debug-level while the indicator was silently failing, so the
+            // one signal that would have explained it never reached the log. One-shot to avoid spam.
+            if (playerIndicatorErrorLogged.compareAndSet(false, true)) {
+                LOGGER.warn("[TownyMap] Failed to render minimap player indicator", e);
+            }
         }
     }
 
@@ -1134,9 +1138,22 @@ public class TownyMapMod implements ClientModInitializer {
     }
 
     /** While our squaremap overlay is active we draw waypoints ourselves (on top), so hide Xaero's. */
-    public static void setSuppressNativeMinimapWaypoints() {
+    /**
+     * Deliberately mirrors the condition guarding our own redraw, including the cave-mode check: the
+     * overlay bails out in cave mode and never redraws, so suppressing there made waypoints vanish
+     * entirely instead of being replaced.
+     */
+    public static void setSuppressNativeMinimapWaypoints(Object session) {
+        boolean caveMode = false;
+        try {
+            xaero.hud.minimap.module.MinimapSession minimapSession =
+                    (xaero.hud.minimap.module.MinimapSession) session;
+            caveMode = minimapSession.getProcessor() != null
+                    && minimapSession.getProcessor().isCaveModeDisplayed();
+        } catch (Exception ignored) {
+        }
         suppressNativeMinimapWaypoints.set(config != null && config.minimapExtensionsEnabled
-                && config.squaremapBackgroundEnabled && isActiveOnCurrentServer());
+                && config.squaremapOnMinimap() && isActiveOnCurrentServer() && !caveMode);
     }
 
     public static void clearSuppressNativeMinimapWaypoints() {
@@ -1149,7 +1166,7 @@ public class TownyMapMod implements ClientModInitializer {
 
     private static boolean shouldUseCustomEnlargedMinimapCompass(Object session) {
         if (!isActiveOnCurrentServer()) return false;
-        if (config == null || !config.minimapExtensionsEnabled || !config.squaremapBackgroundEnabled) return false;
+        if (config == null || !config.minimapExtensionsEnabled || !config.squaremapOnMinimap()) return false;
         try {
             xaero.hud.minimap.module.MinimapSession minimapSession =
                     (xaero.hud.minimap.module.MinimapSession) session;
@@ -1166,7 +1183,11 @@ public class TownyMapMod implements ClientModInitializer {
             TownyMinimapOverlay.renderCompassDirections(ctx,
                     (xaero.hud.minimap.module.MinimapSession) session, mapX, mapY, size);
         } catch (Exception e) {
-            LOGGER.debug("[TownyMap] Failed to render minimap compass directions: {}", e.getMessage());
+            // Warn, not debug: a throw here makes the feature silently vanish, which is exactly
+            // how the player-indicator bug stayed invisible. One-shot so it can't spam per frame.
+            if (minimapCompassErrorLogged.compareAndSet(false, true)) {
+                LOGGER.warn("[TownyMap] Failed to render minimap compass directions", e);
+            }
         }
     }
 
@@ -1394,7 +1415,7 @@ public class TownyMapMod implements ClientModInitializer {
 
     public static void renderMinimapFrame(DrawContext ctx, Object session, int x, int y, int size) {
         if (!isActiveOnCurrentServer()) return;
-        if (config == null || !config.minimapExtensionsEnabled || !config.squaremapBackgroundEnabled) return;
+        if (config == null || !config.minimapExtensionsEnabled || !config.squaremapOnMinimap()) return;
         if (size <= 8) return;
         try {
             xaero.hud.minimap.module.MinimapSession minimapSession =
@@ -1417,7 +1438,11 @@ public class TownyMapMod implements ClientModInitializer {
             ctx.fill(x, y, x + thickness, y + size, color);
             ctx.fill(x + size - thickness, y, x + size, y + size, color);
         } catch (Exception e) {
-            LOGGER.debug("[TownyMap] Failed to render minimap frame overlay: {}", e.getMessage());
+            // Warn, not debug: a throw here makes the feature silently vanish, which is exactly
+            // how the player-indicator bug stayed invisible. One-shot so it can't spam per frame.
+            if (minimapFrameErrorLogged.compareAndSet(false, true)) {
+                LOGGER.warn("[TownyMap] Failed to render minimap frame overlay", e);
+            }
         }
     }
 
@@ -1585,7 +1610,11 @@ public class TownyMapMod implements ClientModInitializer {
                     (xaero.hud.minimap.module.MinimapSession) session,
                     x, y, size);
         } catch (Exception e) {
-            LOGGER.debug("[TownyMap] Failed to render minimap town outlines: {}", e.getMessage());
+            // Warn, not debug: a throw here makes the feature silently vanish, which is exactly
+            // how the player-indicator bug stayed invisible. One-shot so it can't spam per frame.
+            if (minimapOutlinesErrorLogged.compareAndSet(false, true)) {
+                LOGGER.warn("[TownyMap] Failed to render minimap town outlines", e);
+            }
         }
     }
 
@@ -1862,6 +1891,8 @@ public class TownyMapMod implements ClientModInitializer {
     public static void openDetail(net.townymap.gui.DetailScreen.Kind kind, String name,
                                   net.minecraft.client.gui.screen.Screen parent) {
         if (name == null || name.isBlank()) return;
+        // Opening the expanded panel replaces what you were looking at, so drop the join-range zone with it.
+        net.townymap.gui.TownSearchOverlay.showNationRange(null);
         // Archive mode: towns, nations AND players are built from the snapshot instead of fetched live, so
         // following any link stays in that date's data (a player shows only what residency the archive knows).
         if (isArchiveMode()) {
@@ -2045,6 +2076,26 @@ public class TownyMapMod implements ClientModInitializer {
     private static volatile int archiveRequestedDate = 0;   // last date asked for; the ± arrows step from this
     // Nations as they were on the archived date, synthesized from the snapshot's town tooltips. Swapped in
     // for the live nation data while archive mode is active so stars/search/hover show that date's nations.
+    /**
+     * Which nation a town belonged to, honouring archive mode.
+     *
+     * <p>{@code setArchiveTowns} swaps only the town list; the client's town-to-nation map stays live.
+     * Asking it directly while viewing an archive answers with *today's* membership, so a nation that
+     * has since gained or lost towns gets the wrong set -- and one that didn't exist yet still matches
+     * whichever towns carry its name now. The snapshot records each town's nation at the time, so use
+     * that when it's loaded.
+     */
+    public static String townNationAt(String townKey) {
+        if (townKey == null) return null;
+        if (isArchiveMode()) {
+            // archiveTownDetails is keyed by lower-cased name, which is exactly what townKey() produces.
+            net.townymap.api.ArchiveClient.ArchiveTown at =
+                    archiveTownDetails.get(townKey.toLowerCase(Locale.ROOT));
+            return at == null ? null : at.nation();
+        }
+        return apiClient == null ? null : apiClient.getTownNation(townKey);
+    }
+
     private static volatile Map<String, EarthMcNationData> archiveNations = null;
     private static volatile List<EarthMcNationData> archiveNationList = List.of();
     // Full archived town info (residents/councillors/etc. as they were), keyed lower-case, for the Expand panel.
@@ -2950,7 +3001,11 @@ public class TownyMapMod implements ClientModInitializer {
             Files.createDirectories(path.getParent());
             Files.writeString(path, GSON.toJson(townDetailsCache));
         } catch (Exception e) {
-            LOGGER.debug("[TownyMap] Failed to save town detail cache: {}", e.getMessage());
+            // Warn, not debug: this one loses data rather than just a frame of rendering, so a
+            // silent failure means the cache quietly stops persisting. One-shot to avoid spam.
+            if (townDetailCacheSaveErrorLogged.compareAndSet(false, true)) {
+                LOGGER.warn("[TownyMap] Failed to save town detail cache", e);
+            }
         }
     }
 

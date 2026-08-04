@@ -79,7 +79,8 @@ public class TownyMapConfigScreen extends Screen {
             Map.entry("Real Borders",
                     "Draw actual country and state borders from Natural Earth data underneath the towns."),
             Map.entry("Squaremap Background",
-                    "Show the map.earthmc.net imagery behind the overlay instead of Xaero's own tiles."),
+                    "Show the map.earthmc.net imagery behind the overlay instead of Xaero's own tiles. "
+                    + "Choose the world map, the minimap, both or off."),
             Map.entry("Darken Map",
                     "Dim the map imagery so town borders and player dots stand out more."),
             Map.entry("World Map Overview",
@@ -96,6 +97,10 @@ public class TownyMapConfigScreen extends Screen {
                     "Tint every town by a single colour instead of its nation's colours."),
             Map.entry("Custom Overlays",
                     "Load your own GeoJSON overlays from the config folder."),
+            Map.entry("Player Indicator",
+                    "Which minimap background shows the arrow marking you: over the EMC overlay, over "
+                    + "Xaero's own map, both, or off. Off also hides it under the EMC overlay, which "
+                    + "covers Xaero's own arrow."),
             Map.entry("Chunk Grid",
                     "Draw chunk boundaries on the minimap."),
             Map.entry("Player Heads",
@@ -177,6 +182,11 @@ public class TownyMapConfigScreen extends Screen {
         this.addDrawableChild(searchField);
 
         section("General");
+        option("Squaremap Background", cycle(cfg.squaremapBackgroundMode, new int[]{0, 1, 2, 3},
+                        TownyMapConfigScreen::squaremapBackgroundModeText,
+                        v -> cfg.squaremapBackgroundMode = v),
+                () -> cfg.squaremapBackgroundMode == DEFAULTS.squaremapBackgroundMode,
+                () -> cfg.squaremapBackgroundMode = DEFAULTS.squaremapBackgroundMode);
         option("Dark Buttons", onOff(cfg.darkButtons, v -> cfg.darkButtons = v),
                 () -> cfg.darkButtons == DEFAULTS.darkButtons,
                 () -> cfg.darkButtons = DEFAULTS.darkButtons);
@@ -193,15 +203,17 @@ public class TownyMapConfigScreen extends Screen {
                 () -> cfg.netherMode = DEFAULTS.netherMode);
 
         section("Minimap");
-        option("Minimap Extensions", onOff(cfg.minimapExtensionsEnabled, v -> cfg.minimapExtensionsEnabled = v),
-                () -> cfg.minimapExtensionsEnabled == DEFAULTS.minimapExtensionsEnabled,
-                () -> cfg.minimapExtensionsEnabled = DEFAULTS.minimapExtensionsEnabled);
         option("Town Names", cycle(cfg.minimapTownNameMode, new int[]{0, 1, 2, 3},
                         TownyMapConfigScreen::minimapTownNameModeText,
                         v -> { cfg.minimapTownNameMode = v; cfg.minimapTownNamesEnabled = v != 0; }),
                 () -> cfg.minimapTownNameMode == DEFAULTS.minimapTownNameMode,
                 () -> { cfg.minimapTownNameMode = DEFAULTS.minimapTownNameMode;
                         cfg.minimapTownNamesEnabled = DEFAULTS.minimapTownNameMode != 0; });
+        option("Player Indicator", cycle(cfg.minimapIndicatorMode, new int[]{0, 1, 2, 3},
+                        TownyMapConfigScreen::minimapIndicatorModeText,
+                        v -> cfg.minimapIndicatorMode = v),
+                () -> cfg.minimapIndicatorMode == DEFAULTS.minimapIndicatorMode,
+                () -> cfg.minimapIndicatorMode = DEFAULTS.minimapIndicatorMode);
         option("Players On Minimap", onOff(cfg.minimapPlayersEnabled, v -> cfg.minimapPlayersEnabled = v),
                 () -> cfg.minimapPlayersEnabled == DEFAULTS.minimapPlayersEnabled,
                 () -> cfg.minimapPlayersEnabled = DEFAULTS.minimapPlayersEnabled);
@@ -220,9 +232,6 @@ public class TownyMapConfigScreen extends Screen {
         option("Town Borders", onOff(cfg.townsEnabled, v -> cfg.townsEnabled = v),
                 () -> cfg.townsEnabled == DEFAULTS.townsEnabled,
                 () -> cfg.townsEnabled = DEFAULTS.townsEnabled);
-        option("Squaremap Background", onOff(cfg.squaremapBackgroundEnabled, v -> cfg.squaremapBackgroundEnabled = v),
-                () -> cfg.squaremapBackgroundEnabled == DEFAULTS.squaremapBackgroundEnabled,
-                () -> cfg.squaremapBackgroundEnabled = DEFAULTS.squaremapBackgroundEnabled);
         option("World Map Overview", onOff(cfg.worldMapOverview, v -> cfg.worldMapOverview = v),
                 () -> cfg.worldMapOverview == DEFAULTS.worldMapOverview,
                 () -> cfg.worldMapOverview = DEFAULTS.worldMapOverview);
@@ -270,6 +279,10 @@ public class TownyMapConfigScreen extends Screen {
         option("Last Seen Positions", onOff(cfg.playerLastSeen, v -> cfg.playerLastSeen = v),
                 () -> cfg.playerLastSeen == DEFAULTS.playerLastSeen,
                 () -> cfg.playerLastSeen = DEFAULTS.playerLastSeen);
+        option("Player Name Color", new ColorHueSlider(ctrlX, 0, CTRL_W, 20, cfg,
+                        () -> cfg.playerLabelColor, v -> cfg.playerLabelColor = v),
+                () -> cfg.playerLabelColor == DEFAULTS.playerLabelColor,
+                () -> cfg.playerLabelColor = DEFAULTS.playerLabelColor);
         option("Player Names", onOff(cfg.showPlayerNames, v -> cfg.showPlayerNames = v),
                 () -> cfg.showPlayerNames == DEFAULTS.showPlayerNames,
                 () -> cfg.showPlayerNames = DEFAULTS.showPlayerNames);
@@ -329,6 +342,7 @@ public class TownyMapConfigScreen extends Screen {
                 () -> cfg.customOverlaysEnabled == DEFAULTS.customOverlaysEnabled,
                 () -> cfg.customOverlaysEnabled = DEFAULTS.customOverlaysEnabled);
         action("Open Overlays Folder", () -> net.townymap.integration.CustomOverlayManager.openFolder());
+        action("Refresh Town Claims", TownyMapMod::refreshTownClaimsFromSettings);
         option("Shop Waypoints", onOff(cfg.shopWaypointsEnabled, v -> {
                     cfg.shopWaypointsEnabled = v;
                     if (!v) net.townymap.integration.ShopWaypoints.clearAll();
@@ -789,6 +803,24 @@ public class TownyMapConfigScreen extends Screen {
         });
     }
 
+    private static Text squaremapBackgroundModeText(Integer mode) {
+        return Text.literal(switch (mode) {
+            case 1 -> "World Map";
+            case 2 -> "Minimap";
+            case 3 -> "Both";
+            default -> "Off";
+        });
+    }
+
+    private static Text minimapIndicatorModeText(Integer mode) {
+        return Text.literal(switch (mode) {
+            case 0 -> "Off";
+            case 1 -> "EMC";
+            case 2 -> "Xaero";
+            default -> "Both";
+        });
+    }
+
     private static Text minimapTownNameModeText(Integer mode) {
         return Text.literal(switch (mode) {
             case 1 -> "Nearby";
@@ -877,6 +909,38 @@ public class TownyMapConfigScreen extends Screen {
         @Override
         protected void applyValue() {
             config.infoPanelScale = MIN + (float) value * (MAX - MIN);
+            config.save();
+        }
+    }
+
+    /**
+     * Hue slider over any ARGB config colour. The status-highlight slider stays separate because it also
+     * carries the RGB-cycling flag; this one just moves a single colour's hue and keeps it fully opaque.
+     */
+    private static final class ColorHueSlider extends SliderWidget {
+        private final TownyMapConfig config;
+        private final java.util.function.IntSupplier getter;
+        private final java.util.function.IntConsumer setter;
+
+        private ColorHueSlider(int x, int y, int width, int height, TownyMapConfig config,
+                               java.util.function.IntSupplier getter,
+                               java.util.function.IntConsumer setter) {
+            super(x, y, width, height, Text.empty(),
+                    StatusHighlightHueSlider.hueFromRgb(getter.getAsInt() & 0xFFFFFF));
+            this.config = config;
+            this.getter = getter;
+            this.setter = setter;
+            updateMessage();
+        }
+
+        @Override
+        protected void updateMessage() {
+            setMessage(Text.literal(hexColor(getter.getAsInt() & 0xFFFFFF)));
+        }
+
+        @Override
+        protected void applyValue() {
+            setter.accept(0xFF000000 | StatusHighlightHueSlider.hsvToRgb(value, 0.78, 1.0));
             config.save();
         }
     }

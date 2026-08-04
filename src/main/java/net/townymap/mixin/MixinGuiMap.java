@@ -524,6 +524,12 @@ public abstract class MixinGuiMap {
         }
     }
 
+    /**
+     * No-op on current Xaero: {@code xaero.lib.client.graphics.util.TextureUtils} is absent from both
+     * the 26.4.2 minimap and 1.44.2 world map jars, so the loop below never finds a match. Kept because
+     * it costs nothing and would start working again if the class returns; the arrow no longer depends
+     * on it either way, since we draw our own unconditionally.
+     */
     private static void clearDepthForXaeroArrowIfAvailable() {
         try {
             Object framebuffer = MinecraftClient.getInstance().getFramebuffer();

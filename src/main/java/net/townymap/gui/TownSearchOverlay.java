@@ -863,6 +863,10 @@ public final class TownSearchOverlay {
     }
 
     private static void clearSelection() {
+        // The join-range zone belongs to the panel that switched it on, so it goes when that panel does:
+        // dismissing the panel, opening the right-click popup, selecting something else, or reopening the
+        // map (reset() routes through here) all leave the map clean instead of stranding a zone on screen.
+        rangeNation = null;
         selectedType = "";
         selectedName = "";
         infoDiscordVisible = false;

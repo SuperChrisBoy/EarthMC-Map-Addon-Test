@@ -290,7 +290,7 @@ public class WorldMapRenderer {
     public void renderSquaremapBackground(DrawContext ctx,
                                           double cameraX, double cameraZ, double blockScale,
                                           int sw, int sh, boolean moving) {
-        if (!config.squaremapBackgroundEnabled || blockScale <= 0) return;
+        if (!config.squaremapOnWorldMap() || blockScale <= 0) return;
         ctx.fill(0, 0, sw, sh, 0xFF101418);
 
         double worldLeft   = cameraX - sw / 2.0 / blockScale;
@@ -309,7 +309,7 @@ public class WorldMapRenderer {
     public void renderSquaremapViewport(DrawContext ctx,
                                         double cameraX, double cameraZ, double blockScale,
                                         int sw, int sh, boolean moving) {
-        if (!config.squaremapBackgroundEnabled || blockScale <= 0 || sw <= 0 || sh <= 0) return;
+        if (!config.squaremapOnWorldMap() || blockScale <= 0 || sw <= 0 || sh <= 0) return;
 
         double worldLeft = cameraX - sw / 2.0 / blockScale;
         double worldRight = cameraX + sw / 2.0 / blockScale;
@@ -329,7 +329,10 @@ public class WorldMapRenderer {
     public void renderSquaremapMinimapViewport(DrawContext ctx,
                                                double cameraX, double cameraZ, double blockScale,
                                                int sw, int sh, boolean moving, double circularClipRadius) {
-        if (!config.squaremapBackgroundEnabled || blockScale <= 0 || sw <= 0 || sh <= 0) return;
+        // Minimap path (squaremapTiles.renderMinimap), so it keys off the minimap half of the setting.
+        // It lives in WorldMapRenderer only because the tile cache does; gating it on the world map
+        // meant "Minimap" mode drew our outlines over Xaero's terrain with no squaremap tiles at all.
+        if (!config.squaremapOnMinimap() || blockScale <= 0 || sw <= 0 || sh <= 0) return;
 
         double worldLeft = cameraX - sw / 2.0 / blockScale;
         double worldRight = cameraX + sw / 2.0 / blockScale;
@@ -352,7 +355,7 @@ public class WorldMapRenderer {
                                    double cameraX, double cameraZ, double blockScale,
                                    int sw, int sh,
                                    double mouseWorldX, double mouseWorldZ) {
-        if (!config.squaremapBackgroundEnabled || blockScale <= 0) return;
+        if (!config.squaremapOnWorldMap() || blockScale <= 0) return;
         double spacing = CHUNK_SIZE * blockScale;
         if (spacing < 3.0) return;
 
@@ -1935,6 +1938,7 @@ public class WorldMapRenderer {
     private String rangeCacheNation = null;
     private long rangeCacheBuiltAt = 0;
     private int rangeCachePlanVersion = -1;
+    private boolean rangeCacheArchive = false;
     private int rangeCacheRgb = 0x3BAAFF;
     private List<int[]> rangeCacheCircles = List.of();   // {worldX, worldZ, worldRadius}
     // Per circle, the angular spans of its rim that no OTHER circle covers — i.e. the outline of the union.
@@ -1956,11 +1960,16 @@ public class WorldMapRenderer {
                               double cameraX, double cameraZ, double blockScale, int sw, int sh) {
         long now = System.currentTimeMillis();
         int planVersion = net.townymap.gui.PlanningOverlay.version();
+        boolean archive = TownyMapMod.isArchiveMode();
+        // Archive state is part of the key: entering or leaving swaps the whole town set, and without
+        // this the zone kept its old shape until the refresh timer happened to come round.
         if (!nationName.equalsIgnoreCase(rangeCacheNation) || planVersion != rangeCachePlanVersion
+                || archive != rangeCacheArchive
                 || now - rangeCacheBuiltAt > RANGE_REBUILD_MS) {
             rebuildNationRange(nationName, nd);
             rangeCacheNation = nationName;
             rangeCachePlanVersion = planVersion;
+            rangeCacheArchive = archive;
             rangeCacheBuiltAt = now;
         }
         if (rangeCacheCircles.isEmpty()) return;
@@ -2097,7 +2106,7 @@ public class WorldMapRenderer {
             if (cap != null) circles.add(new int[]{cap.centerX(), cap.centerZ(), NATION_JOIN_RANGE});
         }
         for (TownData t : api.getTowns()) {
-            String tn = api.getTownNation(t.key());
+            String tn = TownyMapMod.townNationAt(t.key());
             if (tn == null || !tn.equalsIgnoreCase(nationName)) continue;
             if (capitalName != null && t.name().equalsIgnoreCase(capitalName)) continue;   // capital is the 5k circle
             circles.add(new int[]{t.centerX(), t.centerZ(), TOWN_JOIN_RANGE});
