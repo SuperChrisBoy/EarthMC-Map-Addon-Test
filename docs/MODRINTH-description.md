@@ -54,7 +54,7 @@ A client-side EarthMC map extension for **Xaero's World Map** and **Xaero's Mini
 
 ## Setup
 
-- Searchable sectioned settings screen via Mod Menu with per-row Reset and right-click-to-go-back; UI scale; dark buttons; EarthMC-only mode; keybinds for cycling borders, cycling map mode, refreshing towns, toggling the chunk counter, toggling squaremap, and map screenshot (synced with MC's controls screen); `/townymap` command with `refresh`.
+- Searchable sectioned settings screen via Mod Menu with per-row Reset and right-click-to-go-back; UI scale; dark buttons; EarthMC-only mode; keybinds for cycling borders, cycling map mode, refreshing towns, toggling the chunk counter, toggling squaremap, and map screenshot (synced with MC's controls screen).
 
 ## Requirements
 

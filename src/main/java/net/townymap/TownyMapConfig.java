@@ -22,9 +22,22 @@ public class TownyMapConfig {
     public boolean townsEnabled   = true;
     public boolean playersEnabled = true;
     public boolean earthmcOnly = true;
+    /**
+     * Kept as a gate throughout the minimap rendering, but no longer user-facing: the settings row was
+     * removed, so {@code sanitize()} forces it back on. Without that, anyone whose config had it off
+     * would have no way left to turn the minimap overlay back on.
+     */
     public boolean minimapExtensionsEnabled = true;
     public boolean minimapPlayersEnabled = true;
     public boolean hideMinimapInNether = false;
+    /**
+     * Which minimap background the player indicator is drawn over: 0 = never draw ours, 1 = only when
+     * the EMC overlay is on, 2 = only when it's off (Xaero's own terrain), 3 = both. Xaero draws its
+     * arrow before our overlay, so the EMC layer hides it and ours stands in; over Xaero's terrain ours
+     * lands on its own arrow. Note that 0 leaves no arrow at all while the EMC layer is on, since the
+     * one Xaero draws is underneath it.
+     */
+    public int minimapIndicatorMode = 3;
     public boolean minimapNationAlertEnabled = true;
     public boolean minimapTownNamesEnabled = true;
     // ── Info display (text lines under the minimap, stacked with Xaero's coords) ──
@@ -43,7 +56,26 @@ public class TownyMapConfig {
     public int chunkCounterMode = 2;
     public int activeChunkCounterGroup = 0;
     public int chunkCounterGroupCount = 1;
+    /**
+     * Where the EarthMC (squaremap) imagery layer is shown: 0 = off, 1 = world map only, 2 = minimap
+     * only, 3 = both. Same numbering as {@link #playerHeadMode}.
+     */
+    public int squaremapBackgroundMode = 0;
+    /**
+     * Legacy single on/off flag, superseded by {@link #squaremapBackgroundMode}. Kept so existing
+     * configs still migrate ({@code sanitize()} promotes a true value to "both"); nothing reads it.
+     */
     public boolean squaremapBackgroundEnabled = false;
+
+    /** Whether the EarthMC imagery layer is drawn on the minimap. */
+    public boolean squaremapOnMinimap() {
+        return squaremapBackgroundMode == 2 || squaremapBackgroundMode == 3;
+    }
+
+    /** Whether the EarthMC imagery layer is drawn on the world map. */
+    public boolean squaremapOnWorldMap() {
+        return squaremapBackgroundMode == 1 || squaremapBackgroundMode == 3;
+    }
     // Darken the squaremap imagery (world map + minimap): 0 = off, 1 = light, 2 = medium, 3 = dark.
     public int squaremapDarken = 0;
     // Render the on-map buttons/panels in a flat dark (near-black) style instead of vanilla textured buttons.
@@ -100,7 +132,6 @@ public class TownyMapConfig {
     public boolean statusHighlightSettingsInitialized = true;
 
     // ── Visual (players) ────────────────────────────────────────────────────
-    public int playerColor       = 0xFFFFFFFF;
     public int playerLabelColor  = 0xFFFFFF00;
     public boolean showPlayerNames = true;
     public double playerNameMinScale = 0.08;
@@ -155,6 +186,24 @@ public class TownyMapConfig {
 
     private boolean sanitize() {
         boolean changed = false;
+
+        // Migrate the old single on/off flag: a config written before the per-map modes existed only
+        // knew "on", which meant both maps. Clear the legacy flag afterwards so this runs once.
+        if (squaremapBackgroundEnabled) {
+            if (squaremapBackgroundMode == 0) squaremapBackgroundMode = 3;
+            squaremapBackgroundEnabled = false;
+            changed = true;
+        }
+        if (squaremapBackgroundMode < 0 || squaremapBackgroundMode > 3) {
+            squaremapBackgroundMode = 0;
+            changed = true;
+        }
+        // No control for this any more, so a config that still has it off would be permanently stuck.
+        if (!minimapExtensionsEnabled) {
+            minimapExtensionsEnabled = true;
+            changed = true;
+        }
+
 
         if (refreshTownsSecs != 60) {
             refreshTownsSecs = 60;
