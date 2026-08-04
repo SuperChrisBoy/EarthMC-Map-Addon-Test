@@ -7,7 +7,9 @@
     "CycleButtonAccessor",
     "MixinCommonMinimapRenderer",
     "MixinGuiMap",
-    "MixinMinimapModuleRenderer"
+    "MixinInfoDisplayRenderer",
+    "MixinMinimapModuleRenderer",
+    "MixinWaypointMapRenderer"
   ],
   "injectors": {
     "defaultRequire": 0

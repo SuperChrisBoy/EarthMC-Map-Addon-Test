@@ -13,30 +13,16 @@ public final class TownyMapKeybinds {
     private static final KeyMapping.Category CATEGORY =
             KeyMapping.Category.register(Identifier.fromNamespaceAndPath("townymapaddon", "keybinds"));
 
-    private static KeyMapping toggleSquaremap;
-    private static KeyMapping cycleBorders;
-    private static KeyMapping cycleMapMode;
-    private static KeyMapping toggleChunkCounter;
-    private static KeyMapping refreshTowns;
     private static KeyMapping mapScreenshot;
 
     private TownyMapKeybinds() {
     }
 
     public static void register() {
-        toggleSquaremap = register("toggle_squaremap");
-        cycleBorders = register("cycle_borders");
-        cycleMapMode = register("cycle_map_mode");
-        toggleChunkCounter = register("toggle_chunk_counter");
-        refreshTowns = register("refresh_towns");
+        // Only the screenshot bind remains; everything else it used to cover has an on-map button.
         mapScreenshot = register("map_screenshot", GLFW.GLFW_KEY_P);
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            while (toggleSquaremap.consumeClick()) TownyMapMod.toggleSquaremapBackground();
-            while (cycleBorders.consumeClick()) TownyMapMod.cycleBorderOverlayMode();
-            while (cycleMapMode.consumeClick()) TownyMapMod.cycleTownStatusOverlayMode();
-            while (toggleChunkCounter.consumeClick()) TownyMapMod.toggleChunkCounter();
-            while (refreshTowns.consumeClick()) TownyMapMod.refreshTownClaimsFromKeybind();
             // Only meaningful with the world map open — the countdown advances in its render. Arming with
             // it closed used to leave the "hide our UI" flag set indefinitely.
             while (mapScreenshot.consumeClick()) {
@@ -50,10 +36,6 @@ public final class TownyMapKeybinds {
     /** True if this key press matches the (rebindable) clean-screenshot bind, for use inside map screens. */
     public static boolean isMapScreenshotKey(net.minecraft.client.input.KeyEvent input) {
         return mapScreenshot != null && !mapScreenshot.isUnbound() && mapScreenshot.matches(input);
-    }
-
-    private static KeyMapping register(String id) {
-        return register(id, GLFW.GLFW_KEY_UNKNOWN);
     }
 
     private static KeyMapping register(String id, int defaultKey) {

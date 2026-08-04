@@ -385,11 +385,17 @@ final class SquaremapTileRenderer {
                 int stripLeft = Math.max(x, (int) Math.floor(circleClip.centerX() - halfChord));
                 int stripRight = Math.min(x2, (int) Math.ceil(circleClip.centerX() + halfChord));
                 if (stripLeft < stripRight) {
+                    // Overlap each strip one pixel into the next. The strips tile the circle exactly in
+                    // local space, but the minimap draws them inside a rotation matrix, and rasterising
+                    // adjacent rotated quads leaves hairline seams along the shared edge — visible as
+                    // faint horizontal dashes that crawl as you turn. A 1px overlap closes them; the
+                    // duplicated row is identical terrain, so it can't show as a seam of its own.
+                    int drawBottom = Math.min(bottom, stripBottom + 1);
                     float u1 = (float) ((u + (stripLeft - x) * (double) regionW / drawW) / TILE_PIXELS);
                     float u2 = (float) ((u + (stripRight - x) * (double) regionW / drawW) / TILE_PIXELS);
                     float v1 = (float) ((v + (stripY - y) * (double) regionH / drawH) / TILE_PIXELS);
-                    float v2 = (float) ((v + (stripBottom - y) * (double) regionH / drawH) / TILE_PIXELS);
-                    ctx.blit(texture, stripLeft, stripY, stripRight, stripBottom, u1, u2, v1, v2);
+                    float v2 = (float) ((v + (drawBottom - y) * (double) regionH / drawH) / TILE_PIXELS);
+                    ctx.blit(texture, stripLeft, stripY, stripRight, drawBottom, u1, u2, v1, v2);
                 }
             }
             stripY = stripBottom;

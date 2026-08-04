@@ -24,7 +24,7 @@ public final class MapToggleOverlay {
     private static final int ADD_WIDTH = 20;
     private static final int FILL_WIDTH = 34;
     private static final int SETTINGS_GAP = 7;   // extra gap above the settings button
-    private static final int TOGGLE_ROWS = 5;    // EMC | Borders | Map mode | Chunks | Counter
+    private static final int TOGGLE_ROWS = 5;    // Squaremap | Borders | Map mode | Chunks | Counter
 
     private MapToggleOverlay() {}
 
@@ -36,7 +36,7 @@ public final class MapToggleOverlay {
         Font tr = Minecraft.getInstance().font;
         int y = togglesTop(sh);
 
-        drawToggle(ctx, tr, 0, y, squaremapLoading ? "EMC..." : "EMC", config.squaremapBackgroundEnabled);
+        drawToggle(ctx, tr, 0, y, squaremapLoading ? "Squaremap..." : "Squaremap", config.squaremapOnWorldMap());
         drawMode(ctx, tr, 1, y, bordersLoading ? "Borders..." : "Borders", borderModeLabel(config.borderOverlayMode),
                 config.borderOverlayMode != 0);
         drawMode(ctx, tr, 2, y, "Map", statusModeLabel(config.townStatusOverlayMode),
@@ -83,7 +83,7 @@ public final class MapToggleOverlay {
         int row = toggleRowAt(mouseY, sh);
         if (row >= 0) {
             switch (row) {
-                case 0 -> config.squaremapBackgroundEnabled = !config.squaremapBackgroundEnabled;
+                case 0 -> TownyMapMod.setSquaremapOnWorldMap(!config.squaremapOnWorldMap());
                 case 1 -> config.borderOverlayMode = (config.borderOverlayMode + (backward ? 2 : 1)) % 3;
                 case 2 -> {
                     int before = config.townStatusOverlayMode;

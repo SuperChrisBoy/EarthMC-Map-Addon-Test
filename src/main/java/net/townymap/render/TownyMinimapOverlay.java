@@ -67,6 +67,8 @@ public final class TownyMinimapOverlay {
     private static long lastXaeroChunkGridSyncAttemptMs;
     private static long lastMinimapShapeReadAtMs;
     private static int cachedMinimapShape = 0;
+    private static long lastArrowOptionReadAtMs;
+    private static double cachedArrowScale = 1.0;
     private static long lastWaypointConfigReadAtMs;
     private static WaypointDrawConfig cachedWaypointDrawConfig =
             new WaypointDrawConfig(true, 100, 1.0F, 0.0, false, false);
@@ -76,6 +78,14 @@ public final class TownyMinimapOverlay {
     private static long cachedWaypointCollectAtMs;
     private static List<Waypoint> cachedMinimapWaypoints = List.of();
     private static boolean lastRenderCanCoverWaypoints;
+    /**
+     * Blocks-per-block factor the minimap was actually drawn at this frame, for the waypoint layer.
+     * 1.0 normally. In the Nether with "Overworld Coords" the town overlay and the squaremap tiles are
+     * drawn in overworld space, so a waypoint delta measured in Nether blocks has to be multiplied by
+     * this to land in the right place. Only set when the squaremap layer is what's actually on screen:
+     * over Xaero's own terrain the waypoints belong to the Nether and must not be scaled.
+     */
+    private static double lastRenderWaypointScale = 1.0;
 
     private TownyMinimapOverlay() {
     }
@@ -110,6 +120,7 @@ public final class TownyMinimapOverlay {
         TownyMapConfig config = TownyMapMod.getConfig();
         SquaremapApiClient api = TownyMapMod.getApiClient();
         lastRenderCanCoverWaypoints = false;
+        lastRenderWaypointScale = 1.0;
         if (config == null || api == null || !config.minimapExtensionsEnabled) return;
         syncXaeroChunkGrid(session, config);
 
@@ -141,12 +152,13 @@ public final class TownyMinimapOverlay {
         }
 
         double blocksAcross = minimapBlocksAcross(session);
-        // Everything below works in overworld coordinates, so this has to be pixels per *overworld*
-        // block. The minimap spans blocksAcross blocks of the dimension the player is actually in,
-        // which is dimScale times that many overworld blocks. The world map already divides its own
-        // block-scale the same way; the minimap did not, so Nether towns drew 8x oversized against
-        // the terrain while sitting at the right centre.
-        double pixelsPerBlock = size / (blocksAcross * dimScale);
+        // Pixels per *overworld* block, and deliberately NOT divided by dimScale. The minimap shows the
+        // overworld map at its normal scale centred on where you'd be in the overworld, rather than
+        // shrinking it to line up with the Nether terrain underneath (which is what the world map does).
+        // Everything downstream depends on that reading: visibleBlocks below derives the chunk scan
+        // window from blocksAcross in these same units, so dividing here — as 1.3.8 briefly did —
+        // shrinks the scan window 8x and most borders never get drawn.
+        double pixelsPerBlock = size / blocksAcross;
         if (pixelsPerBlock <= 0) return;
 
         double centerX = mapX + size / 2.0;
@@ -172,7 +184,8 @@ public final class TownyMinimapOverlay {
                 : blocksAcross / 2.0 + EXTRA_BLOCK_PADDING;
         TownyMapMod.updateMinimapNationAlert(playerX, playerZ, visibleBlocks);
 
-        boolean squaremapRendered = config.squaremapBackgroundEnabled;
+        boolean squaremapRendered = config.squaremapOnMinimap();
+        lastRenderWaypointScale = squaremapRendered ? dimScale : 1.0;
         if (squaremapRendered) {
             renderSquaremapBackground(ctx, mapX, mapY, size, playerX, playerZ,
                     pixelsPerBlock, angle, clip);
@@ -340,7 +353,10 @@ public final class TownyMinimapOverlay {
         double maxDistance = waypointConfig.maxDistance();
 
         double blocksAcross = minimapBlocksAcross(session);
-        double pixelsPerBlock = size / blocksAcross;
+        // Match whatever projection the map was drawn at this frame. Waypoints are stored in the
+        // dimension the player is in, so over the overworld-coords Nether view their deltas have to be
+        // scaled up the same way the town overlay's were, or they cluster 8x too close to the player.
+        double pixelsPerBlock = size / blocksAcross * lastRenderWaypointScale;
         if (pixelsPerBlock <= 0) return;
 
         double backgroundScale = Math.max(0.0001, session.getProcessor().getLastMapDimensionScale());
@@ -784,10 +800,35 @@ public final class TownyMinimapOverlay {
         }
     }
 
+    /**
+     * Outline colour for a town edge. Over the squaremap layer the town's own colour is used as-is:
+     * those tiles are flat and usually darkened, so it reads fine. Over Xaero's terrain it competes
+     * with block colours, so the colour is pushed to full opacity and full brightness.
+     *
+     * <p>Brightness is raised by scaling all three channels by the same factor until the strongest one
+     * hits 255. That keeps the hue and the relative channel mix exactly as the nation picked them -- it
+     * only stops a mid-tone colour sinking into the terrain. Clamping channels individually, or mixing
+     * toward white, would both shift the hue instead.
+     */
+    private static int townEdgeColor(int argb, boolean overSquaremap) {
+        if (overSquaremap) return argb;
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int peak = Math.max(r, Math.max(g, b));
+        if (peak > 0) {
+            r = r * 255 / peak;
+            g = g * 255 / peak;
+            b = b * 255 / peak;
+        }
+        return 0xFF000000 | (r << 16) | (g << 8) | b;
+    }
+
     private static void drawVisibleTownEdges(GuiGraphicsExtractor ctx, List<ChunkEdge> edges, TownyMapConfig config) {
         for (ChunkEdge edge : edges) {
             boolean favorite = TownyMapMod.isFavorite(edge.town().name());
-            int outlineColor = favorite ? FAVORITE_OUTLINE : edge.town().argbColor(config.borderAlpha);
+            int outlineColor = favorite ? FAVORITE_OUTLINE
+                    : townEdgeColor(edge.town().argbColor(config.borderAlpha), config.squaremapOnMinimap());
             drawChunkEdge(ctx, edge.x1(), edge.z1(), edge.x2(), edge.z2(), outlineColor);
         }
     }
@@ -813,7 +854,8 @@ public final class TownyMinimapOverlay {
                 if (town != cachedTown) {
                     cachedTown = town;
                     cachedColor = TownyMapMod.isFavorite(town.name())
-                            ? FAVORITE_OUTLINE : town.argbColor(config.borderAlpha);
+                            ? FAVORITE_OUTLINE : townEdgeColor(town.argbColor(config.borderAlpha),
+                                        config.squaremapOnMinimap());
                 }
                 drawEdgeClippedToCircle(ctx, edge.x1(), edge.z1(), edge.x2(), edge.z2(),
                         cachedColor, playerX, playerZ, rwSq);
@@ -1159,11 +1201,36 @@ public final class TownyMinimapOverlay {
      * Draws Xaero's own arrow sprite at the minimap centre, matching the player's yaw.
      * Uses GuiGraphicsExtractor so it composites on top of the squaremap tile batch at frame-end.
      */
+    /**
+     * Redraws Xaero's player arrow on top of our overlay.
+     * <p>
+     * Xaero calls drawArrow inside renderMinimap, which runs <em>before</em> the renderOutsidePip call
+     * our overlay redirects — so anything we paint lands over its arrow. This used to be gated on the
+     * squaremap background as well, on the assumption that only that opaque layer could hide it; with
+     * the background off the arrow disappeared instead, so the overlay covers it either way.
+     * <p>
+     * Drawn whenever our overlay is active, and only when Xaero is set to draw an arrow at all, so a
+     * player who turned it off doesn't get one back. Because this is a faithful copy of Xaero's own
+     * sprite, colour and scale, landing on top of a visible arrow is indistinguishable from just the
+     * one arrow.
+     */
     public static void renderPlayerIndicator(GuiGraphicsExtractor ctx, MinimapSession session,
                                              int mapX, int mapY, int size) {
         TownyMapConfig config = TownyMapMod.getConfig();
-        if (config == null || !config.minimapExtensionsEnabled || !config.squaremapBackgroundEnabled) return;
-        if (session.getProcessor().isCaveModeDisplayed()) return;
+        boolean cave;
+        try { cave = session.getProcessor().isCaveModeDisplayed(); } catch (Throwable ignored) { cave = false; }
+        if (config == null || !config.minimapExtensionsEnabled) return;
+        if (cave) return;
+        // Which background the user wants the indicator over. Xaero draws its own arrow before our
+        // overlay, so with the EMC layer on it's hidden and ours is the only one; with the layer off
+        // ours lands on top of Xaero's, matching its sprite and scale, so they read as one arrow.
+        boolean emcLayer = config.squaremapOnMinimap();
+        switch (config.minimapIndicatorMode) {
+            case 0 -> { return; }
+            case 1 -> { if (!emcLayer) return; }
+            case 2 -> { if (emcLayer) return; }
+            default -> { }
+        }
 
         Minecraft client = Minecraft.getInstance();
         if (client.player == null) return;
@@ -1183,7 +1250,12 @@ public final class TownyMinimapOverlay {
         int minimapSize = size * 2;  // safe fallback
         try { minimapSize = Math.max(1, session.getProcessor().getMinimapSize()); }
         catch (Exception ignored) {}
-        float arrowScale = Math.max(0.2f, Math.min(1.5f, 0.5f * size / minimapSize));
+        // Match Xaero's own arrow: it scales by ARROW_SCALE * 0.5 inside a coordinate space that maps
+        // minimapSize units onto size pixels. Leaving the configured scale out (it used to be hardcoded
+        // to the 1.0 case) drew our replica smaller than Xaero's by exactly that factor -- at the default
+        // minimap size that's a ~7px arrow, easy to miss entirely against terrain.
+        float arrowScale = Math.max(0.2f,
+                Math.min(3.0f, (float) (0.5 * xaeroArrowScale()) * size / minimapSize));
         float shadowOffset = 2f * arrowScale;
 
         Matrix3x2fStack m = ctx.pose();
@@ -1203,6 +1275,13 @@ public final class TownyMinimapOverlay {
         m.scale(arrowScale, arrowScale);
         drawXaeroArrowSprite(ctx, 0xFFFF1414);
         m.popMatrix();
+
+        // Flush our own draw. On this MC version GUI blits go into a deferred batch, and the only
+        // extraction happening after this point lived inside renderCompassDirections / the squaremap
+        // background — both gated on the EMC layer. With that layer off the arrow was queued and then
+        // silently dropped, which is exactly what the logs showed: the draw ran, no exception, nothing
+        // on screen. Extracting here makes the indicator independent of whatever else is enabled.
+        ctx.extractDeferredElements(0, 0, 0.0F);
     }
 
     private static void drawXaeroArrowSprite(GuiGraphicsExtractor ctx, int color) {
@@ -1217,7 +1296,7 @@ public final class TownyMinimapOverlay {
     public static void renderCompassDirections(GuiGraphicsExtractor ctx, MinimapSession session,
                                                int mapX, int mapY, int size) {
         TownyMapConfig config = TownyMapMod.getConfig();
-        if (config == null || !config.minimapExtensionsEnabled || !config.squaremapBackgroundEnabled) return;
+        if (config == null || !config.minimapExtensionsEnabled || !config.squaremapOnMinimap()) return;
         if (session.getProcessor().isCaveModeDisplayed()) return;
         if (size <= 24) return;
 
@@ -1292,7 +1371,7 @@ public final class TownyMinimapOverlay {
     public static void renderSquaremapBackground(GuiGraphicsExtractor ctx, MinimapSession session,
                                                  int mapX, int mapY, int size) {
         TownyMapConfig config = TownyMapMod.getConfig();
-        if (config == null || !config.minimapExtensionsEnabled || !config.squaremapBackgroundEnabled) return;
+        if (config == null || !config.minimapExtensionsEnabled || !config.squaremapOnMinimap()) return;
         if (session.getProcessor().isCaveModeDisplayed()) return;
 
         Minecraft client = Minecraft.getInstance();
@@ -1312,8 +1391,10 @@ public final class TownyMinimapOverlay {
             }
         }
 
+        // Same units as the town overlay above: pixels per overworld block, not divided by dimScale,
+        // so the tiles sit at the same scale as the borders drawn over them.
         double blocksAcross = minimapBlocksAcross(session);
-        double pixelsPerBlock = size / (blocksAcross * dimScale);
+        double pixelsPerBlock = size / blocksAcross;
         if (pixelsPerBlock <= 0) return;
 
         int left = mapX;
@@ -1482,6 +1563,37 @@ public final class TownyMinimapOverlay {
 
         cachedMinimapShape = readMinimapShapeFromConfig(cachedMinimapShape);
         return cachedMinimapShape;
+    }
+
+    /**
+     * Xaero's configured arrow scale (its "Arrow Scale" setting), cached like the shape read since it
+     * runs per frame. Defaults to 1.0 if it can't be read.
+     *
+     * <p>This replaced an earlier check for a plain {@code ARROW} on/off option, which does not exist:
+     * the minimap options class only has ARROW_SCALE / ARROW_COLOR / ARROW_OPACITY, so that lookup threw
+     * every frame and always fell through to its default. The scale is the value that actually matters —
+     * ignoring it drew our replica smaller than Xaero's own arrow by exactly that factor.
+     */
+    private static double xaeroArrowScale() {
+        long now = System.currentTimeMillis();
+        if (now - lastArrowOptionReadAtMs < MINIMAP_SHAPE_CACHE_MS) return cachedArrowScale;
+        lastArrowOptionReadAtMs = now;
+        try {
+            Class<?> hudModClass = Class.forName("xaero.common.HudMod");
+            Object hudMod = hudModClass.getField("INSTANCE").get(null);
+            Object hudConfigs = hudModClass.getMethod("getHudConfigs").invoke(hudMod);
+            Object manager = hudConfigs.getClass().getMethod("getClientConfigManager").invoke(hudConfigs);
+            Class<?> optionsClass = Class.forName(
+                    "xaero.hud.minimap.common.config.option.MinimapProfiledConfigOptions");
+            Object scaleOption = optionsClass.getField("ARROW_SCALE").get(null);
+            Object value = getXaeroProfileOption(manager, scaleOption);
+            if (value instanceof Number n && n.doubleValue() > 0) {
+                cachedArrowScale = n.doubleValue();
+            }
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+            // Leave the cached value alone; it starts at 1.0.
+        }
+        return cachedArrowScale;
     }
 
     private static Object getXaeroProfileOption(Object manager, Object option)
