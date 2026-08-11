@@ -535,8 +535,10 @@ public class WorldMapRenderer {
                     : favorite ? ((interiorAlpha << 24) | 0xFFE066)
                     : ((interiorAlpha << 24) | (town.data().fillRgbColor() & 0xFFFFFF));
 
-            for (RingGeometry ring : town.rings()) {
-                renderRing(ctx, ring, 0, outlineColor, fillColor, cameraX, cameraZ, blockScale, sw, sh);
+            List<RingGeometry> townRings = town.rings();
+            for (int ri = 0; ri < townRings.size(); ri++) {
+                renderRing(ctx, townRings.get(ri), 0, outlineColor, fillColor,
+                        ri == 0 ? town.fillData() : null, cameraX, cameraZ, blockScale, sw, sh);
             }
         }
     }
@@ -938,6 +940,12 @@ public class WorldMapRenderer {
                     drew = true;
                     continue;
                 }
+                // All of a town's rings go into ONE even-odd path, then fill once. A town's rings are
+                // an outer boundary plus any unclaimed pockets inside it; filling them one at a time
+                // painted those pockets solid instead of punching them out, so a hollow town read as
+                // fully claimed while its outline correctly traced the hole.
+                Path2D.Double path = new Path2D.Double(Path2D.WIND_EVEN_ODD);
+                boolean anyRing = false;
                 for (RingGeometry ring : town.rings()) {
                     int[] xs = ring.lodX(lod), zs = ring.lodZ(lod);
                     if (xs.length < 2) continue;
@@ -948,15 +956,14 @@ public class WorldMapRenderer {
                         pz[i] = (zs[i] - tileWorldZ) * ppb;
                     }
                     int n = smooth ? simplifyRing(px, pz, simplifyTol) : xs.length;
-                    Path2D.Double path = new Path2D.Double();
                     path.moveTo(px[0], pz[0]);
                     for (int i = 1; i < n; i++) {
                         path.lineTo(px[i], pz[i]);
                     }
                     path.closePath();
-                    // Leaflet's _fillStroke on the SAME simplified path: soft fill first, wide translucent
-                    // stroke over it. Fill and stroke can never disagree about the shape — the reason the
-                    // site's borders always sit flush on their fills.
+                    anyRing = true;
+                }
+                if (anyRing) {
                     if (bakeFill) {
                         g.setColor(awtColor((fillAlphaT << 24) | fillRgb));
                         g.fill(path);
@@ -1209,7 +1216,7 @@ public class WorldMapRenderer {
     // fires rarely and costs at most 4 draw calls when it does.
 
     private void renderRing(GuiGraphicsExtractor ctx, RingGeometry ring, int lodBoost,
-                            int borderColor, int fillColor,
+                            int borderColor, int fillColor, int[] townFill,
                             double cameraX, double cameraZ, double blockScale,
                             int sw, int sh) {
         // Town-level bounding-box cull
@@ -1230,8 +1237,8 @@ public class WorldMapRenderer {
         }
 
         // Fill (pre-computed rects, gated by TOWN_FILL_MIN_SCALE in caller)
-        if ((fillColor >>> 24) > 0 && bbW > 2 && bbH > 2) {
-            renderCachedFill(ctx, ring, fillColor, cameraX, cameraZ, blockScale, sw, sh);
+        if (townFill != null && (fillColor >>> 24) > 0 && bbW > 2 && bbH > 2) {
+            renderCachedFill(ctx, townFill, fillColor, cameraX, cameraZ, blockScale, sw, sh);
         }
 
         if ((borderColor >>> 24) == 0) return;
@@ -1317,11 +1324,10 @@ public class WorldMapRenderer {
         ctx.fill(x, y, x + 1, y + 1, color);
     }
 
-    private static void renderCachedFill(GuiGraphicsExtractor ctx, RingGeometry ring, int color,
+    private static void renderCachedFill(GuiGraphicsExtractor ctx, int[] fd, int color,
                                          double cameraX, double cameraZ, double blockScale,
                                          int sw, int sh) {
         // fillData is a flat int[] with 4 values per rect: [minX, minZ, maxX, maxZ, ...]
-        int[] fd = ring.fillData();
         for (int i = 0, len = fd.length; i < len; i += 4) {
             int x1 = toScreenX(fd[i],     cameraX, blockScale, sw);
             int y1 = toScreenY(fd[i + 1], cameraZ, blockScale, sh);
@@ -1617,6 +1623,7 @@ public class WorldMapRenderer {
     }
 
     private record RenderTown(TownData data, String name, String key, long signature, List<RingGeometry> rings,
+                              int[] fillData,
                               int minX, int maxX, int minZ, int maxZ) {
         private static RenderTown from(TownData town) {
             ArrayList<RingGeometry> rings = new ArrayList<>(town.polygonRings().size());
@@ -1624,7 +1631,9 @@ public class WorldMapRenderer {
                 rings.add(RingGeometry.from(ring));
             }
             return new RenderTown(town, town.name(), town.key(), town.renderSignature(),
-                    List.copyOf(rings), town.minX(), town.maxX(), town.minZ(), town.maxZ());
+                    List.copyOf(rings),
+                    buildTownFillData(rings, town.minX(), town.maxX(), town.minZ(), town.maxZ()),
+                    town.minX(), town.maxX(), town.minZ(), town.maxZ());
         }
 
         private boolean intersectsWorld(double left, double right, double top, double bottom) {
@@ -1661,7 +1670,6 @@ public class WorldMapRenderer {
     private record RingGeometry(
             int[][] lodX,     // lodX[level] = ordered X coords for that LOD level
             int[][] lodZ,     // lodZ[level] = ordered Z coords for that LOD level
-            int[] fillData,
             int minX, int maxX, int minZ, int maxZ) {
 
         private int[] lodX(int level) { return lodX[level]; }
@@ -1713,7 +1721,6 @@ public class WorldMapRenderer {
             }
 
             return new RingGeometry(lodX, lodZ,
-                                    buildFillData(px, pz, minX, maxX, minZ, maxZ),
                                     minX, maxX, minZ, maxZ);
         }
     }
@@ -1763,9 +1770,39 @@ public class WorldMapRenderer {
      * Builds fill data as a flat int[] with 4 ints per rect: [minX, minZ, maxX, maxZ, ...].
      * Uses Arrays.sort for O(n log n) band deduplication instead of the previous O(n²) scan.
      */
-    private static int[] buildFillData(int[] x, int[] z, int minX, int maxX, int minZ, int maxZ) {
+    private static int[] buildTownFillData(List<RingGeometry> rings, int minX, int maxX, int minZ, int maxZ) {
+        int total = 0;
+        for (RingGeometry r : rings) total += r.lodX(0).length;
+        if (total < 3) return new int[0];
+        int[] x = new int[total], z = new int[total];
+        int[] ringEnd = new int[rings.size()];
+        int at = 0, k = 0;
+        for (RingGeometry r : rings) {
+            int[] rx = r.lodX(0), rz = r.lodZ(0);
+            System.arraycopy(rx, 0, x, at, rx.length);
+            System.arraycopy(rz, 0, z, at, rz.length);
+            at += rx.length;
+            ringEnd[k++] = at;
+        }
+        return buildFillData(x, z, ringEnd, minX, maxX, minZ, maxZ);
+    }
+
+    /**
+     * Scanline-fills a town from ALL its rings at once. Crossings are consumed in even-odd pairs, so a
+     * ring enclosed by another -- an unclaimed pocket -- toggles back to "outside" and stays empty.
+     * ringEnd holds each ring's exclusive end index so edges wrap within their own ring.
+     */
+    private static int[] buildFillData(int[] x, int[] z, int[] ringEnd,
+                                       int minX, int maxX, int minZ, int maxZ) {
         int n = x.length;
         if (n < 3 || minX == maxX || minZ == maxZ) return new int[0];
+
+        int[] next = new int[n];
+        int rs = 0;
+        for (int end : ringEnd) {
+            for (int i = rs; i < end; i++) next[i] = (i + 1 < end) ? i + 1 : rs;
+            rs = end;
+        }
 
         // Deduplicate Z band boundaries: sort a copy, then take unique values — O(n log n)
         int[] sortedZ = Arrays.copyOf(z, n);
@@ -1789,7 +1826,7 @@ public class WorldMapRenderer {
 
             int xCount = 0;
             for (int i = 0; i < n; i++) {
-                int j = (i + 1) % n;
+                int j = next[i];
                 int z1 = z[i], z2 = z[j];
                 if (z1 == z2) continue;
                 int lo = Math.min(z1, z2), hi = Math.max(z1, z2);
