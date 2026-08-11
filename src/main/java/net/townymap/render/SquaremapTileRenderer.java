@@ -60,6 +60,8 @@ final class SquaremapTileRenderer {
     private final ExecutorService executor;
     private final Set<TileKey> loading = ConcurrentHashMap.newKeySet();
     private final Map<TileKey, Long> failedAt = new ConcurrentHashMap<>();
+    /** HTTP status codes already reported, so a bulk refusal logs one line, not one per tile. */
+    private final Set<Integer> loggedTileStatuses = ConcurrentHashMap.newKeySet();
     private final Map<TileKey, LoadedTile> completedTiles = new ConcurrentHashMap<>();
     private final LinkedHashMap<TileKey, Identifier> textures =
             new LinkedHashMap<>(64, 0.75f, true);
@@ -362,39 +364,66 @@ final class SquaremapTileRenderer {
         int baseStrip = circleClip.stripHeight();
         double cy = circleClip.centerY();
         double radius = circleClip.radius();
-        int stripY = top;
-        while (stripY < bottom) {
-            // Pick a strip height that keeps the chord's horizontal step ~TARGET px *everywhere*,
-            // not just at the top/bottom: tall strips where the circle is near-vertical (chord
-            // changes slowly with y), short strips where it curves hard. This is the minimum number
-            // of strips for a given edge smoothness, so the whole rim is uniformly flush.
-            double dyHere = Math.abs((stripY + 0.5) - cy);
-            double chordHere = dyHere < radius ? Math.sqrt(radius * radius - dyHere * dyHere) : 0.0;
-            int stripHeight = dyHere < 1.0
-                    ? baseStrip
-                    : (int) Math.max(1, Math.min(baseStrip, Math.round(CIRCLE_EDGE_STEP_PX * chordHere / dyHere)));
-            int stripBottom = Math.min(bottom, stripY + stripHeight);
-            double dy = Math.max(Math.abs(stripY - cy), Math.abs(stripBottom - cy));
-            double chordSq = circleClip.radiusSq() - dy * dy;
-            if (chordSq > 0.0) {
-                double halfChord = Math.sqrt(chordSq);
-                int stripLeft = Math.max(x, (int) Math.floor(circleClip.centerX() - halfChord));
-                int stripRight = Math.min(x2, (int) Math.ceil(circleClip.centerX() + halfChord));
-                if (stripLeft < stripRight) {
-                    float u1 = (float) ((u + (stripLeft - x) * (double) regionW / drawW) / TILE_PIXELS);
-                    float u2 = (float) ((u + (stripRight - x) * (double) regionW / drawW) / TILE_PIXELS);
-                    float v1 = (float) ((v + (stripY - y) * (double) regionH / drawH) / TILE_PIXELS);
-                    // Overlap each strip one pixel into the next. The strips tile the circle exactly in
-                    // local space, but the minimap draws them inside a rotation matrix, and rasterising
-                    // adjacent rotated quads leaves hairline seams along the shared edge - visible as
-                    // faint horizontal dashes that crawl as you turn. A 1px overlap closes them; the
-                    // duplicated row is identical terrain, so it can't show as a seam of its own.
-                    int drawBottom = Math.min(bottom, stripBottom + 1);
-                    float v2 = (float) ((v + (drawBottom - y) * (double) regionH / drawH) / TILE_PIXELS);
-                    ctx.drawTexturedQuad(texture, stripLeft, stripY, stripRight, drawBottom, u1, u2, v1, v2);
+        double cxC = circleClip.centerX();
+        int bandTop = top;
+        while (bandTop < bottom) {
+            int bandBottom = Math.min(bottom, bandTop + baseStrip);
+            // A band's core is the chord at its FAR edge -- the narrowest the circle gets anywhere in
+            // that band, so the rectangle provably lies inside it. One quad covers the bulk of the band
+            // and the fine strips only fill the thin crescents where the circle bulges past it.
+            //
+            // Without this the strips ran the full width of every tile, and since a tile is far wider
+            // than the minimap circle almost none take the containsRect fast path -- so the whole map
+            // was drawn as 1-3px strips, hundreds of abutting quads whose shared edges show as lines
+            // once rotation moves them off integer pixels. Same shape, same 1px edge steps, ~90% less
+            // internal edge for a line to appear along.
+            double dyBand = Math.max(Math.abs(bandTop - cy), Math.abs(bandBottom - cy));
+            double coreSq = circleClip.radiusSq() - dyBand * dyBand;
+            int coreL = 0, coreR = 0;
+            if (coreSq > 0.0) {
+                double coreHalf = Math.sqrt(coreSq);
+                coreL = Math.max(x,  (int) Math.ceil(cxC - coreHalf));
+                coreR = Math.min(x2, (int) Math.floor(cxC + coreHalf));
+                if (coreL < coreR) {
+                    blitRegion(ctx, texture, coreL, bandTop, coreR, bandBottom,
+                            x, y, drawW, drawH, u, v, regionW, regionH);
                 }
             }
-            stripY = stripBottom;
+
+            int stripY = bandTop;
+            while (stripY < bandBottom) {
+                double dyHere = Math.abs((stripY + 0.5) - cy);
+                double chordHere = dyHere < radius ? Math.sqrt(radius * radius - dyHere * dyHere) : 0.0;
+                int stripHeight = dyHere < 1.0
+                        ? baseStrip
+                        : (int) Math.max(1, Math.min(baseStrip,
+                        Math.round(CIRCLE_EDGE_STEP_PX * chordHere / dyHere)));
+                int stripBottom = Math.min(bandBottom, stripY + stripHeight);
+                double dy = Math.max(Math.abs(stripY - cy), Math.abs(stripBottom - cy));
+                double chordSq = circleClip.radiusSq() - dy * dy;
+                if (chordSq > 0.0) {
+                    double halfChord = Math.sqrt(chordSq);
+                    int stripLeft = Math.max(x, (int) Math.floor(cxC - halfChord));
+                    int stripRight = Math.min(x2, (int) Math.ceil(cxC + halfChord));
+                    if (stripLeft < stripRight) {
+                        // Overlap a row into the next strip; the imagery is opaque and both rows sample
+                        // the same texels, so the duplicate cannot show.
+                        int drawBottom = Math.min(bottom, stripBottom + 1);
+                        if (coreL < coreR) {
+                            // Bulk is already down; fill only the crescents, lapping 1px into the core.
+                            blitRegion(ctx, texture, stripLeft, stripY, Math.min(stripRight, coreL + 1),
+                                    drawBottom, x, y, drawW, drawH, u, v, regionW, regionH);
+                            blitRegion(ctx, texture, Math.max(stripLeft, coreR - 1), stripY, stripRight,
+                                    drawBottom, x, y, drawW, drawH, u, v, regionW, regionH);
+                        } else {
+                            blitRegion(ctx, texture, stripLeft, stripY, stripRight, drawBottom,
+                                    x, y, drawW, drawH, u, v, regionW, regionH);
+                        }
+                    }
+                }
+                stripY = stripBottom;
+            }
+            bandTop = bandBottom;
         }
     }
 
@@ -505,6 +534,14 @@ final class SquaremapTileRenderer {
             HttpResponse<byte[]> response = http.send(request, HttpResponse.BodyHandlers.ofByteArray());
             if (response.statusCode() != 200) {
                 failedAt.put(key, System.currentTimeMillis());
+                // This used to return in silence, which made a server-side refusal (rate limit, 403,
+                // Cloudflare, 5xx) indistinguishable from "the map has no tiles here": the squaremap
+                // layer just went blank with nothing in the log to explain it.
+                if (loggedTileStatuses.add(response.statusCode())) {
+                    LOGGER.warn("[TownyMap] squaremap tile request refused: HTTP {} from {} "
+                            + "-- the squaremap layer stays blank until this clears",
+                            response.statusCode(), tileUrl(key));
+                }
                 return;
             }
             byte[] bytes = response.body();
@@ -563,6 +600,23 @@ final class SquaremapTileRenderer {
 
     private static double log2(double value) {
         return Math.log(value) / Math.log(2.0);
+    }
+
+    /**
+     * Blits sub-rectangle [l,t)-(r,b) of a tile whose full quad is (tileX,tileY) sized drawW x drawH and
+     * whose source region starts at (u,v) sized regionW x regionH. Every caller derives its UVs from the
+     * SAME tile-wide mapping, so pieces drawn separately line up exactly with one another.
+     */
+    private static void blitRegion(DrawContext ctx, Identifier texture,
+                                   int l, int t, int r, int b,
+                                   int tileX, int tileY, int drawW, int drawH,
+                                   int u, int v, int regionW, int regionH) {
+        if (l >= r || t >= b) return;
+        float u1 = (float) ((u + (l - tileX) * (double) regionW / drawW) / TILE_PIXELS);
+        float u2 = (float) ((u + (r - tileX) * (double) regionW / drawW) / TILE_PIXELS);
+        float v1 = (float) ((v + (t - tileY) * (double) regionH / drawH) / TILE_PIXELS);
+        float v2 = (float) ((v + (b - tileY) * (double) regionH / drawH) / TILE_PIXELS);
+        ctx.drawTexturedQuad(texture, l, t, r, b, u1, u2, v1, v2);
     }
 
     private static int circleClipStripHeight(double radius) {

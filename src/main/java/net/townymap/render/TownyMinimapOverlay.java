@@ -746,7 +746,10 @@ public final class TownyMinimapOverlay {
         int padWidth = chunkWidth + 2 * EDGE_MARGIN_CHUNKS;
         int padHeight = chunkHeight + 2 * EDGE_MARGIN_CHUNKS;
         TownData[] chunkTowns = buildVisibleChunkMask(towns, padMinChunkX, padMinChunkZ, padWidth, padHeight);
-        closeOneChunkHoles(chunkTowns, padWidth, padHeight);
+        // No hole-closing pass. It used to fill unclaimed chunks by looking at their neighbours, which
+        // meant the minimap showed claims that don't exist -- corridors, notches, and any gap a town
+        // happened to surround. The world map never did this, which is why the two disagreed. The chunk
+        // mask now reflects the claim data exactly: if a chunk isn't claimed, it isn't drawn as claimed.
         VisibleRenderData renderData = buildRenderData(chunkTowns, padMinChunkX, padMinChunkZ,
                 padWidth, padHeight, EDGE_MARGIN_CHUNKS);
         cachedTownSource = towns;
@@ -815,40 +818,6 @@ public final class TownyMinimapOverlay {
                 List.copyOf(edges), List.copyOf(labelAnchors));
     }
 
-    private static void closeOneChunkHoles(TownData[] chunkTowns, int width, int height) {
-        TownData[] patched = chunkTowns.clone();
-        for (int z = 1; z < height - 1; z++) {
-            for (int x = 1; x < width - 1; x++) {
-                int i = index(x, z, width);
-                if (chunkTowns[i] != null) continue;
-
-                TownData left = chunkTowns[index(x - 1, z, width)];
-                TownData right = chunkTowns[index(x + 1, z, width)];
-                TownData up = chunkTowns[index(x, z - 1, width)];
-                TownData down = chunkTowns[index(x, z + 1, width)];
-                TownData fill = null;
-                if (sameTown(left, right)) fill = left;
-                else if (sameTown(up, down)) fill = up;
-                else fill = majorityTown(left, right, up, down);
-                if (fill != null) patched[i] = fill;
-            }
-        }
-        System.arraycopy(patched, 0, chunkTowns, 0, chunkTowns.length);
-    }
-
-    private static TownData majorityTown(TownData a, TownData b, TownData c, TownData d) {
-        TownData[] values = {a, b, c, d};
-        for (TownData candidate : values) {
-            if (candidate == null) continue;
-            int count = 0;
-            for (TownData value : values) {
-                if (sameTown(candidate, value)) count++;
-            }
-            if (count >= 3) return candidate;
-        }
-        return null;
-    }
-
     private static void fillVisibleTownSpans(DrawContext ctx, List<ChunkFill> fillSpans, TownyMapConfig config) {
         for (ChunkFill cell : fillSpans) {
             TownData town = cell.town();
@@ -892,17 +861,12 @@ public final class TownyMinimapOverlay {
                 ctx.fill(x1, z1, x2, z2, fillColor);
             } else if (clip.worldRectIntersects(x1, z1, x2, z2, centerX, centerY, playerX, playerZ,
                     pixelsPerBlock, sin, cos)) {
-                for (int cx = x1; cx < x2; cx += CHUNK_SIZE) {
-                    int cx2 = Math.min(x2, cx + CHUNK_SIZE);
-                    int cls = clip.worldRectCircleClass(cx, z1, cx2, z2, centerX, centerY,
-                            playerX, playerZ, pixelsPerBlock, sin, cos);
-                    if (cls > 0) {
-                        ctx.fill(cx, z1, cx2, z2, fillColor);
-                    } else if (cls == 0 && !skipRim) {
-                        fillRectCircleClipped(ctx, cx, z1, cx2 - cx, z2 - z1, fillColor, clip,
-                                centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
-                    }
-                }
+                // Clip the whole row in one pass. This used to walk it chunk column by chunk column,
+                // emitting a separate translucent quad every 16 blocks. fillRectCircleClipped already
+                // trims row by row against the circle and merges rows of equal extent, so giving it the
+                // full width yields the same shape with no internal column edges.
+                fillRectCircleClipped(ctx, x1, z1, x2 - x1, z2 - z1, fillColor, clip,
+                        centerX, centerY, playerX, playerZ, pixelsPerBlock, sin, cos);
             }
         }
     }
@@ -1067,18 +1031,44 @@ public final class TownyMinimapOverlay {
         int maxX = blockX + blockWidth;
         int maxZ = blockZ + blockHeight;
         int step = Math.max(1, (int) Math.floor(1.0 / Math.max(0.0001, pixelsPerBlock)));
+        // Merge vertically adjacent bands that span the same columns into one quad. The banding only
+        // exists to trim the fill to the circle, and away from the rim consecutive rows have identical
+        // extents -- so a town's interior collapses to a handful of rects instead of one per row.
+        // These fills are translucent, so they cannot be overlapped the way the opaque tiles are; fewer
+        // bands is the only way to remove the shared edges.
+        int runZ = 0, runZ2 = 0, runXa = 0, runXb = 0;
+        boolean run = false;
         for (int z = blockZ; z < maxZ; z += step) {
             int z2 = Math.min(maxZ, z + step);
-            // Conservative chord: whichever row edge is farther from the player, so the strip
-            // never spills past the circle (matches the outline clipping for a clean rim).
             double dz = Math.max(Math.abs(z - playerZ), Math.abs(z2 - playerZ));
             double chordSq = rwSq - dz * dz;
-            if (chordSq <= 0.0) continue;
-            double chord = Math.sqrt(chordSq);
-            double xa = Math.max(blockX, playerX - chord);
-            double xb = Math.min(maxX, playerX + chord);
-            if (xa < xb) ctx.fill((int) Math.round(xa), z, (int) Math.round(xb), z2, color);
+            double xa = 0, xb = 0;
+            boolean visible = false;
+            if (chordSq > 0.0) {
+                double chord = Math.sqrt(chordSq);
+                xa = Math.max(blockX, playerX - chord);
+                xb = Math.min(maxX, playerX + chord);
+                visible = xa < xb;
+            }
+            if (visible) {
+                int ia = (int) Math.round(xa);
+                int ib = (int) Math.round(xb);
+                if (run && ia == runXa && ib == runXb && z == runZ2) {
+                    runZ2 = z2;                       // same columns and touching: extend the run
+                    continue;
+                }
+                if (run) ctx.fill(runXa, runZ, runXb, runZ2, color);
+                runXa = ia;
+                runXb = ib;
+                runZ = z;
+                runZ2 = z2;
+                run = true;
+            } else if (run) {
+                ctx.fill(runXa, runZ, runXb, runZ2, color);
+                run = false;
+            }
         }
+        if (run) ctx.fill(runXa, runZ, runXb, runZ2, color);
     }
 
     private static int clippedFillStep(double pixelsPerBlock, MinimapClip clip) {
