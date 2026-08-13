@@ -1,10 +1,10 @@
 package net.townymap.gui;
 
 import net.minecraft.client.gui.Click;
+import net.minecraft.client.input.CharInput;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.gui.tooltip.Tooltip;
 import net.minecraft.text.Text;
 import net.townymap.TownyMapMod;
@@ -168,25 +168,6 @@ public class DetailScreen extends Screen {
                 .dimensions(cRight - 64, footerButtonY(), 64, 20).build();
         this.addDrawableChild(backButton);
 
-        // Always build the search box, then show it only on the dashboard.
-        //
-        // It used to be created behind a page-kind check here -- but init() runs BEFORE the page is set
-        // (openDetail creates the screen, then calls setPage), so page was always null and the box was
-        // never created at all. Clicking where it should have been hit bare panel, which is why it read
-        // as "cannot type in it".
-        // Narration text stays empty: this branch draws a widget's message centred over it, so passing
-        // the prompt here painted it like a button label instead of leaving the field to its placeholder.
-        searchBox = new TextFieldWidget(this.textRenderer, cLeft, searchBoxY(), cRight - cLeft, 18,
-                Text.empty());
-        searchBox.setPlaceholder(Text.literal("Search towns, nations, players"));
-        // Turn off the widget's own chrome so only OUR frame shows. Without this the themed widget
-        // paints over the border we draw during content, which is why it still looked wrong.
-        searchBox.setDrawsBackground(false);
-        searchBox.setMaxLength(64);
-        searchBox.setChangedListener(q -> recomputeSearch());
-        searchBox.visible = false;
-        searchBox.active = false;
-        this.addDrawableChild(searchBox);
     }
 
     /** Height of the tab strip drawn under the title. */
@@ -233,7 +214,8 @@ public class DetailScreen extends Screen {
     private boolean dashboardHasSelf = false;
     /** Last stats-data fingerprint the page was built from; -1 until a stats page is drawn. */
     private int lastStatsSig = -1;
-    private TextFieldWidget searchBox;
+    private String searchQuery = "";
+    private boolean searchFocused = false;
     private final List<Ref> searchHits = new ArrayList<>();
     private final int[][] searchRects = new int[6][4];
     private int activeSub = 0;
@@ -254,7 +236,7 @@ public class DetailScreen extends Screen {
      */
     private void recomputeSearch() {
         searchHits.clear();
-        String q = searchBox == null ? "" : searchBox.getText().trim().toLowerCase(java.util.Locale.ROOT);
+        String q = searchQuery.trim().toLowerCase(java.util.Locale.ROOT);
         if (q.length() < 2) return;
 
         List<Cand> found = new ArrayList<>();
@@ -277,19 +259,25 @@ public class DetailScreen extends Screen {
 
     /** Draws the result rows just above the search box, and records their hit rects. */
     private void renderSearchResults(DrawContext ctx, int mouseX, int mouseY) {
-        // Draw our own frame around the search field. A widget's look belongs to whatever is theming
-        // vanilla UI in the player's pack -- one reported it rendering as a button, and invisible once
-        // their button theme was switched off. This border is ours, so the field is always findable.
-        if (searchBox != null && searchBox.visible) {
-            int bx1 = searchBox.getX() - 1, by1 = searchBox.getY() - 1;
-            int bx2 = searchBox.getX() + searchBox.getWidth() + 1;
-            int by2 = searchBox.getY() + searchBox.getHeight() + 1;
-            ctx.fill(bx1, by1, bx2, by2, searchBox.isFocused() ? ACCENT : PANEL_BORDER);
-            ctx.fill(bx1 + 1, by1 + 1, bx2 - 1, by2 - 1, 0xFF101216);
+        // Drawn entirely by us, like the world map's search bar. No vanilla widget is involved, so a
+        // UI-theming pack cannot restyle it into a button or make it vanish -- which is what happened
+        // through three attempts at taming an EditBox.
+        if (hasSearch()) {
+            int fy = searchBoxY();
+            ctx.fill(cLeft - 1, fy - 1, cRight + 1, fy + 19, searchFocused ? ACCENT : PANEL_BORDER);
+            ctx.fill(cLeft, fy, cRight, fy + 18, 0xFF101216);
+            boolean empty = searchQuery.isEmpty();
+            String shown = empty ? "Search towns, nations, players" : searchQuery;
+            ctx.drawText(this.textRenderer, this.textRenderer.trimToWidth(shown, cRight - cLeft - 12),
+                    cLeft + 6, fy + 5, empty ? 0xFF7A7A7A : 0xFFFFFFFF, false);
+            if (searchFocused && (System.currentTimeMillis() / 500) % 2 == 0) {
+                int cx = cLeft + 6 + this.textRenderer.getWidth(searchQuery);
+                ctx.fill(cx, fy + 4, cx + 1, fy + 14, 0xFFFFFFFF);   // blinking caret
+            }
         }
 
         for (int[] r : searchRects) r[2] = 0;
-        if (searchBox == null || searchHits.isEmpty()) return;
+        if (!hasSearch() || searchHits.isEmpty()) return;
         int rowH = 12;
         int top = searchBoxY() - 4 - searchHits.size() * rowH;
         ctx.fill(cLeft - 2, top - 3, cRight + 2, searchBoxY() - 2, 0xEE0E0F12);
@@ -310,14 +298,41 @@ public class DetailScreen extends Screen {
     @Override
     public boolean keyPressed(net.minecraft.client.input.KeyInput input) {
         // Enter opens the top result, so a search can be finished without reaching for the mouse.
-        if (searchBox != null && searchBox.isFocused() && !searchHits.isEmpty()
-                && (input.key() == org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER
-                    || input.key() == org.lwjgl.glfw.GLFW.GLFW_KEY_KP_ENTER)) {
-            Ref best = searchHits.get(0);
-            TownyMapMod.openDetail(best.kind(), best.name(), this);
-            return true;
+        if (searchFocused && hasSearch()) {
+            int k = input.key();
+            if (k == org.lwjgl.glfw.GLFW.GLFW_KEY_BACKSPACE) {
+                if (!searchQuery.isEmpty()) {
+                    searchQuery = searchQuery.substring(0, searchQuery.length() - 1);
+                    recomputeSearch();
+                }
+                return true;
+            }
+            if (k == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE) {   // unfocus first, do not close the panel
+                searchFocused = false;
+                searchHits.clear();
+                return true;
+            }
+            if ((k == org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER || k == org.lwjgl.glfw.GLFW.GLFW_KEY_KP_ENTER)
+                    && !searchHits.isEmpty()) {
+                Ref best = searchHits.get(0);
+                TownyMapMod.openDetail(best.kind(), best.name(), this);
+                return true;
+            }
         }
         return super.keyPressed(input);
+    }
+
+    @Override
+    public boolean charTyped(CharInput input) {
+        if (!searchFocused || !hasSearch() || !input.isValidChar()) {
+            return super.charTyped(input);
+        }
+        String text = input.asString();
+        if (searchQuery.length() + text.length() <= 64) {
+            searchQuery += text;
+            recomputeSearch();
+        }
+        return true;
     }
 
     private static boolean within(int[] r, int x, int y) {
@@ -463,14 +478,10 @@ public class DetailScreen extends Screen {
                 setPage(DetailPages.stats(activeSub, activeFilter));
             }
         }
-        if (searchBox != null) {
-            boolean show = hasSearch();
-            if (searchBox.visible != show) {
-                searchBox.visible = show;
-                searchBox.active = show;
-                if (!show) { searchBox.setText(""); searchHits.clear(); }
-            }
-            if (show) searchBox.setY(searchBoxY());   // body height moves with the page
+        if (!hasSearch() && (!searchQuery.isEmpty() || searchFocused)) {
+            searchQuery = "";
+            searchFocused = false;
+            searchHits.clear();
         }
         renderSearchResults(ctx, mouseX, mouseY);
 
@@ -734,14 +745,11 @@ public class DetailScreen extends Screen {
         // Clicking anywhere in the panel that is not the search field drops focus and clears the
         // suggestions -- otherwise the results stayed up and keystrokes kept going into a box you had
         // visually moved on from.
-        if (searchBox != null && searchBox.visible) {
-            boolean onBox = tabMx >= searchBox.getX() && tabMx <= searchBox.getX() + searchBox.getWidth()
-                    && tabMy >= searchBox.getY() && tabMy <= searchBox.getY() + searchBox.getHeight();
-            if (!onBox) {
-                searchBox.setFocused(false);
-                this.setFocused(null);
-                searchHits.clear();
-            }
+        if (hasSearch()) {
+            int fy = searchBoxY();
+            boolean onBox = tabMx >= cLeft && tabMx <= cRight && tabMy >= fy && tabMy <= fy + 18;
+            searchFocused = onBox;
+            if (onBox) return true;
         }
         if (UiScale.active()) click = UiScale.unscaleClick(click, this.width / 2.0, this.height / 2.0);
         double mx = click.x(), my = click.y();
