@@ -84,6 +84,11 @@ public class SquaremapApiClient {
     private final AtomicBoolean playerFetchRunning = new AtomicBoolean(false);
     private final AtomicBoolean playerHistorySaveScheduled = new AtomicBoolean(false);
     private volatile long lastMarkerFetchMs = 0;
+    // lastMarkerFetchMs records when a fetch STARTED, so it cannot answer "how old is the data on
+    // screen" -- a run of failures keeps bumping it while the claims go stale. These two track the
+    // outcome instead: the last time claims actually landed, and whether the newest attempt failed.
+    private volatile long lastMarkerSuccessMs = 0;
+    private volatile boolean markerFetchFailing = false;
     private volatile long lastMarkerTickCheckMs = 0;
     private volatile long lastPlayerFetchMs = 0;
 
@@ -119,6 +124,10 @@ public class SquaremapApiClient {
 
     public List<TownData>     getTowns()        { return archiveTowns != null ? archiveTowns : towns; }
     public boolean isArchiveActive()            { return archiveTowns != null; }
+    /** When claims last actually landed, or 0 if none have yet. Not the same as the last attempt. */
+    public long lastClaimsSuccessMs()           { return lastMarkerSuccessMs; }
+    /** True if the most recent claims fetch failed; cleared by the next one that succeeds. */
+    public boolean isClaimsFetchFailing()       { return markerFetchFailing; }
     public void setArchiveTowns(List<TownData> t) { archiveTowns = t == null ? null : List.copyOf(t); }
     public void clearArchive()                  { archiveTowns = null; lastMarkerFetchMs = 0; }
     /** Resident count parsed from the squaremap popup, or -1 if that town's popup had none. */
@@ -189,14 +198,20 @@ public class SquaremapApiClient {
     private void fetchMarkers() {
         try {
             String json = get(config.markersUrl());
+            if (json == null) markerFetchFailing = true;
             if (json != null) {
                 List<TownData> parsed = parseMarkers(json);
                 List<TownData> updated = reuseUnchangedTowns(towns, parsed);
                 if (updated == towns) {
                     LOGGER.debug("[TownyMap] Town polygons unchanged");
+                    // Unchanged still means the server answered: the data on screen is current.
+                    lastMarkerSuccessMs = System.currentTimeMillis();
+                    markerFetchFailing = false;
                     return;
                 }
                 towns = updated;
+                lastMarkerSuccessMs = System.currentTimeMillis();
+                markerFetchFailing = false;
                 TownyMapMod.onTownMarkersUpdated();
                 LOGGER.info("[TownyMap] Loaded {} town polygons", updated.size());
             }

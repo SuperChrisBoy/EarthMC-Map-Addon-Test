@@ -103,6 +103,7 @@ public abstract class MixinGuiMap {
         // raw camera every frame, regardless of dimension. jumpTo() suppresses the next pan-clear so that
         // centre-on-select doesn't wipe the bar.
         TownyMapMod.onWorldMapFrame(this, cameraX, cameraZ);
+        if (TownyMapMod.isAccessBlocked()) return;
         // The EarthMC map is overworld-only. Outside the overworld our overlay is hidden, except in
         // "Overworld Coords" mode in the Nether, where we scale the overlay's camera x8 and its
         // block-scale /8 so the overworld map/towns line up exactly over Xaero's real Nether tiles.
@@ -135,6 +136,16 @@ public abstract class MixinGuiMap {
     @Inject(require = 0, method = "renderPreDropdown", at = @At("HEAD"), remap = false)
     private void onRenderPreDropdown(DrawContext ctx, int mouseX, int mouseY,
                                      float delta, CallbackInfo ci) {
+        if (TownyMapMod.isAccessBlocked()) return;
+        // Freshness line goes HERE, not in the overlay inject: the squaremap tiles are drawn after that
+        // one and painted straight over it, so the line vanished whenever the layer was switched on.
+        // renderPreDropdown runs late enough to sit on top of everything. Screen-space at a fixed Y, so
+        // it lands under Xaero's coordinates from here too, and it still reports outside the overworld.
+        try {
+            TownyMapMod.renderMapDataStatus(ctx);
+        } catch (Throwable ignored) {
+            // A broken status line must never take the map down with it -- that has happened twice.
+        }
         try {
             // Hide Xaero's own buttons for the capture too. Only SMALL widgets are touched: hiding every
             // widget last time took Xaero's map surface with it, so anything occupying a large share of the
@@ -286,13 +297,24 @@ public abstract class MixinGuiMap {
     @Inject(require = 0, method = "method_25402", at = @At("HEAD"), remap = false, cancellable = true)
     private void onMouseClicked(Click click, boolean bl,
                                 CallbackInfoReturnable<Boolean> cir) {
+        if (TownyMapMod.isAccessBlocked()) return;   // let Xaero handle it as if we were not installed
         try {
             int button = click.buttonInfo().button();
             MinecraftClient mc = MinecraftClient.getInstance();
             int sw = mc.getWindow().getScaledWidth();
             int sh = mc.getWindow().getScaledHeight();
 
+            if (button == 0 && net.townymap.gui.TownSearchOverlay.isExpandClick(click.x(), click.y())) {
+                TownyMapMod.openStatsPanel();
+                cir.setReturnValue(true);
+                return;
+            }
             if (button == 0) {
+                // The freshness line's [R] button, checked before the search bar so it wins the click.
+                if (TownyMapMod.clickMapDataStatus(click.x(), click.y())) {
+                    cir.setReturnValue(true);
+                    return;
+                }
                 TownSearchOverlay.ClickResult result =
                         TownyMapMod.onTownSearchClick(click.x(), click.y(), sw, sh);
                 if (result.consumed()) {
@@ -410,6 +432,7 @@ public abstract class MixinGuiMap {
     @Inject(require = 0, method = "method_25404", at = @At("HEAD"), remap = false, cancellable = true)
     private void onKeyPressed(KeyInput input,
                               CallbackInfoReturnable<Boolean> cir) {
+        if (TownyMapMod.isAccessBlocked()) return;   // let Xaero handle it as if we were not installed
         try {
             // The clean-screenshot key is a normal rebindable keybind (Options -> Controls). Screens
             // swallow key presses, so match it here too — but never while the search bar has focus.
@@ -418,6 +441,21 @@ public abstract class MixinGuiMap {
                 TownyMapMod.armMapScreenshot();
                 cir.setReturnValue(true);
                 return;
+            }
+            // Same story for refresh and the info panel: the map screen eats key presses, so the binds
+            // have to be matched here as well to work with the map open. Never while the search bar has
+            // focus, or typing "r" into it would reload the claims.
+            if (!TownSearchOverlay.isFocused()) {
+                if (net.townymap.input.TownyMapKeybinds.isRefreshKey(input)) {
+                    TownyMapMod.refreshTownClaimsFromSettings();
+                    cir.setReturnValue(true);
+                    return;
+                }
+                if (net.townymap.input.TownyMapKeybinds.isOpenStatsKey(input)) {
+                    TownyMapMod.openStatsPanel();
+                    cir.setReturnValue(true);
+                    return;
+                }
             }
             TownSearchOverlay.ClickResult result = TownyMapMod.onTownSearchKeyPressed(input.key());
             if (result.consumed()) {

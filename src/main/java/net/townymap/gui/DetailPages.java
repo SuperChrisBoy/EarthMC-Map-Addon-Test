@@ -155,6 +155,352 @@ public final class DetailPages {
 
     // ── Town ──────────────────────────────────────────────────────────────────
 
+    /**
+     * Leaderboards built entirely from the claim data already in memory -- no EarthMC API calls, so this
+     * opens instantly, works while the API is down, and reflects an archive snapshot when one is loaded
+     * (getTowns() returns the archive list in that case, which is the behaviour these views want).
+     *
+     * <p>Every entry goes through addNames, so the names stay clickable and lead to the normal town or
+     * nation page. That is the whole point of putting stats in this panel rather than a separate screen.
+     */
+    /** The info panel's landing tab: a short overview, with the detail left to the Statistics tab. */
+    public static Page dashboard() {
+        List<DetailScreen.Block> b = new ArrayList<>();
+        net.townymap.api.SquaremapApiClient api = TownyMapMod.getApiClient();
+        List<net.townymap.model.TownData> towns = api == null ? List.of() : api.getTowns();
+
+        int residents = 0;
+        Map<String, Integer> nations = new java.util.HashMap<>();
+        for (net.townymap.model.TownData t : towns) {
+            residents += api.getTownResidents(t.key());
+            String n = api.getTownNation(t.key());
+            if (n != null && !n.isBlank()) nations.merge(n, 1, Integer::sum);
+        }
+
+        // Your own town and nation first -- the one thing here nobody else's dashboard would show.
+        net.townymap.model.EarthMcPlayerData self = TownyMapMod.selfPlayer();
+        if (self != null && self.townName() != null && !self.townName().isBlank()) {
+            String myTown = self.townName();
+            net.townymap.model.TownData mine = null;
+            for (net.townymap.model.TownData t : towns) {
+                if (t.name().equalsIgnoreCase(myTown)) { mine = t; break; }
+            }
+            b.add(new Cols(List.of(
+                    new Col("Your town", myTown, new Ref(Kind.TOWN, myTown)),
+                    new Col("Nation", self.nationName() == null || self.nationName().isBlank()
+                            ? "-" : self.nationName(),
+                            self.nationName() == null || self.nationName().isBlank()
+                                    ? null : new Ref(Kind.NATION, self.nationName())),
+                    new Col("Your balance", money(self.balance())))));
+            net.townymap.model.TownFullData full = TownyMapMod.selfTownFull();
+            if (full != null) {
+                // Identical to the right-click town page (DetailPages.town): EarthMC's own claimed/max,
+                // which already accounts for the nation bonus and any server-side overrides. Deriving it
+                // here from residents x 12 gave a different number to the rest of the mod.
+                b.add(new Cols(List.of(
+                        new Col("Residents", String.valueOf(full.residents() == null ? 0 : full.residents().size())),
+                        new Col("Chunks", full.numTownBlocks() + " / "
+                                + (full.maxTownBlocks() >= 0 ? full.maxTownBlocks() : "?")),
+                        new Col("Can still claim", full.maxTownBlocks() >= 0
+                                ? String.valueOf(Math.max(0, full.maxTownBlocks() - full.numTownBlocks()))
+                                : "?"))));
+            }
+            b.add(new Rule());
+        }
+
+        b.add(new Cols(List.of(
+                new Col("Towns", String.valueOf(towns.size())),
+                new Col("Nations", String.valueOf(nations.size())),
+                new Col("Residents", String.valueOf(residents)))));
+        // Live so the age keeps counting up while the panel stays open.
+        b.add(new Cols(List.of(Col.live("Claim data", () -> TownyMapMod.mapDataStatus().text()))));
+        b.add(new Rule());
+
+        // favoriteTownKeys() holds lower-cased keys; resolve them back to the town's real casing so the
+        // list reads like the rest of the panel. Falls back to the key if the town is not loaded.
+        java.util.Set<String> favKeys = TownyMapMod.favoriteTownKeys();
+        List<String> favourites = new ArrayList<>();
+        if (!favKeys.isEmpty()) {
+            Map<String, String> byKey = new java.util.HashMap<>();
+            for (net.townymap.model.TownData t : towns) byKey.put(t.key(), t.name());
+            for (String k : favKeys) favourites.add(byKey.getOrDefault(k, k));
+            favourites.sort(String.CASE_INSENSITIVE_ORDER);
+        }
+        addNames(b, "Favourites", favourites, Kind.TOWN);
+
+        String subtitle = api != null && api.isArchiveActive()
+                ? "From the loaded archive snapshot" : "Live from squaremap";
+        return new Page(Kind.STATS, "Info Panel", subtitle, b, null, null);
+    }
+
+    /** Chunks a town claims: shoelace area of its rings (first = outer, rest = holes) over 16x16. */
+    private static int chunkCount(net.townymap.model.TownData t) {
+        double area = 0;
+        List<int[][]> rings = t.polygonRings();
+        for (int r = 0; r < rings.size(); r++) {
+            int[][] ring = rings.get(r);
+            double a = 0;
+            for (int i = 0, n = ring.length; i < n; i++) {
+                int[] p1 = ring[i], p2 = ring[(i + 1) % n];
+                if (p1.length < 2 || p2.length < 2) continue;
+                a += (double) p1[0] * p2[1] - (double) p2[0] * p1[1];
+            }
+            a = Math.abs(a) / 2.0;
+            area += (r == 0) ? a : -a;   // rings after the first are unclaimed pockets
+        }
+        return (int) Math.round(Math.max(0, area) / 256.0);
+    }
+
+    public static Page stats() { return stats(0, 0); }
+    public static Page stats(int sub) { return stats(sub, 0); }
+
+    /** Filter labels per sub-tab, mirrored by DetailScreen so the strip and the data agree. */
+    public static String[] filtersFor(int sub) {
+        return switch (sub) {
+            case 1 -> new String[]{ "Towns", "Residents", "Chunks", "Gold", "Outlaws", "Founded" };
+            case 2 -> new String[]{ "Gold", "Joined", "Friends", "Outlawed", "Trusted" };
+            default -> new String[]{ "Residents", "Chunks", "Gold", "Outlaws", "Founded" };
+        };
+    }
+
+    /** How deep the ranked lists go. The panel scrolls, so this is about usefulness, not fitting. */
+    private static final int RANK_DEPTH = 100;
+
+    /**
+     * A ranked list: one row per entry, "12. Name" with the value on the right, name clickable.
+     * RefLineList renders a flat list rather than the collapsible dropdown addNames produces, which is
+     * what makes this read as a leaderboard instead of a folded-up roster.
+     */
+    private static void rankList(List<DetailScreen.Block> blocks, String title,
+                                 List<String[]> rows, String unit, Kind kind) {
+        List<DetailScreen.RefLine> lines = new ArrayList<>();
+        for (int i = 0; i < rows.size() && i < RANK_DEPTH; i++) {
+            String[] row = rows.get(i);
+            // Rank is drawn by the renderer from the row index; the suffix carries only the value, so
+            // the numbers right-align into a readable column.
+            lines.add(new DetailScreen.RefLine(new Ref(kind, row[0]),
+                    row[1] + (unit.isEmpty() || row[1].isEmpty() ? "" : " " + unit)));
+        }
+        if (!lines.isEmpty()) blocks.add(new DetailScreen.RefLineList(title, lines, true));
+    }
+
+    /** Map to descending {name, value} rows. */
+    private static List<String[]> rowsOf(Map<String, Integer> counts) {
+        List<Map.Entry<String, Integer>> e = new ArrayList<>(counts.entrySet());
+        e.sort((x, y) -> y.getValue() - x.getValue());
+        List<String[]> out = new ArrayList<>();
+        for (Map.Entry<String, Integer> en : e) out.add(new String[]{en.getKey(), String.valueOf(en.getValue())});
+        return out;
+    }
+
+    /** sub: 0 = towns, 1 = nations, 2 = players. filter indexes filtersFor(sub). */
+    public static Page stats(int sub, int filter) {
+        List<DetailScreen.Block> b = new ArrayList<>();
+        net.townymap.api.SquaremapApiClient api = TownyMapMod.getApiClient();
+        List<net.townymap.model.TownData> towns = api == null ? List.of() : api.getTowns();
+
+        if (sub == 1) {
+            Map<String, Integer> townCount = new java.util.HashMap<>();
+            Map<String, Integer> residents = new java.util.HashMap<>();
+            Map<String, Integer> chunks = new java.util.HashMap<>();
+            for (net.townymap.model.TownData t : towns) {
+                String n = api.getTownNation(t.key());
+                if (n == null || n.isBlank()) continue;
+                townCount.merge(n, 1, Integer::sum);
+                residents.merge(n, api.getTownResidents(t.key()), Integer::sum);
+                chunks.merge(n, chunkCount(t), Integer::sum);
+            }
+            b.add(new Cols(List.of(new Col("Nations", String.valueOf(townCount.size())))));
+            b.add(new Rule());
+            if (filter == 5) {
+                // Oldest first. The index carries a formatted date string only, so sorting on it would
+                // order alphabetically; foundedMs is the raw registration time the parser now keeps.
+                List<net.townymap.model.EarthMcNationData> idx =
+                        new ArrayList<>(TownyMapMod.nationStats().values());
+                idx.removeIf(nd -> nd.foundedMs() <= 0);
+                if (idx.isEmpty()) {
+                    b.add(new Cols(List.of(new Col("Nations", "loading..."))));
+                    return new Page(Kind.STATS, "Info Panel", "fetching the nation index", b, null, null);
+                }
+                idx.sort((x, y) -> Long.compare(x.foundedMs(), y.foundedMs()));
+                List<String[]> rows = new ArrayList<>();
+                for (var nd : idx) {
+                    if (rows.size() >= RANK_DEPTH) break;
+                    rows.add(new String[]{nd.name(), date(nd.foundedMs())});
+                }
+                b.add(new Cols(List.of(new Col("Nations", String.valueOf(idx.size())))));
+                rankList(b, "Oldest nations", rows, "", Kind.NATION);
+                return new Page(Kind.STATS, "Info Panel", "oldest first", b, null, null);
+            }
+            if (filter >= 3) {
+                // Gold and outlaw counts come from the nation index -- one request for every nation,
+                // already cached for the search bar, and archive-aware like everything else here.
+                List<net.townymap.model.EarthMcNationData> idx =
+                        new ArrayList<>(TownyMapMod.nationStats().values());
+                if (idx.isEmpty()) {
+                    b.add(new Cols(List.of(new Col("Nations", "loading..."))));
+                    return new Page(Kind.STATS, "Info Panel", "fetching the nation index", b, null, null);
+                }
+                boolean gold = filter == 3;
+                List<net.townymap.model.EarthMcNationData> sorted = new ArrayList<>(idx);
+                sorted.sort(gold ? (x, y) -> Double.compare(y.balance(), x.balance())
+                                 : (x, y) -> Integer.compare(y.outlawCount(), x.outlawCount()));
+                List<String[]> rows = new ArrayList<>();
+                for (net.townymap.model.EarthMcNationData nd : sorted) {
+                    if (rows.size() >= RANK_DEPTH) break;
+                    rows.add(new String[]{nd.name(),
+                            gold ? money(nd.balance()) : String.valueOf(nd.outlawCount())});
+                }
+                b.add(new Cols(List.of(new Col("Nations", String.valueOf(idx.size())))));
+                rankList(b, gold ? "Nations by gold" : "Nations by outlaws",
+                        rows, gold ? "" : "outlaws", Kind.NATION);
+                return new Page(Kind.STATS, "Info Panel", idx.size() + " nations", b, null, null);
+            }
+            Map<String, Integer> src = filter == 1 ? residents : filter == 2 ? chunks : townCount;
+            String unit = filter == 1 ? "residents" : filter == 2 ? "chunks" : "towns";
+            rankList(b, "Nations by " + unit, rowsOf(src), unit, Kind.NATION);
+            return new Page(Kind.STATS, "Info Panel", townCount.size() + " nations", b, null, null);
+        }
+
+        if (sub == 2) {
+            if (filter >= 3) {
+                boolean outlawed = filter == 3;
+                Map<String, int[]> counts = TownyMapMod.outlawTrustedCounts();
+                if (counts.isEmpty()) {
+                    b.add(new Cols(List.of(new Col("Players", "sweeping towns..."))));
+                    return new Page(Kind.STATS, "Info Panel",
+                            "reading every town roster, this one takes a moment", b, null, null);
+                }
+                List<String[]> rows = new ArrayList<>();
+                List<Map.Entry<String, int[]>> es = new ArrayList<>(counts.entrySet());
+                int slot = outlawed ? 0 : 1;
+                es.sort((x, y) -> y.getValue()[slot] - x.getValue()[slot]);
+                for (Map.Entry<String, int[]> e : es) {
+                    if (rows.size() >= RANK_DEPTH) break;
+                    if (e.getValue()[slot] <= 0) break;
+                    rows.add(new String[]{e.getKey(), String.valueOf(e.getValue()[slot])});
+                }
+                b.add(new Cols(List.of(new Col("Players", String.valueOf(counts.size())))));
+                rankList(b, outlawed ? "Outlawed in the most towns" : "Trusted in the most towns",
+                        rows, "towns", Kind.PLAYER);
+                return new Page(Kind.STATS, "Info Panel",
+                        counts.size() + " players on town rosters", b, null, null);
+            }
+            java.util.Map<String, net.townymap.model.EarthMcPlayerData> stats =
+                    TownyMapMod.allPlayerStats();
+            if (stats.isEmpty()) {
+                b.add(new Cols(List.of(new Col("Players", "loading..."))));
+                return new Page(Kind.STATS, "Info Panel", "fetching online player data", b, null, null);
+            }
+            List<net.townymap.model.EarthMcPlayerData> sorted = new ArrayList<>(stats.values());
+            if (filter == 1) sorted.sort((x, y) -> Long.compare(x.registeredMs(), y.registeredMs()));
+            else if (filter == 2) sorted.sort((x, y) -> Integer.compare(y.friendCount(), x.friendCount()));
+            else sorted.sort((x, y) -> Double.compare(y.balance(), x.balance()));
+
+            List<String[]> rows = new ArrayList<>();
+            for (net.townymap.model.EarthMcPlayerData pd : sorted) {
+                if (rows.size() >= RANK_DEPTH) break;
+                if (pd.name() == null || pd.name().isBlank() || pd.npc()) continue;
+                // Drop players outside EarthMC's 42-day activity window from the value rankings: they
+                // clutter the top of the gold list with balances nobody can move. Join date is a
+                // historical fact, so that list keeps everyone.
+                if (filter != 1 && !TownyMapMod.isRecentlyActive(pd)) continue;
+                rows.add(new String[]{pd.name(), filter == 1 ? date(pd.registeredMs())
+                        : filter == 2 ? String.valueOf(pd.friendCount())
+                        : money(pd.balance())});
+            }
+            boolean full = TownyMapMod.playerSweepComplete();
+            b.add(new Cols(List.of(new Col("Players", String.valueOf(stats.size())))));
+            rankList(b, "Players by " + (filter == 1 ? "join date" : filter == 2 ? "friends" : "gold"),
+                    rows, filter == 2 ? "friends" : "", Kind.PLAYER);
+            return new Page(Kind.STATS, "Info Panel",
+                    full ? stats.size() + " players" : "online players so far, full sweep running",
+                    b, null, null);
+        }
+
+        int totalResidents = 0, totalChunks = 0;
+        List<String[]> byResidents = new ArrayList<>();
+        List<String[]> byChunks = new ArrayList<>();
+        for (net.townymap.model.TownData t : towns) {
+            int res = api.getTownResidents(t.key());
+            int ch = chunkCount(t);
+            totalResidents += res;
+            totalChunks += ch;
+            byResidents.add(new String[]{t.name(), String.valueOf(res)});
+            byChunks.add(new String[]{t.name(), String.valueOf(ch)});
+        }
+        b.add(new Cols(List.of(
+                new Col("Towns", String.valueOf(towns.size())),
+                new Col("Residents", String.valueOf(totalResidents)),
+                new Col("Chunks", String.valueOf(totalChunks)))));
+        b.add(new Rule());
+        byResidents.sort((x, y) -> Integer.parseInt(y[1]) - Integer.parseInt(x[1]));
+        byChunks.sort((x, y) -> Integer.parseInt(y[1]) - Integer.parseInt(x[1]));
+        if (filter >= 2) {
+            // These three are the only leaderboards that need the town sweep, so it is triggered here
+            // rather than warmed -- open one and it starts; never open them and it never runs.
+            var ranks = TownyMapMod.townRanks();
+            if (ranks.isEmpty()) {
+                b.add(new Cols(List.of(new Col("Towns", "sweeping towns..."))));
+                return new Page(Kind.STATS, "Info Panel",
+                        "reading every town, this one takes a moment", b, null, null);
+            }
+            List<net.townymap.api.EarthMcApiClient.TownRank> list = new ArrayList<>(ranks.values());
+            String title, unit;
+            if (filter == 2) {
+                list.sort((x, y) -> Double.compare(y.balance(), x.balance()));
+                title = "Richest towns"; unit = "";
+            } else if (filter == 3) {
+                list.sort((x, y) -> Integer.compare(y.outlaws(), x.outlaws()));
+                title = "Towns by outlaws"; unit = "outlaws";
+            } else {
+                list.removeIf(r -> r.foundedMs() <= 0);
+                list.sort((x, y) -> Long.compare(x.foundedMs(), y.foundedMs()));
+                title = "Oldest towns"; unit = "";
+            }
+            List<String[]> rows = new ArrayList<>();
+            for (var r : list) {
+                if (rows.size() >= RANK_DEPTH) break;
+                if (filter == 3 && r.outlaws() <= 0) break;
+                rows.add(new String[]{r.name(), filter == 2 ? money(r.balance())
+                        : filter == 3 ? String.valueOf(r.outlaws())
+                        : date(r.foundedMs())});
+            }
+            b.add(new Cols(List.of(new Col("Towns", String.valueOf(ranks.size())))));
+            rankList(b, title, rows, unit, Kind.TOWN);
+            return new Page(Kind.STATS, "Info Panel", ranks.size() + " towns", b, null, null);
+        }
+
+        rankList(b, filter == 1 ? "Towns by chunks" : "Towns by residents",
+                filter == 1 ? byChunks : byResidents,
+                filter == 1 ? "chunks" : "residents", Kind.TOWN);
+
+        String subtitle = api != null && api.isArchiveActive()
+                ? "From the loaded archive snapshot" : towns.size() + " towns";
+        return new Page(Kind.STATS, "Info Panel", subtitle, b, null, null);
+    }
+
+    /** Top n rows of {name, value}, labelled "name - value" so the ranking is readable in the list. */
+    private static List<String> top(List<String[]> rows, int n) {
+        List<String> out = new ArrayList<>();
+        for (String[] row : rows) {
+            if (out.size() >= n) break;
+            out.add(row[0]);
+        }
+        return out;
+    }
+
+    private static List<String> topOfMap(Map<String, Integer> counts, int n) {
+        List<Map.Entry<String, Integer>> entries = new ArrayList<>(counts.entrySet());
+        entries.sort((x, y) -> y.getValue() - x.getValue());
+        List<String> out = new ArrayList<>();
+        for (Map.Entry<String, Integer> e : entries) {
+            if (out.size() >= n) break;
+            out.add(e.getKey());
+        }
+        return out;
+    }
+
     public static Page town(TownFullData t) {
         List<DetailScreen.Block> b = new ArrayList<>();
 

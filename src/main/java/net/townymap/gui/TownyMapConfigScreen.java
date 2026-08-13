@@ -115,7 +115,7 @@ public class TownyMapConfigScreen extends Screen {
                     "When a nation is selected, shade where a town could join it — 5k around the capital plus 1.5k around each town."),
             Map.entry("UI Scale",
                     "Scales all of this mod's GUIs — buttons, panels, this settings screen — smaller. 100% keeps "
-                    + "the current sizing; lower shrinks the text and the gaps, independent of your Minecraft GUI scale."),
+                    + "the current sizing; lower shrinks the text and the gaps, independent of your MinecraftClient GUI scale."),
             Map.entry("Screenshot Players",
                     "Include live player dots in the map screenshot. Off gives a picture of the map itself."),
             Map.entry("Screenshot Nation Stars",
@@ -125,6 +125,21 @@ public class TownyMapConfigScreen extends Screen {
                     + "screenshot entirely instead of capturing them as black shapes."),
             Map.entry("Map Screenshot Key",
                     "Key that saves a clean picture of the world map — no buttons, search bar or panels. "
+                    + "The same bind as Options > Controls; changing it in either place changes both."),
+            Map.entry("Data Freshness Line",
+                    "Shows how old the claim data on screen is, under the world map's coordinates, with a "
+                    + "button to reload it. Turns amber when the data is overdue and red if a refresh failed."),
+            Map.entry("Reload Claims",
+                    "Fetches towns and claims from squaremap right now instead of waiting for the next "
+                    + "automatic refresh, which happens every 60 seconds."),
+            Map.entry("Open Info Panel",
+                    "Leaderboards for towns and nations, built from the claim data already loaded, so it "
+                    + "opens instantly and works even while the EarthMC API is down. Every name is clickable."),
+            Map.entry("Info Panel Key",
+                    "Key that opens the info panel without opening the map first. Unbound by default. "
+                    + "The same bind as Options > Controls; changing it in either place changes both."),
+            Map.entry("Reload Claims Key",
+                    "Key that reloads towns and claims without opening the map. Unbound by default. "
                     + "The same bind as Options > Controls; changing it in either place changes both."),
             Map.entry("View Archive",
                     "Type a date (dd/mm/yyyy) and press Enter to view the historical map from that day. "
@@ -138,8 +153,12 @@ public class TownyMapConfigScreen extends Screen {
     private TownyMapConfig cfg;
     private TextFieldWidget searchField;
     private TextFieldWidget archiveField;   // Advanced → type a dd/mm/yyyy date + Enter to open the archive
-    private ButtonWidget screenshotKeyButton;   // Advanced → rebind the clean-map-screenshot key
+    private ButtonWidget screenshotKeyButton;
+    private ButtonWidget refreshKeyButton;
+    private ButtonWidget statsKeyButton;   // Advanced → rebind the clean-map-screenshot key
     private boolean awaitingScreenshotKey;
+    private boolean awaitingRefreshKey;
+    private boolean awaitingStatsKey;
     private String searchQuery = "";
     private int scrollOffset;
     private int contentHeight;
@@ -232,6 +251,31 @@ public class TownyMapConfigScreen extends Screen {
         option("Town Borders", onOff(cfg.townsEnabled, v -> cfg.townsEnabled = v),
                 () -> cfg.townsEnabled == DEFAULTS.townsEnabled,
                 () -> cfg.townsEnabled = DEFAULTS.townsEnabled);
+        option("Data Freshness Line", onOff(cfg.dataStatusEnabled, v -> cfg.dataStatusEnabled = v),
+                () -> cfg.dataStatusEnabled == DEFAULTS.dataStatusEnabled,
+                () -> cfg.dataStatusEnabled = DEFAULTS.dataStatusEnabled);
+        action("Reload Claims", TownyMapMod::refreshTownClaimsFromSettings);
+        refreshKeyButton = ButtonWidget.builder(refreshKeyLabel(), b -> {
+            awaitingRefreshKey = true;
+            b.setMessage(Text.literal("> Press a key <"));
+        }).dimensions(ctrlX, 0, CTRL_W, 20).build();
+        statsKeyButton = ButtonWidget.builder(statsKeyLabel(), b -> {
+            awaitingStatsKey = true;
+            b.setMessage(Text.literal("> Press a key <"));
+        }).dimensions(ctrlX, 0, CTRL_W, 20).build();
+        option("Info Panel Key", statsKeyButton,
+                () -> "Not bound".equals(net.townymap.input.TownyMapKeybinds.openStatsKeyName()),
+                () -> {
+                    net.townymap.input.TownyMapKeybinds.setOpenStatsKey(GLFW.GLFW_KEY_UNKNOWN);
+                    statsKeyButton.setMessage(statsKeyLabel());
+                });
+        action("Open Info Panel", TownyMapMod::openStatsPanel);
+        option("Reload Claims Key", refreshKeyButton,
+                () -> "Not bound".equals(net.townymap.input.TownyMapKeybinds.refreshTownsKeyName()),
+                () -> {
+                    net.townymap.input.TownyMapKeybinds.setRefreshTownsKey(GLFW.GLFW_KEY_UNKNOWN);
+                    refreshKeyButton.setMessage(refreshKeyLabel());
+                });
         option("World Map Overview", onOff(cfg.worldMapOverview, v -> cfg.worldMapOverview = v),
                 () -> cfg.worldMapOverview == DEFAULTS.worldMapOverview,
                 () -> cfg.worldMapOverview = DEFAULTS.worldMapOverview);
@@ -342,7 +386,6 @@ public class TownyMapConfigScreen extends Screen {
                 () -> cfg.customOverlaysEnabled == DEFAULTS.customOverlaysEnabled,
                 () -> cfg.customOverlaysEnabled = DEFAULTS.customOverlaysEnabled);
         action("Open Overlays Folder", () -> net.townymap.integration.CustomOverlayManager.openFolder());
-        action("Refresh Town Claims", TownyMapMod::refreshTownClaimsFromSettings);
         option("Shop Waypoints", onOff(cfg.shopWaypointsEnabled, v -> {
                     cfg.shopWaypointsEnabled = v;
                     if (!v) net.townymap.integration.ShopWaypoints.clearAll();
@@ -582,6 +625,14 @@ public class TownyMapConfigScreen extends Screen {
         return true;
     }
 
+    private Text statsKeyLabel() {
+        return Text.literal(net.townymap.input.TownyMapKeybinds.openStatsKeyName());
+    }
+
+    private Text refreshKeyLabel() {
+        return Text.literal(net.townymap.input.TownyMapKeybinds.refreshTownsKeyName());
+    }
+
     private Text screenshotKeyLabel() {
         return Text.literal(net.townymap.input.TownyMapKeybinds.mapScreenshotKeyName());
     }
@@ -589,6 +640,20 @@ public class TownyMapConfigScreen extends Screen {
     @Override
     public boolean keyPressed(net.minecraft.client.input.KeyInput input) {
         // Rebinding: the next key becomes the screenshot bind (Escape clears it, as vanilla Controls does).
+        if (awaitingStatsKey) {
+            awaitingStatsKey = false;
+            int key = input.key() == GLFW.GLFW_KEY_ESCAPE ? GLFW.GLFW_KEY_UNKNOWN : input.key();
+            net.townymap.input.TownyMapKeybinds.setOpenStatsKey(key);
+            if (statsKeyButton != null) statsKeyButton.setMessage(statsKeyLabel());
+            return true;
+        }
+        if (awaitingRefreshKey) {
+            awaitingRefreshKey = false;
+            int key = input.key() == GLFW.GLFW_KEY_ESCAPE ? GLFW.GLFW_KEY_UNKNOWN : input.key();
+            net.townymap.input.TownyMapKeybinds.setRefreshTownsKey(key);
+            if (refreshKeyButton != null) refreshKeyButton.setMessage(refreshKeyLabel());
+            return true;
+        }
         if (awaitingScreenshotKey) {
             awaitingScreenshotKey = false;
             int key = input.key() == GLFW.GLFW_KEY_ESCAPE ? GLFW.GLFW_KEY_UNKNOWN : input.key();

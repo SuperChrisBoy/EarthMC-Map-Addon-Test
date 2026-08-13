@@ -114,11 +114,13 @@ public final class TownyMinimapOverlay {
     }
 
     public static void render(DrawContext ctx, MinimapSession session, ModuleRenderContext rc) {
+        if (TownyMapMod.isAccessBlocked()) return;
         render(ctx, session, rc.x, rc.y, Math.min(rc.w, rc.h));
     }
 
     public static void render(DrawContext ctx, MinimapSession session, int mapX, int mapY, int mapSize) {
-        long renderStartNs = System.nanoTime();
+        if (TownyMapMod.isAccessBlocked()) return;
+        long renderStartNs = System.nanoTime();   // 1.21.11-only frame-cost tracking; 26.2 has no equivalent
         TownyMapConfig config = TownyMapMod.getConfig();
         SquaremapApiClient api = TownyMapMod.getApiClient();
         lastRenderCanCoverWaypoints = false;
@@ -362,6 +364,7 @@ public final class TownyMinimapOverlay {
 
     public static void renderWaypointsOnTop(DrawContext ctx, MinimapSession session,
                                             int mapX, int mapY, int size) {
+        if (TownyMapMod.isAccessBlocked()) return;
         TownyMapConfig config = TownyMapMod.getConfig();
         if (config == null || !config.minimapExtensionsEnabled || size <= 12) return;
         if (session.getProcessor().isCaveModeDisplayed()) return;

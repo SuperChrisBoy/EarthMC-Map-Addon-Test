@@ -232,6 +232,43 @@ public class TownyMapMod implements ClientModInitializer {
                 || normalized.equals("town unclaim") || normalized.startsWith("town unclaim ");
     }
 
+    /**
+     * Your own EarthMC record, for the dashboard's town/nation card. Reuses the same cache the pending
+     * claim tracker fills, so in most sessions it is already there; otherwise one lookup for one name.
+     */
+    public static EarthMcPlayerData selfPlayer() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.getSession() == null) return null;
+        String selfName = client.getSession().getUsername();
+        EarthMcPlayerData cached = playerDetailsCache.get(townKey(selfName));
+        if (cached == null && earthMcApi != null && isActiveOnCurrentServer()) {
+            earthMcApi.fetchPlayer(selfName).thenAccept(d -> {
+                if (d != null) playerDetailsCache.put(townKey(selfName), d);
+            });
+        }
+        return cached;
+    }
+
+    private static volatile net.townymap.model.TownFullData selfTownFull = null;
+    private static volatile String selfTownFetching = null;
+
+    /**
+     * Your own town's full record, so the dashboard can show EarthMC's own numTownBlocks/maxTownBlocks
+     * exactly like the right-click town page does, instead of reconstructing the allowance from a
+     * formula. maxTownBlocks already includes the nation bonus and any overrides EarthMC applies.
+     */
+    public static net.townymap.model.TownFullData selfTownFull() {
+        EarthMcPlayerData self = selfPlayer();
+        if (self == null || self.townName() == null || self.townName().isBlank()) return null;
+        String town = self.townName();
+        if (selfTownFull != null && town.equalsIgnoreCase(selfTownFull.name())) return selfTownFull;
+        if (earthMcApi != null && !town.equalsIgnoreCase(selfTownFetching)) {
+            selfTownFetching = town;
+            earthMcApi.fetchTownFull(town).thenAccept(d -> { if (d != null) selfTownFull = d; });
+        }
+        return null;
+    }
+
     private static void rememberPendingClaim() {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null || client.player == null || client.getSession() == null) return;
@@ -355,6 +392,95 @@ public class TownyMapMod implements ClientModInitializer {
      * only for not waiting; it exists because removing the keybind and the command left no way to force
      * one. Confirms in chat, since the settings screen gives no visible sign anything happened.
      */
+    /** One line of map-data status for the readout under the coordinates: text plus an ARGB colour. */
+    public record MapDataStatus(String text, int argb) {}
+
+    private static final int STATUS_OK    = 0xFFC8C8C8;
+    private static final int STATUS_STALE = 0xFFE0B040;
+    private static final int STATUS_BAD   = 0xFFE2603B;
+    private static final int STATUS_ARCHIVE = 0xFF9C7BE0;
+
+    /**
+     * What to show under the coordinates. Reports the age of the claims actually on screen -- not of the
+     * last attempt -- so a run of failures reads as stale instead of silently looking current, which is
+     * exactly how a squaremap outage used to present as "the mod is broken".
+     */
+    public static MapDataStatus mapDataStatus() {
+        if (apiClient == null) return new MapDataStatus("Claims unavailable", STATUS_BAD);
+        if (apiClient.isArchiveActive()) return new MapDataStatus("Archive snapshot", STATUS_ARCHIVE);
+
+        long ok = apiClient.lastClaimsSuccessMs();
+        if (ok == 0) {
+            return apiClient.isClaimsFetchFailing()
+                    ? new MapDataStatus("Claims unavailable", STATUS_BAD)
+                    : new MapDataStatus("Loading claims...", STATUS_OK);
+        }
+        long ageSec = Math.max(0, (System.currentTimeMillis() - ok) / 1000L);
+        String age = ageSec < 60 ? ageSec + "s ago"
+                : ageSec < 3600 ? (ageSec / 60) + "m ago"
+                : (ageSec / 3600) + "h ago";
+
+        if (apiClient.isClaimsFetchFailing()) {
+            return new MapDataStatus("Claims " + age + " (refresh failed)", STATUS_BAD);
+        }
+        int refused = renderer != null ? renderer.tileRefusalStatus() : 0;
+        if (refused != 0) {
+            return new MapDataStatus("Map imagery refused (HTTP " + refused + ")", STATUS_BAD);
+        }
+        // Claims reload every 60s, so anything past two intervals means something is quietly wrong.
+        return new MapDataStatus("Claims " + age, ageSec > 150 ? STATUS_STALE : STATUS_OK);
+    }
+
+    /**
+     * Y of our status line. Xaero draws its coordinate readout at y=4 with a 12px line pitch (both
+     * confirmed by disassembling GuiMap), so 4 + 12*2 clears the coordinate line and the optional
+     * biome line beneath it. Fixed rather than measured: knowing whether the biome line was drawn
+     * means reading Xaero's DISPLAY_HOVERED_BIOME at runtime, and with it off this just reads as
+     * slightly wider spacing.
+     */
+    private static final int STATUS_LINE_Y = 28;
+    private static final String STATUS_REFRESH = " [R]";
+    private static int statusBtnX1, statusBtnX2;
+    private static boolean statusBtnShown = false;
+
+    /**
+     * Draws the data-freshness line under Xaero's coordinate readout, with a click-to-refresh button.
+     *
+     * <p>Called from a mixin anchored inside Xaero's own readout block, which sits behind its hiddenUI
+     * check -- so hiding Xaero's UI hides this too, for free.
+     */
+    public static void renderMapDataStatus(DrawContext ctx) {
+        statusBtnShown = false;
+        if (config == null || !config.dataStatusEnabled) return;
+        if (!isActiveOnCurrentServer() || hideChromeForScreenshot()) return;
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.getWindow() == null) return;
+
+        net.minecraft.client.font.TextRenderer font = client.textRenderer;
+        MapDataStatus status = mapDataStatus();
+        int textW = font.getWidth(status.text());
+        int btnW = font.getWidth(STATUS_REFRESH);
+        int total = textW + btnW;
+        int x = client.getWindow().getScaledWidth() / 2 - total / 2;
+
+        // Same backdrop Xaero puts behind its own readout, so the two read as one block.
+        ctx.fill(x - 2, STATUS_LINE_Y - 1, x + total + 2, STATUS_LINE_Y + 9, 0x66000000);
+        ctx.drawText(font, status.text(), x, STATUS_LINE_Y, status.argb(), false);
+        ctx.drawText(font, STATUS_REFRESH, x + textW, STATUS_LINE_Y, 0xFF7FB8FF, false);
+        statusBtnX1 = x + textW;
+        statusBtnX2 = x + total;
+        statusBtnShown = true;
+    }
+
+    /** Handles a click on the refresh button. True if it was consumed. */
+    public static boolean clickMapDataStatus(double mouseX, double mouseY) {
+        if (!statusBtnShown) return false;
+        if (mouseX < statusBtnX1 || mouseX > statusBtnX2) return false;
+        if (mouseY < STATUS_LINE_Y - 1 || mouseY > STATUS_LINE_Y + 9) return false;
+        refreshTownClaimsFromSettings();
+        return true;
+    }
+
     public static void refreshTownClaimsFromSettings() {
         if (config == null || !isActiveOnCurrentServer()) return;
         forceRefreshTownClaims();
@@ -532,7 +658,7 @@ public class TownyMapMod implements ClientModInitializer {
     /**
      * Takes the pending capture, from a client tick rather than mid-render.
      *
-     * <p>This build of Minecraft records GUI draws into a render state and only submits them at the end of
+     * <p>This build of MinecraftClient records GUI draws into a render state and only submits them at the end of
      * the frame, so reading the framebuffer during rendering caught Xaero's map but none of our own layers —
      * the squaremap overlay, town borders and player dots were all still queued. Between frames the
      * framebuffer holds the finished picture, which is what we want anyway.
@@ -1888,8 +2014,34 @@ public class TownyMapMod implements ClientModInitializer {
      * <p>{@code parent} becomes the panel's back target, so following names from town to player to nation
      * walks back the way it came.
      */
+    /** Opens the info panel, from a keybind or a button. Same panel the detail pages use. */
+    public static void openStatsPanel() {
+        // Warm the two slow sources the moment the panel opens, rather than when their tab is clicked.
+        // Both return immediately and load in the background, so by the time anyone reaches Players the
+        // data is usually already there -- that wait was the whole delay, not the rendering.
+        warmInfoPanelData();
+        openDetail(net.townymap.gui.DetailScreen.Kind.STATS, "Info Panel", null);
+    }
+
+    /** Kicks off the online-player and outlaw/trusted loads if their caches are cold. Cheap when warm. */
+    public static void warmInfoPanelData() {
+        try {
+            // Warm ONLY what a visible tab reads: nationStats() is ~4 batches and backs Gold, Outlaws
+            // and Founded on the Nations tab.
+            //
+            // outlawTrustedCounts() used to be warmed here and was by far the biggest cost in the mod --
+            // a ~56-batch sweep of every town, fired on every panel open, whose only consumer sits in the
+            // hidden Players tab. Nations > Outlaws reads nationStats(), not that sweep, so nothing
+            // visible ever used the result. allPlayerStats() (~600 batches) is likewise not warmed.
+            nationStats();
+        } catch (RuntimeException ignored) {
+            // Warming is best-effort; the tabs still load on demand.
+        }
+    }
+
     public static void openDetail(net.townymap.gui.DetailScreen.Kind kind, String name,
                                   net.minecraft.client.gui.screen.Screen parent) {
+        if (isAccessBlocked()) return;   // every panel funnels through here, including the keybind
         if (name == null || name.isBlank()) return;
         // Opening the expanded panel replaces what you were looking at, so drop the join-range zone with it.
         net.townymap.gui.TownSearchOverlay.showNationRange(null);
@@ -1904,6 +2056,18 @@ public class TownyMapMod implements ClientModInitializer {
         if (client == null) return;
         net.minecraft.client.gui.screen.Screen from =
                 parent != null ? parent : client.currentScreen;
+
+        // Stats are derived from the claim data already in memory, so like alliances they open directly
+        // instead of routing through a fetch. This also means they work offline and inside an archive.
+        if (kind == net.townymap.gui.DetailScreen.Kind.STATS) {
+            net.townymap.gui.DetailScreen screen = new net.townymap.gui.DetailScreen(from, name);
+            client.setScreen(screen);
+            // Dashboard is tab 0 and DetailScreen starts on tab 0, so the panel has to open on the
+            // dashboard page. Opening on stats() left the Dashboard tab highlighted over Statistics
+            // content, and clicking Dashboard did nothing because the screen already thought it was there.
+            screen.setPage(net.townymap.gui.DetailPages.dashboard());
+            return;
+        }
 
         // Alliances are already in memory (the roster the map colours towns from), so open the panel
         // directly rather than routing through a fetch that would have nothing to fetch.
@@ -1924,7 +2088,7 @@ public class TownyMapMod implements ClientModInitializer {
                     .thenApply(d -> d == null ? null : net.townymap.gui.DetailPages.player(d));
             case NATION -> earthMcApi.fetchNationFull(name)
                     .thenApply(d -> d == null ? null : net.townymap.gui.DetailPages.nation(d));
-            case ALLIANCE -> throw new IllegalStateException("handled above, from cache");
+            case ALLIANCE, STATS -> throw new IllegalStateException("handled above, from memory");
         };
 
         // Show the panel immediately in a loading state. Waiting for the fetch before opening anything made
@@ -2137,6 +2301,12 @@ public class TownyMapMod implements ClientModInitializer {
     private static Map<String, EarthMcNationData> activeNationDetails() {
         return archiveNations != null ? archiveNations : nationDetailsCache;
     }
+    /** The nation index for the info panel: archive-aware, and already cached for the search bar. */
+    public static List<EarthMcNationData> apiNationIndex() {
+        refreshNationIndexIfNeeded();
+        return activeNationList();
+    }
+
     private static List<EarthMcNationData> activeNationList() {
         return archiveNations != null ? archiveNationList : apiNations;
     }
@@ -2335,7 +2505,58 @@ public class TownyMapMod implements ClientModInitializer {
         TownInfoOverlay.dismiss();
     }
 
+    private static final net.townymap.api.BlocklistClient blocklistClient =
+            new net.townymap.api.BlocklistClient();
+    private static volatile net.townymap.api.BlocklistClient.Blocklist blocklist =
+            net.townymap.api.BlocklistClient.EMPTY;
+    private static volatile boolean blocklistFetched = false;
+    private static volatile boolean accessBlocked = false;
+    private static volatile boolean blockedNoticeShown = false;
+
+    /**
+     * Whether this player is barred from the mod's features.
+     *
+     * <p>Fetched once per launch and matched on UUID, or on the player's nation. Fails open at every
+     * step: no list, no network, no player record — full access. Blocking wrongly is far worse than
+     * failing to block, and this is a courtesy check rather than enforcement; it runs on the user's
+     * machine and can be removed by anyone willing to edit the jar.
+     */
+    public static boolean isAccessBlocked() {
+        if (!blocklistFetched) {
+            blocklistFetched = true;
+            blocklistClient.fetch().thenAccept(list -> {
+                blocklist = list == null ? net.townymap.api.BlocklistClient.EMPTY : list;
+                evaluateAccess();
+            });
+        }
+        if (!blocklist.isEmpty() && !accessBlocked) evaluateAccess();
+        return accessBlocked;
+    }
+
+    private static void evaluateAccess() {
+        if (blocklist.isEmpty()) { accessBlocked = false; return; }
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.getSession() == null) return;
+        String uuid = client.getSession().getUuidOrNull() == null ? ""
+                : client.getSession().getUuidOrNull().toString().toLowerCase(Locale.ROOT).replace("-", "");
+        boolean blocked = !uuid.isBlank() && blocklist.uuids().contains(uuid);
+        if (!blocked) {
+            EarthMcPlayerData self = selfPlayer();
+            if (self != null && self.nationName() != null && !self.nationName().isBlank()) {
+                blocked = blocklist.nations().contains(self.nationName().toLowerCase(Locale.ROOT));
+            }
+        }
+        accessBlocked = blocked;
+        if (blocked && !blockedNoticeShown) {
+            blockedNoticeShown = true;
+            MinecraftClient mc = MinecraftClient.getInstance();
+            if (mc != null) mc.execute(() -> mc.setScreen(
+                    new net.townymap.gui.BlockedScreen(mc.currentScreen, blocklist.message())));
+        }
+    }
+
     public static boolean isActiveOnCurrentServer() {
+        if (isAccessBlocked()) return false;
         if (config == null) return false;
         if (!config.earthmcOnly) return true;
         return isOnEarthMcServer();
@@ -2553,6 +2774,233 @@ public class TownyMapMod implements ClientModInitializer {
         NationBonusProjection cached = nationBonusProjCache.get(townKey(nationName));
         if (cached == null) requestNationResidentStats(nationName);
         return cached;
+    }
+
+    /**
+     * The cached EarthMC player index, kicking off a load if it is not there yet. One request returns
+     * every player with balance, join date and friend count, so the leaderboards need no per-player
+     * lookups at all -- the whole index is already in memory for the search bar.
+     */
+    public static List<net.townymap.model.EarthMcPlayerData> apiPlayerIndex() {
+        refreshPlayerIndexIfNeeded();
+        return apiPlayers;
+    }
+
+    private static volatile java.util.Map<String, int[]> outlawTrusted = java.util.Map.of();
+    private static volatile boolean outlawTrustedLoading = false;
+    private static volatile long outlawTrustedAtMs = 0;
+
+    /**
+     * Per-player "outlawed in N towns / trusted in N towns", swept from every town's roster.
+     *
+     * <p>Unlike the player and nation indexes this is NOT free: it walks all ~5,500 towns in batches of
+     * 100. So it runs once on demand, is kept for 10 minutes, and returns whatever it has meanwhile —
+     * the panel shows a loading row until the first sweep lands rather than blocking on it.
+     */
+    public static java.util.Map<String, int[]> outlawTrustedCounts() {
+        long now = System.currentTimeMillis();
+        if (outlawTrustedLoading || now - outlawTrustedAtMs < 600_000L) return outlawTrusted;
+        if (apiClient == null || earthMcApi == null) return outlawTrusted;
+        List<String> names = new ArrayList<>();
+        for (net.townymap.model.TownData t : apiClient.getTowns()) names.add(t.name());
+        if (names.isEmpty()) return outlawTrusted;
+        outlawTrustedLoading = true;
+        outlawTrustedAtMs = now;
+        earthMcApi.fetchOutlawTrustedCounts(names).thenAccept(m -> {
+            if (m != null && !m.isEmpty()) {
+                outlawTrusted = m;
+                LOGGER.info("[TownyMap] Swept {} towns for outlaw/trusted counts: {} players", names.size(), m.size());
+            }
+            outlawTrustedLoading = false;
+        }).exceptionally(t -> { outlawTrustedLoading = false; return null; });
+        return outlawTrusted;
+    }
+
+    private static volatile java.util.Map<String, net.townymap.model.EarthMcPlayerData> richPlayers = java.util.Map.of();
+    private static volatile boolean richPlayersLoading = false;
+    private static volatile long richPlayersAtMs = 0;
+
+    /**
+     * Online players with their real balance, join date and friend count.
+     *
+     * <p>GET /players is only a name+uuid index -- balance and the rest come back as zero from it, which
+     * is why sorting the whole 60k index produced empty columns. The fields only exist on the queried
+     * /players endpoint, and querying all 60k would be ~600 batched calls. So this enriches just the
+     * players currently online (usually a few hundred, so one to four batches) and refreshes each minute.
+     */
+    public static java.util.Map<String, net.townymap.model.EarthMcPlayerData> onlinePlayerStats() {
+        long now = System.currentTimeMillis();
+        // 2 minutes rather than 1: the online set barely changes in that window, and this is fetched
+        // per open, so halving the refresh rate halves the cost of flicking through the tabs.
+        if (richPlayersLoading || now - richPlayersAtMs < 120_000L) return richPlayers;
+        if (apiClient == null || earthMcApi == null) return richPlayers;
+        List<String> names = new ArrayList<>();
+        for (net.townymap.model.PlayerMarker m : apiClient.getPlayers()) {
+            if (m.name() != null && !m.name().isBlank()) names.add(m.name());
+        }
+        if (names.isEmpty()) return richPlayers;
+        richPlayersLoading = true;
+        richPlayersAtMs = now;
+        earthMcApi.fetchPlayers(names).thenAccept(m -> {
+            if (m != null && !m.isEmpty()) {
+                richPlayers = m;
+                LOGGER.info("[TownyMap] Loaded full data for {} of {} online players", m.size(), names.size());
+            }
+            richPlayersLoading = false;
+        }).exceptionally(t -> { richPlayersLoading = false; return null; });
+        return richPlayers;
+    }
+
+    /** EarthMC's own activity window: 42 days without a login and a resident stops counting. */
+    private static final long ACTIVE_WINDOW_MS = 42L * 24 * 60 * 60 * 1000;
+    private static volatile java.util.Map<String, net.townymap.model.EarthMcPlayerData> allPlayers = java.util.Map.of();
+    private static volatile boolean allPlayersLoading = false;
+    private static volatile long allPlayersAtMs = 0;
+
+    /**
+     * Every player with their real balance, join date and friend count -- not just the ones online.
+     *
+     * <p>The name index carries none of those fields, so this queries the whole roster through the
+     * batched /players endpoint: ~600 batches of 100, throttled by the same gate the town sweep uses.
+     * It is the only way to rank the server rather than whoever happens to be logged in. Runs once,
+     * kept for 30 minutes, and serves the online-only subset in the meantime so the tab is never blank.
+     */
+    public static java.util.Map<String, net.townymap.model.EarthMcPlayerData> allPlayerStats() {
+        long now = System.currentTimeMillis();
+        boolean fresh = now - allPlayersAtMs < 1_800_000L;
+        if (!allPlayersLoading && !fresh && earthMcApi != null) {
+            List<String> names = new ArrayList<>();
+            if (!allPlayers.isEmpty()) {
+                // Refresh: only re-query players seen in the last 42 days (EarthMC's own activity
+                // window). Someone who has not logged in since is not going to climb a leaderboard, and
+                // their balance cannot change while they are gone -- so the repeat sweep is a fraction
+                // of the first one. Everyone else keeps the values from the initial pass.
+                for (net.townymap.model.EarthMcPlayerData pd : allPlayers.values()) {
+                    if (pd.name() == null || pd.name().isBlank()) continue;
+                    if (now - pd.lastOnlineMs() <= ACTIVE_WINDOW_MS) names.add(pd.name());
+                }
+            } else {
+                for (net.townymap.model.EarthMcPlayerData pd : apiPlayerIndex()) {
+                    if (pd.name() != null && !pd.name().isBlank()) names.add(pd.name());
+                }
+            }
+            if (!names.isEmpty()) {
+                allPlayersLoading = true;
+                allPlayersAtMs = now;
+                LOGGER.info("[TownyMap] Sweeping {} players for balance/join date...", names.size());
+                sweepPlayersProgressively(names, 0);
+            }
+        }
+        return allPlayers.isEmpty() ? onlinePlayerStats() : allPlayers;
+    }
+
+    /** How many names each slice of the sweep resolves before publishing what it found. */
+    private static final int SWEEP_SLICE = 2000;
+
+    /**
+     * Sweeps the roster a slice at a time, publishing after each one.
+     *
+     * <p>fetchPlayers only returns once every batch it was given has finished, so handing it all 60k
+     * names meant nothing appeared on screen until the entire sweep completed -- which is what made this
+     * feel slow. Slicing it means the first few hundred ranked players show up within a second or two
+     * and the list fills in behind them, and a stalled slice no longer holds the whole result hostage.
+     */
+    private static void sweepPlayersProgressively(List<String> names, int from) {
+        if (earthMcApi == null || from >= names.size()) {
+            allPlayersLoading = false;
+            LOGGER.info("[TownyMap] Player sweep complete: {} records", allPlayers.size());
+            return;
+        }
+        int to = Math.min(names.size(), from + SWEEP_SLICE);
+        List<String> slice = new ArrayList<>(names.subList(from, to));
+        earthMcApi.fetchPlayers(slice).thenAccept(m -> {
+            if (m != null && !m.isEmpty()) {
+                java.util.Map<String, net.townymap.model.EarthMcPlayerData> merged =
+                        new java.util.HashMap<>(allPlayers);
+                merged.putAll(m);
+                allPlayers = java.util.Map.copyOf(merged);   // publish what we have so far
+            }
+            sweepPlayersProgressively(names, to);
+        }).exceptionally(t -> {
+            sweepPlayersProgressively(names, to);            // a bad slice must not end the sweep
+            return null;
+        });
+    }
+
+    /** Whether a player logged in inside EarthMC's 42-day activity window. */
+    public static boolean isRecentlyActive(net.townymap.model.EarthMcPlayerData pd) {
+        return pd.lastOnlineMs() > 0 && System.currentTimeMillis() - pd.lastOnlineMs() <= ACTIVE_WINDOW_MS;
+    }
+
+    /** True once the full roster sweep has landed, so the panel can say which set it is showing. */
+    public static boolean playerSweepComplete() { return !allPlayers.isEmpty(); }
+
+    private static volatile java.util.Map<String, EarthMcNationData> richNations = java.util.Map.of();
+    private static volatile boolean richNationsLoading = false;
+    private static volatile long richNationsAtMs = 0;
+
+    /**
+     * Nations with their real balance, outlaw count and founding date.
+     *
+     * <p>Like /players, GET /nations is a name+uuid index only -- every numeric field comes back zero,
+     * which is why ranking by gold, outlaws or age produced nothing. The queried endpoint has the real
+     * values, and with under 400 nations that is only four batches, so unlike the player roster this can
+     * simply be fetched whole. Cached for 10 minutes.
+     */
+    public static java.util.Map<String, EarthMcNationData> nationStats() {
+        long now = System.currentTimeMillis();
+        if (!richNationsLoading && now - richNationsAtMs >= 600_000L && earthMcApi != null) {
+            List<String> names = new ArrayList<>();
+            for (EarthMcNationData nd : apiNationIndex()) {
+                if (nd.name() != null && !nd.name().isBlank()) names.add(nd.name());
+            }
+            if (!names.isEmpty()) {
+                richNationsLoading = true;
+                richNationsAtMs = now;
+                earthMcApi.fetchNations(names).thenAccept(m -> {
+                    if (m != null && !m.isEmpty()) {
+                        richNations = m;
+                        LOGGER.info("[TownyMap] Loaded full data for {} nations", m.size());
+                    }
+                    richNationsLoading = false;
+                }).exceptionally(t -> { richNationsLoading = false; return null; });
+            }
+        }
+        return richNations;
+    }
+
+    private static volatile java.util.Map<String, net.townymap.api.EarthMcApiClient.TownRank> townRanks =
+            java.util.Map.of();
+    private static volatile boolean townRanksLoading = false;
+    private static volatile long townRanksAtMs = 0;
+
+    /**
+     * Balance, outlaw count and founding date for every town.
+     *
+     * <p>The expensive one: ~56 batches over all 5,500 towns, because none of these three fields is in
+     * markers.json. Deliberately NOT warmed -- it runs only when one of the leaderboards that needs it is
+     * opened, and is then kept for 30 minutes.
+     */
+    public static java.util.Map<String, net.townymap.api.EarthMcApiClient.TownRank> townRanks() {
+        long now = System.currentTimeMillis();
+        if (!townRanksLoading && now - townRanksAtMs >= 1_800_000L
+                && apiClient != null && earthMcApi != null) {
+            List<String> names = new ArrayList<>();
+            for (net.townymap.model.TownData t : apiClient.getTowns()) names.add(t.name());
+            if (!names.isEmpty()) {
+                townRanksLoading = true;
+                townRanksAtMs = now;
+                LOGGER.info("[TownyMap] Sweeping {} towns for balance/outlaws/founded...", names.size());
+                earthMcApi.fetchTownRanks(names).thenAccept(m -> {
+                    if (m != null && !m.isEmpty()) {
+                        townRanks = m;
+                        LOGGER.info("[TownyMap] Town sweep complete: {} towns", m.size());
+                    }
+                    townRanksLoading = false;
+                }).exceptionally(t -> { townRanksLoading = false; return null; });
+            }
+        }
+        return townRanks;
     }
 
     private static void refreshPlayerIndex() {

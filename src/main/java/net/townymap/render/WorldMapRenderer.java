@@ -221,6 +221,11 @@ public class WorldMapRenderer {
         this.borderOverlay = new BorderOverlayRenderer(config);
     }
 
+    /** HTTP status of a recent squaremap tile refusal, or 0 when the imagery is loading normally. */
+    public int tileRefusalStatus() {
+        return squaremapTiles.recentRefusalStatus();
+    }
+
     public void invalidateTownCaches() {
         visibleTownScratch.clear();
         visibleTownSeen.clear();

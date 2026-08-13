@@ -62,6 +62,9 @@ final class SquaremapTileRenderer {
     private final Map<TileKey, Long> failedAt = new ConcurrentHashMap<>();
     /** HTTP status codes already reported, so a bulk refusal logs one line, not one per tile. */
     private final Set<Integer> loggedTileStatuses = ConcurrentHashMap.newKeySet();
+    /** Newest refusal status and when it happened, so the map can say why the imagery is blank. */
+    private volatile int lastRefusedStatus = 0;
+    private volatile long lastRefusedMs = 0;
     private final Map<TileKey, LoadedTile> completedTiles = new ConcurrentHashMap<>();
     private final LinkedHashMap<TileKey, Identifier> textures =
             new LinkedHashMap<>(64, 0.75f, true);
@@ -536,8 +539,17 @@ final class SquaremapTileRenderer {
                 failedAt.put(key, System.currentTimeMillis());
                 // This used to return in silence, which made a server-side refusal (rate limit, 403,
                 // Cloudflare, 5xx) indistinguishable from "the map has no tiles here": the squaremap
-                // layer just went blank with nothing in the log to explain it.
-                if (loggedTileStatuses.add(response.statusCode())) {
+                // layer just went black with nothing in the log to explain it. Timeouts and decode
+                // errors below were always reported; only the refusals were invisible.
+                // 404 is NORMAL here: squaremap simply has no tile for ungenerated or empty regions, and
+                // every map edge produces them. Only a real refusal (rate limit, auth, server error) means
+                // the imagery is being withheld, so only those are worth surfacing or logging.
+                boolean refused = response.statusCode() != 404;
+                if (refused) {
+                    lastRefusedStatus = response.statusCode();
+                    lastRefusedMs = System.currentTimeMillis();
+                }
+                if (refused && loggedTileStatuses.add(response.statusCode())) {
                     LOGGER.warn("[TownyMap] squaremap tile request refused: HTTP {} from {} "
                             + "-- the squaremap layer stays blank until this clears",
                             response.statusCode(), tileUrl(key));
@@ -617,6 +629,11 @@ final class SquaremapTileRenderer {
         float v1 = (float) ((v + (t - tileY) * (double) regionH / drawH) / TILE_PIXELS);
         float v2 = (float) ((v + (b - tileY) * (double) regionH / drawH) / TILE_PIXELS);
         ctx.drawTexturedQuad(texture, l, t, r, b, u1, u2, v1, v2);
+    }
+
+    /** Status code of a tile refusal in the last 30s, or 0 if the imagery is loading normally. */
+    int recentRefusalStatus() {
+        return System.currentTimeMillis() - lastRefusedMs < 30_000L ? lastRefusedStatus : 0;
     }
 
     private static int circleClipStripHeight(double radius) {
