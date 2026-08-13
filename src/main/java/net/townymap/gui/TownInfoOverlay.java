@@ -325,7 +325,7 @@ public final class TownInfoOverlay {
         return residentChunks + nationBonus(nation.residentCount());
     }
 
-    private static int nationBonus(int residents) {
+    static int nationBonus(int residents) {
         if (residents >= 200) return 100;
         if (residents >= 120) return 80;
         if (residents >= 80) return 60;

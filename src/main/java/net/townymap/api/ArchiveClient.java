@@ -204,7 +204,7 @@ public final class ArchiveClient {
     private static EarthMcNationData archiveNation(String name, String capitalTown,
                                                    int townCount, int residentCount, int chunkCount) {
         return new EarthMcNationData(name, "", "", "", "", capitalTown, "",
-                townCount, residentCount, chunkCount, 0, 0, 0, 0.0, false, false, false, false, 0, 0, -1, -1);
+                townCount, residentCount, chunkCount, 0, 0, 0, 0.0, false, false, false, false, 0, 0, -1, -1, 0L);
     }
 
     private static final String DEFAULT_BOARD = "/town set board [msg]";
