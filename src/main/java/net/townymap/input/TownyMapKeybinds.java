@@ -29,6 +29,14 @@ public final class TownyMapKeybinds {
         openStats = register("open_stats", GLFW.GLFW_KEY_J);
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            // Blocked access turns every bind into a no-op, but the presses are still consumed so they
+            // do not fall through to something else.
+            if (TownyMapMod.isAccessBlocked()) {
+                while (mapScreenshot.consumeClick()) { /* discard */ }
+                while (refreshTowns.consumeClick()) { /* discard */ }
+                while (openStats.consumeClick()) { /* discard */ }
+                return;
+            }
             // Only meaningful with the world map open — the countdown advances in its render. Arming with
             // it closed used to leave the "hide our UI" flag set indefinitely.
             while (mapScreenshot.consumeClick()) {
