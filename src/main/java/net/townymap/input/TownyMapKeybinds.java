@@ -31,6 +31,7 @@ public final class TownyMapKeybinds {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             // Blocked access turns every bind into a no-op, but the presses are still consumed so they
             // do not fall through to something else.
+            TownyMapMod.tickAccessNotice();   // shows the blocked notice once a world is loaded
             if (TownyMapMod.isAccessBlocked()) {
                 while (mapScreenshot.consumeClick()) { /* discard */ }
                 while (refreshTowns.consumeClick()) { /* discard */ }
