@@ -177,6 +177,9 @@ public class DetailScreen extends Screen {
         searchBox = new EditBox(this.font, cLeft, searchBoxY(), cRight - cLeft, 18,
                 Component.literal("Search towns, nations, players"));
         searchBox.setHint(Component.literal("Search towns, nations, players"));
+        // Turn off the widget's own chrome so only OUR frame shows. Without this the themed widget
+        // paints over the border we draw during content, which is why it still looked wrong.
+        searchBox.setBordered(false);
         searchBox.setMaxLength(64);
         searchBox.setResponder(q -> recomputeSearch());
         searchBox.visible = false;
