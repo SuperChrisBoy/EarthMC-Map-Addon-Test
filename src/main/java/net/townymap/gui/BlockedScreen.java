@@ -3,7 +3,10 @@ package net.townymap.gui;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.util.Util;
 import net.minecraft.network.chat.Component;
+
+import java.net.URI;
 
 /**
  * Shown once when the player's UUID or nation is on the access blocklist.
@@ -29,10 +32,17 @@ public final class BlockedScreen extends Screen {
                 : message;
     }
 
+    /** The developer's Discord profile, so an appeal has somewhere to go. */
+    private static final String DISCORD_URL = "https://discord.com/users/730747321238945803";
+
     @Override
     protected void init() {
-        this.addRenderableWidget(Button.builder(Component.literal("OK"), b -> this.onClose())
-                .bounds(this.width / 2 - 50, this.height / 2 + 52, 100, 20).build());
+        int y = this.height / 2 + 52;
+        this.addRenderableWidget(Button.builder(Component.literal("Message the developer"),
+                        b -> Util.getPlatform().openUri(URI.create(DISCORD_URL)))
+                .bounds(this.width / 2 - 108, y, 130, 20).build());
+        this.addRenderableWidget(Button.builder(Component.literal("Acknowledge"), b -> this.onClose())
+                .bounds(this.width / 2 + 28, y, 80, 20).build());
     }
 
     @Override
