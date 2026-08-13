@@ -7,7 +7,7 @@
     "         names change and you would eventually hit an innocent person.",
     "nations: nation names, case-insensitive.",
     "message: shown in the popup. Keep it factual and give a contact route; it will be screenshotted.",
-    "",
+    ""
   ],
   "uuids": ["989ccc74-7c84-4796-bcf1-7ec3d41eb592"],
   "nations": [],
