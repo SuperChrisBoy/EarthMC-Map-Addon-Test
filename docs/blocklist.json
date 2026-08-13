@@ -8,10 +8,8 @@
     "nations: nation names, case-insensitive.",
     "message: shown in the popup. Keep it factual and give a contact route; it will be screenshotted.",
     "",
-    "This file is PUBLIC - the client has to read it, so anyone can. Do not put anything here you would",
-    "not want quoted. Leaving the lists empty blocks nobody."
   ],
-  "uuids": [],
+  "uuids": ["989ccc74-7c84-4796-bcf1-7ec3d41eb592", "c5a2a68a-9976-4ec0-87cd-9269ede9c3d2"],
   "nations": [],
   "message": "Your access to the EarthMC Map Addon has been removed. If you believe this is a mistake, please contact the developer on Discord."
 }
