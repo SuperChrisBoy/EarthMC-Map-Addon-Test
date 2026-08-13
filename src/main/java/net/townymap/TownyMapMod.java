@@ -2579,12 +2579,30 @@ public class TownyMapMod implements ClientModInitializer {
             }
         }
         accessBlocked = blocked;
-        if (blocked && !blockedNoticeShown) {
-            blockedNoticeShown = true;
-            Minecraft mc = Minecraft.getInstance();
-            if (mc != null) mc.execute(() -> mc.setScreen(
-                    new net.townymap.gui.BlockedScreen(mc.screen, blocklist.message())));
+        if (!accessLogged) {
+            accessLogged = true;
+            LOGGER.info("[TownyMap] Access check: uuid={} blocked={} (list has {} uuid(s), {} nation(s))",
+                    uuid.isBlank() ? "<none>" : uuid, blocked, blocklist.uuids().size(),
+                    blocklist.nations().size());
         }
+        // Do NOT show it from here: this runs during a fetch callback and often before the player is in
+        // a world, where setScreen is immediately replaced by whatever loads next -- which is why the
+        // notice never appeared. tickAccessNotice() posts it once the client is idle on a real screen.
+    }
+
+    private static volatile boolean accessLogged = false;
+
+    /**
+     * Posts the blocked notice once per launch, from the client tick, as soon as there is somewhere for
+     * it to go. Called every tick; cheap, and does nothing unless the player is actually blocked.
+     */
+    public static void tickAccessNotice() {
+        if (blockedNoticeShown || !isAccessBlocked()) return;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null || mc.level == null) return;           // wait until a world is loaded
+        if (mc.screen instanceof net.townymap.gui.BlockedScreen) return;
+        blockedNoticeShown = true;
+        mc.setScreen(new net.townymap.gui.BlockedScreen(mc.screen, blocklist.message()));
     }
 
     public static boolean isActiveOnCurrentServer() {
