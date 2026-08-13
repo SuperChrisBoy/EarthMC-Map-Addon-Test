@@ -174,8 +174,10 @@ public class DetailScreen extends Screen {
         // (openDetail creates the screen, then calls setPage), so page was always null and the box was
         // never created at all. Clicking where it should have been hit bare panel, which is why it read
         // as "cannot type in it".
+        // Narration text stays empty: this branch draws a widget's message centred over it, so passing
+        // the prompt here painted it like a button label instead of leaving the field to its placeholder.
         searchBox = new TextFieldWidget(this.textRenderer, cLeft, searchBoxY(), cRight - cLeft, 18,
-                Text.literal("Search towns, nations, players"));
+                Text.empty());
         searchBox.setPlaceholder(Text.literal("Search towns, nations, players"));
         searchBox.setMaxLength(64);
         searchBox.setChangedListener(q -> recomputeSearch());
@@ -226,6 +228,8 @@ public class DetailScreen extends Screen {
     private int activeTab = 0;
     /** Whether the dashboard on screen was built with your own player record available. */
     private boolean dashboardHasSelf = false;
+    /** Last stats-data fingerprint the page was built from; -1 until a stats page is drawn. */
+    private int lastStatsSig = -1;
     private TextFieldWidget searchBox;
     private final List<Ref> searchHits = new ArrayList<>();
     private final int[][] searchRects = new int[6][4];
@@ -434,6 +438,15 @@ public class DetailScreen extends Screen {
             if (self != null && (townless || TownyMapMod.selfTownFull() != null)) {
                 dashboardHasSelf = true;
                 setPage(DetailPages.dashboard());
+            }
+        }
+        // Rebuild a Statistics page when its data arrives. Gold, Outlaws and Founded all open before
+        // their sweep finishes, and without this they sat on "sweeping..." until you changed filter.
+        if (page != null && page.kind() == Kind.STATS && activeTab == 1) {
+            int sig = TownyMapMod.statsCacheSignature();
+            if (lastStatsSig != sig) {
+                lastStatsSig = sig;
+                setPage(DetailPages.stats(activeSub, activeFilter));
             }
         }
         if (searchBox != null) {

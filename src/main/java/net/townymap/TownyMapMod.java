@@ -2965,6 +2965,18 @@ public class TownyMapMod implements ClientModInitializer {
         return pd.lastOnlineMs() > 0 && System.currentTimeMillis() - pd.lastOnlineMs() <= ACTIVE_WINDOW_MS;
     }
 
+    /**
+     * A cheap fingerprint of everything the Statistics tab draws from, WITHOUT starting any fetch.
+     *
+     * <p>The panel polls this and rebuilds when it changes, so a leaderboard that opened on "sweeping
+     * towns..." fills itself in the moment the data lands instead of waiting for you to switch filters
+     * and back. Deliberately reads the cached fields directly: calling the normal accessors would kick
+     * off the town sweep from whichever tab happened to be open.
+     */
+    public static int statsCacheSignature() {
+        return townRanks.size() * 31 + richNations.size() * 7 + allPlayers.size();
+    }
+
     /** True once the full roster sweep has landed, so the panel can say which set it is showing. */
     public static boolean playerSweepComplete() { return !allPlayers.isEmpty(); }
 
