@@ -39,6 +39,13 @@ A client-side EarthMC map extension for **Xaero's World Map** and **Xaero's Mini
 
 - Online player dots on both maps coloured by relation (your town / your nation / others), real player heads, configurable head/name/label ranges, and last-seen positions.
 
+## Info Panel
+
+- Press **J**, or the expand button beside the world map search bar.
+- **Dashboard** — your town and nation at a glance: claimed chunks against your limit, balance, residents, plus server totals, your favourites, and how old the claim data is.
+- **Statistics** — ranked lists of towns and nations by residents, chunks, gold, outlaws and founding date. Every name opens its full page.
+- Its own search bar covering towns, nations and players at once, ranked so the closest match comes first.
+
 ## Info panels
 
 - Right-click a town for mayor, nation, residents, gold, chunk count, open/public status, and founded date.
@@ -50,11 +57,12 @@ A client-side EarthMC map extension for **Xaero's World Map** and **Xaero's Mini
 
 - Chunk counter with persistent multi-group tracking and Shift+right-drag box select.
 - Xaero waypoint routes to map targets.
+- A line under the world map coordinates showing how old the claim data is, with a button to reload it. Turns amber when overdue, red if a refresh failed.
 - Map screenshots on a keybind — captures the squaremap, town, and player layers, hides mod and Xaero UI, with its own settings section (players off, nation stars on, dimmed towns hidden by default) and no chunk cursor.
 
 ## Setup
 
-- Searchable sectioned settings screen via Mod Menu with per-row Reset and right-click-to-go-back; UI scale; dark buttons; EarthMC-only mode; keybinds for cycling borders, cycling map mode, refreshing towns, toggling the chunk counter, toggling squaremap, and map screenshot (synced with MC's controls screen).
+- Searchable sectioned settings screen via Mod Menu with per-row Reset and right-click-to-go-back; UI scale; dark buttons; EarthMC-only mode; keybinds for the Info Panel (**J**), reloading claims (**R**, works with the map open) and map screenshots — all rebindable in the settings or in Options > Controls, and synced with both.
 
 ## Requirements
 
