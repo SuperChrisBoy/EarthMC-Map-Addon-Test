@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "Access blocklist for the EarthMC Map Addon. Edit this file on GitHub and it takes effect on each",
+    "player's next launch - no release needed. The mod fetches it from the 1.21.11 branch.",
+    "",
+    "uuids:   player UUIDs, with or without dashes, case-insensitive. Match on UUID, never on name -",
+    "         names change and you would eventually hit an innocent person.",
+    "nations: nation names, case-insensitive.",
+    "message: shown in the popup. Keep it factual and give a contact route; it will be screenshotted.",
+    "",
+    "This file is PUBLIC - the client has to read it, so anyone can. Do not put anything here you would",
+    "not want quoted. Leaving the lists empty blocks nobody."
+  ],
+  "uuids": [],
+  "nations": [],
+  "message": "Your access to the EarthMC Map Addon has been removed. If you believe this is a mistake, please contact the developer on Discord."
+}
