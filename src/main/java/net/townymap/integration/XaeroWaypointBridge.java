@@ -57,6 +57,10 @@ public final class XaeroWaypointBridge {
         session.getWaypointSession().setSetChangedTime(System.currentTimeMillis());
         return true;
     }
+    public static boolean createTeleportWaypoint(String label,int x,int y,int z){
+        WaypointSet set=currentWaypointSet();Minecraft client=Minecraft.getInstance();if(set==null||client==null||client.player==null)return false;
+        double scale=net.townymap.TownyMapMod.dimensionCoordinateScale();Waypoint waypoint=new Waypoint((int)Math.round(x/scale),y<=0?client.player.getBlockY():y,(int)Math.round(z/scale),cleanLabel(label),symbol(label),WaypointColor.PURPLE,WaypointPurpose.NORMAL,true,y>0);set.add(waypoint,true);touch();return true;
+    }
 
     /**
      * Adds one temporary shop waypoint. The coordinates are literal in-world positions in the

@@ -51,6 +51,9 @@ public final class MapToggleOverlay {
         }
 
         drawSettingsButton(ctx, tr, settingsTop(sh));
+        if(config.teleportViewerEnabled)drawTexturedButton(ctx,LEFT,teleportTop(sh),WIDTH,HEIGHT,Component.translatable(TownyMapMod.teleportTargetArmed()?"townymapaddon.teleport.toggle.on":"townymapaddon.teleport.title").getString(),true,TownyMapMod.teleportTargetArmed()?0xFF7EE2B8:0xFFFFFFFF);
+        drawTexturedButton(ctx, LEFT, hunterTop(sh), WIDTH, HEIGHT, net.minecraft.network.chat.Component.translatable("townymapaddon.hunter.watch.title").getString(), true, 0xFFFFB45C);
+        drawTexturedButton(ctx, LEFT+WIDTH+3, hunterTop(sh), 26, HEIGHT, "Log", true, 0xFF9FD7FF);
         } finally {
             if (scaled) UiScale.pop(ctx);
         }
@@ -118,6 +121,18 @@ public final class MapToggleOverlay {
         return mouseY >= sy && mouseY <= sy + HEIGHT;
     }
 
+    public static boolean handleHunterClick(double mouseX, double mouseY, int sh) {
+        if (UiScale.active()) { mouseX = UiScale.unscale(mouseX, LEFT); mouseY = UiScale.unscale(mouseY, togglesTop(sh)); }
+        if (mouseX < LEFT || mouseX > LEFT + WIDTH) return false;
+        int y = hunterTop(sh);
+        return mouseY >= y && mouseY <= y + HEIGHT;
+    }
+    public static boolean handleActivityClick(double mouseX,double mouseY,int sh){
+        if(UiScale.active()){mouseX=UiScale.unscale(mouseX,LEFT);mouseY=UiScale.unscale(mouseY,togglesTop(sh));}
+        int y=hunterTop(sh);return mouseX>=LEFT+WIDTH+3&&mouseX<=LEFT+WIDTH+29&&mouseY>=y&&mouseY<=y+HEIGHT;
+    }
+    public static boolean handleTeleportClick(double mouseX,double mouseY,int sh,TownyMapConfig config){if(!config.teleportViewerEnabled)return false;if(UiScale.active()){mouseX=UiScale.unscale(mouseX,LEFT);mouseY=UiScale.unscale(mouseY,togglesTop(sh));}int y=teleportTop(sh);return mouseX>=LEFT&&mouseX<=LEFT+WIDTH&&mouseY>=y&&mouseY<=y+HEIGHT;}
+
     private static void drawToggle(GuiGraphicsExtractor ctx, Font tr, int row, int baseY,
                                    String name, boolean enabled) {
         int x = LEFT;
@@ -151,13 +166,16 @@ public final class MapToggleOverlay {
 
     /** Top edge of the toggle column — other left-side HUD must stay above this. */
     public static int togglesTop(int sh) {
-        int totalHeight = TOGGLE_ROWS * HEIGHT + (TOGGLE_ROWS - 1) * GAP + SETTINGS_GAP + HEIGHT;
+        int totalHeight = TOGGLE_ROWS * HEIGHT + (TOGGLE_ROWS - 1) * GAP + SETTINGS_GAP + HEIGHT + GAP + HEIGHT + GAP + HEIGHT;
         return Math.max(8, (sh - totalHeight) / 2);
     }
 
     private static int settingsTop(int sh) {
         return togglesTop(sh) + TOGGLE_ROWS * (HEIGHT + GAP) + SETTINGS_GAP;
     }
+
+    private static int teleportTop(int sh){return settingsTop(sh)+HEIGHT+GAP;}
+    private static int hunterTop(int sh) { return teleportTop(sh) + HEIGHT + GAP; }
 
     private static void drawSettingsButton(GuiGraphicsExtractor ctx, Font tr, int y) {
         String label = "⚙ Settings";
