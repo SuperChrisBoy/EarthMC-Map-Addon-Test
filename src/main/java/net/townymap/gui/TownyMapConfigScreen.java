@@ -339,6 +339,95 @@ public class TownyMapConfigScreen extends Screen {
                 () -> cfg.playerAffiliationMinScale == DEFAULTS.playerAffiliationMinScale,
                 () -> cfg.playerAffiliationMinScale = DEFAULTS.playerAffiliationMinScale);
 
+        section("Hunter Warning");
+        option("Hunter System", onOff(cfg.hunterWarningEnabled, v -> cfg.hunterWarningEnabled = v),
+                () -> cfg.hunterWarningEnabled == DEFAULTS.hunterWarningEnabled,
+                () -> cfg.hunterWarningEnabled = DEFAULTS.hunterWarningEnabled);
+        option("Show Hunter HUD", onOff(cfg.hunterShowHud, v -> cfg.hunterShowHud = v),
+                () -> cfg.hunterShowHud == DEFAULTS.hunterShowHud,
+                () -> cfg.hunterShowHud = DEFAULTS.hunterShowHud);
+        option(Component.translatable("townymapaddon.hunter.settings.hud_position").getString(),Button.builder(Component.translatable("townymapaddon.hunter.settings.hud_position."+cfg.hunterHudPosition.name().toLowerCase(java.util.Locale.ROOT)),b->{var values=TownyMapConfig.HunterHudPosition.values();cfg.hunterHudPosition=values[(cfg.hunterHudPosition.ordinal()+1)%values.length];cfg.save();rebuildWidgets();}).bounds(0,0,150,20).build(),()->cfg.hunterHudPosition==DEFAULTS.hunterHudPosition,()->cfg.hunterHudPosition=DEFAULTS.hunterHudPosition);
+        option("Show Nearby Hunters", onOff(cfg.hunterShowNearby, v -> cfg.hunterShowNearby = v),
+                () -> cfg.hunterShowNearby == DEFAULTS.hunterShowNearby,
+                () -> cfg.hunterShowNearby = DEFAULTS.hunterShowNearby);
+        option("Show Recent Events", onOff(cfg.hunterShowRecentEvents, v -> cfg.hunterShowRecentEvents = v),
+                () -> cfg.hunterShowRecentEvents == DEFAULTS.hunterShowRecentEvents,
+                () -> cfg.hunterShowRecentEvents = DEFAULTS.hunterShowRecentEvents);
+        option("Warnings In Chat", onOff(cfg.hunterWarningsInChat, v -> cfg.hunterWarningsInChat = v),
+                () -> cfg.hunterWarningsInChat == DEFAULTS.hunterWarningsInChat,
+                () -> cfg.hunterWarningsInChat = DEFAULTS.hunterWarningsInChat);
+        option("Notifications In Chat", onOff(cfg.hunterNotificationsInChat, v -> cfg.hunterNotificationsInChat = v),
+                () -> cfg.hunterNotificationsInChat == DEFAULTS.hunterNotificationsInChat,
+                () -> cfg.hunterNotificationsInChat = DEFAULTS.hunterNotificationsInChat);
+        option("Show Activity Window", onOff(cfg.hunterActivityWindowShown, v -> cfg.hunterActivityWindowShown = v),
+                () -> cfg.hunterActivityWindowShown == DEFAULTS.hunterActivityWindowShown,
+                () -> cfg.hunterActivityWindowShown = DEFAULTS.hunterActivityWindowShown);
+        option("Show Risk", onOff(cfg.hunterShowRisk, v -> cfg.hunterShowRisk = v),
+                () -> cfg.hunterShowRisk == DEFAULTS.hunterShowRisk,
+                () -> cfg.hunterShowRisk = DEFAULTS.hunterShowRisk);
+        action("Manage Watched Hunters", () -> this.minecraft.gui.setScreen(new HunterWatchScreen(this)));
+        option("Nearby Radius", cycle(cfg.hunterNearbyRadius, new int[]{500, 1000, 2000, 5000},
+                        v -> Component.literal(v + " blocks"), v -> cfg.hunterNearbyRadius = v),
+                () -> cfg.hunterNearbyRadius == DEFAULTS.hunterNearbyRadius,
+                () -> cfg.hunterNearbyRadius = DEFAULTS.hunterNearbyRadius);
+        option("Elevated Threshold", cycle(cfg.hunterElevatedRadius, new int[]{250, 500, 750, 1000},
+                        v -> Component.literal(v + " blocks"), v -> cfg.hunterElevatedRadius = v),
+                () -> cfg.hunterElevatedRadius == DEFAULTS.hunterElevatedRadius,
+                () -> cfg.hunterElevatedRadius = DEFAULTS.hunterElevatedRadius);
+        option("High Threshold", cycle(cfg.hunterHighRadius, new int[]{100, 250, 500},
+                        v -> Component.literal(v + " blocks"), v -> cfg.hunterHighRadius = v),
+                () -> cfg.hunterHighRadius == DEFAULTS.hunterHighRadius,
+                () -> cfg.hunterHighRadius = DEFAULTS.hunterHighRadius);
+        option("Critical Threshold", cycle(cfg.hunterCriticalRadius, new int[]{50, 100, 150},
+                        v -> Component.literal(v + " blocks"), v -> cfg.hunterCriticalRadius = v),
+                () -> cfg.hunterCriticalRadius == DEFAULTS.hunterCriticalRadius,
+                () -> cfg.hunterCriticalRadius = DEFAULTS.hunterCriticalRadius);
+        option("Teleport Threat Radius", cycle(cfg.hunterTeleportThreatRadius, new int[]{1000, 2000, 3000, 5000},
+                        v -> Component.literal(v + " blocks"), v -> cfg.hunterTeleportThreatRadius = v),
+                () -> cfg.hunterTeleportThreatRadius == DEFAULTS.hunterTeleportThreatRadius,
+                () -> cfg.hunterTeleportThreatRadius = DEFAULTS.hunterTeleportThreatRadius);
+        option("Maximum HUD Entries", cycle(cfg.hunterMaxHudEntries, new int[]{1, 2, 3, 5, 10},
+                        v -> Component.literal(Integer.toString(v)), v -> cfg.hunterMaxHudEntries = v),
+                () -> cfg.hunterMaxHudEntries == DEFAULTS.hunterMaxHudEntries,
+                () -> cfg.hunterMaxHudEntries = DEFAULTS.hunterMaxHudEntries);
+        option("Normal Event Duration", cycle(cfg.hunterNormalEventDurationSecs, new int[]{5, 8, 10, 15},
+                        v -> Component.literal(v + " seconds"), v -> cfg.hunterNormalEventDurationSecs = v),
+                () -> cfg.hunterNormalEventDurationSecs == DEFAULTS.hunterNormalEventDurationSecs,
+                () -> cfg.hunterNormalEventDurationSecs = DEFAULTS.hunterNormalEventDurationSecs);
+        option("Candidate Outlaw Threshold", cycle(cfg.hunterCandidateOutlawThreshold, new int[]{5, 10, 15, 20, 30},
+                        v -> Component.literal("> " + v + " towns"), v -> cfg.hunterCandidateOutlawThreshold = v),
+                () -> cfg.hunterCandidateOutlawThreshold == DEFAULTS.hunterCandidateOutlawThreshold,
+                () -> cfg.hunterCandidateOutlawThreshold = DEFAULTS.hunterCandidateOutlawThreshold);
+        option(Component.translatable("townymapaddon.hunter.settings.candidate_warnings").getString(), onOff(cfg.hunterCandidateWarningsEnabled, v -> cfg.hunterCandidateWarningsEnabled = v),
+                () -> cfg.hunterCandidateWarningsEnabled == DEFAULTS.hunterCandidateWarningsEnabled,
+                () -> cfg.hunterCandidateWarningsEnabled = DEFAULTS.hunterCandidateWarningsEnabled);
+        option(Component.translatable("townymapaddon.hunter.settings.candidate_radius").getString(), cycle(cfg.hunterCandidateWarningRadius, new int[]{500, 1000, 1500, 2000, 5000},
+                        v -> Component.literal(v + " blocks"), v -> cfg.hunterCandidateWarningRadius = v),
+                () -> cfg.hunterCandidateWarningRadius == DEFAULTS.hunterCandidateWarningRadius,
+                () -> cfg.hunterCandidateWarningRadius = DEFAULTS.hunterCandidateWarningRadius);
+        option("Candidate Refresh", cycle(cfg.hunterCandidateRefreshMinutes, new int[]{5, 10, 15, 30, 60},
+                        v -> Component.literal(v + " minutes"), v -> cfg.hunterCandidateRefreshMinutes = v),
+                () -> cfg.hunterCandidateRefreshMinutes == DEFAULTS.hunterCandidateRefreshMinutes,
+                () -> cfg.hunterCandidateRefreshMinutes = DEFAULTS.hunterCandidateRefreshMinutes);
+        option("Activity History", cycle(cfg.hunterActivityMaxEvents, new int[]{50, 100, 200, 500},
+                        v -> Component.literal(v + " events"), v -> cfg.hunterActivityMaxEvents = v),
+                () -> cfg.hunterActivityMaxEvents == DEFAULTS.hunterActivityMaxEvents,
+                () -> cfg.hunterActivityMaxEvents = DEFAULTS.hunterActivityMaxEvents);
+        option("Direction", onOff(cfg.hunterDirectionEnabled, v -> cfg.hunterDirectionEnabled = v),
+                () -> cfg.hunterDirectionEnabled == DEFAULTS.hunterDirectionEnabled,
+                () -> cfg.hunterDirectionEnabled = DEFAULTS.hunterDirectionEnabled);
+        option("Dynmap Exposure", onOff(cfg.hunterExposureHud, v -> cfg.hunterExposureHud = v),
+                () -> cfg.hunterExposureHud == DEFAULTS.hunterExposureHud,
+                () -> cfg.hunterExposureHud = DEFAULTS.hunterExposureHud);
+
+        section(Component.translatable("townymapaddon.teleport.title").getString());
+        option(Component.translatable("townymapaddon.teleport.settings.enabled").getString(), onOff(cfg.teleportViewerEnabled,v->cfg.teleportViewerEnabled=v),()->cfg.teleportViewerEnabled==DEFAULTS.teleportViewerEnabled,()->cfg.teleportViewerEnabled=DEFAULTS.teleportViewerEnabled);
+        option(Component.translatable("townymapaddon.teleport.settings.map_click").getString(),onOff(cfg.teleportMapClickAction,v->cfg.teleportMapClickAction=v),()->cfg.teleportMapClickAction==DEFAULTS.teleportMapClickAction,()->cfg.teleportMapClickAction=DEFAULTS.teleportMapClickAction);
+        option(Component.translatable("townymapaddon.teleport.settings.default_mode").getString(),Button.builder(Component.translatable(cfg.teleportDefaultAdvanced?"townymapaddon.teleport.mode.advanced":"townymapaddon.teleport.mode.standard"),b->{cfg.teleportDefaultAdvanced=!cfg.teleportDefaultAdvanced;cfg.save();rebuildWidgets();}).bounds(0,0,120,20).build(),()->cfg.teleportDefaultAdvanced==DEFAULTS.teleportDefaultAdvanced,()->cfg.teleportDefaultAdvanced=DEFAULTS.teleportDefaultAdvanced);
+        option(Component.translatable("townymapaddon.teleport.settings.show_uncertain").getString(),onOff(cfg.teleportShowUncertain,v->cfg.teleportShowUncertain=v),()->cfg.teleportShowUncertain==DEFAULTS.teleportShowUncertain,()->cfg.teleportShowUncertain=DEFAULTS.teleportShowUncertain);
+        option(Component.translatable("townymapaddon.teleport.settings.show_obstructed").getString(),onOff(cfg.teleportShowObstructed,v->cfg.teleportShowObstructed=v),()->cfg.teleportShowObstructed==DEFAULTS.teleportShowObstructed,()->cfg.teleportShowObstructed=DEFAULTS.teleportShowObstructed);
+        option(Component.translatable("townymapaddon.teleport.settings.remember_home").getString(),onOff(cfg.teleportRememberPrimaryHome,v->cfg.teleportRememberPrimaryHome=v),()->cfg.teleportRememberPrimaryHome==DEFAULTS.teleportRememberPrimaryHome,()->cfg.teleportRememberPrimaryHome=DEFAULTS.teleportRememberPrimaryHome);
+
         section("Info Display");
         option("Current Town & Nation", onOff(cfg.infoDisplayTownEnabled, v -> cfg.infoDisplayTownEnabled = v),
                 () -> cfg.infoDisplayTownEnabled == DEFAULTS.infoDisplayTownEnabled,

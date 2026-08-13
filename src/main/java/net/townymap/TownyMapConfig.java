@@ -121,6 +121,42 @@ public class TownyMapConfig {
     /** Starred nations and players. Towns had this from the start; the other two kinds behave the same. */
     public List<String> favoriteNations = new ArrayList<>();
     public List<String> favoritePlayers = new ArrayList<>();
+    /** User-maintained hunter names. Identity UUIDs are resolved at runtime via the EarthMC API. */
+    public List<String> hunterWatchlist = new ArrayList<>();
+    public List<String> disabledHunterNames = new ArrayList<>();
+    public boolean hunterWarningEnabled = false;
+    public boolean hunterShowHud = true;
+    public HunterHudPosition hunterHudPosition = HunterHudPosition.RIGHT_OF_MINIMAP;
+    public boolean hunterShowNearby = true;
+    public boolean hunterShowRecentEvents = true;
+    public boolean hunterWarningsInChat = true;
+    public boolean hunterNotificationsInChat = true;
+    public boolean hunterActivityWindowShown = true;
+    public boolean hunterShowRisk = true;
+    public boolean hunterExposureHud = true;
+    public boolean hunterDirectionEnabled = true;
+    public int hunterNearbyRadius = 1000;
+    public int hunterElevatedRadius = 500;
+    public int hunterHighRadius = 250;
+    public int hunterCriticalRadius = 100;
+    public int hunterMaxHudEntries = 3;
+    public int hunterTeleportThreatRadius = 2000;
+    public int hunterNormalEventDurationSecs = 8;
+    public int hunterActivityMaxEvents = 200;
+    public int hunterCandidateOutlawThreshold = 10;
+    public int hunterCandidateRefreshMinutes = 10;
+    public boolean hunterCandidateWarningsEnabled = true;
+    public int hunterCandidateWarningRadius = 1000;
+    public boolean teleportViewerEnabled = true;
+    public boolean teleportMapClickAction = true;
+    public boolean teleportDefaultAdvanced = false;
+    public boolean teleportShowUncertain = true;
+    public boolean teleportShowObstructed = true;
+    public int teleportAdvancedMaxJoinHops = 1;
+    public boolean teleportRememberPrimaryHome = true;
+    public String teleportPrimaryHomeTown = "";
+    public java.util.Map<String,String> teleportSpawnReports = new java.util.HashMap<>();
+    public enum HunterHudPosition { RIGHT_OF_MINIMAP, LEFT_OF_MINIMAP, BELOW_MINIMAP }
     public List<Long> chunkCounterSelection = new ArrayList<>();
     public List<List<Long>> chunkCounterGroups = new ArrayList<>();
 
@@ -213,6 +249,27 @@ public class TownyMapConfig {
             refreshTownsSecs = 60;
             changed = true;
         }
+        int hn = Math.clamp(hunterNearbyRadius, 100, 10000);
+        int he = Math.clamp(hunterElevatedRadius, 50, hn);
+        int hh = Math.clamp(hunterHighRadius, 25, he);
+        int hc = Math.clamp(hunterCriticalRadius, 10, hh);
+        int hm = Math.clamp(hunterMaxHudEntries, 1, 10);
+        int ht = Math.clamp(hunterTeleportThreatRadius, 100, 20000);
+        int hd = Math.clamp(hunterNormalEventDurationSecs, 2, 30);
+        int ha = Math.clamp(hunterActivityMaxEvents, 25, 500);
+        int ho = Math.clamp(hunterCandidateOutlawThreshold, 0, 1000);
+        int hr = Math.clamp(hunterCandidateRefreshMinutes, 5, 60);
+        int hw = Math.clamp(hunterCandidateWarningRadius, 100, 20000);
+        if (hn != hunterNearbyRadius || he != hunterElevatedRadius || hh != hunterHighRadius
+                || hc != hunterCriticalRadius || hm != hunterMaxHudEntries || ht != hunterTeleportThreatRadius
+                || hd != hunterNormalEventDurationSecs || ha != hunterActivityMaxEvents
+                || ho != hunterCandidateOutlawThreshold || hr != hunterCandidateRefreshMinutes
+                || hw != hunterCandidateWarningRadius) changed = true;
+        hunterNearbyRadius=hn; hunterElevatedRadius=he; hunterHighRadius=hh; hunterCriticalRadius=hc;
+        hunterMaxHudEntries=hm; hunterTeleportThreatRadius=ht;
+        hunterNormalEventDurationSecs=hd;
+        hunterActivityMaxEvents=ha; hunterCandidateOutlawThreshold=ho; hunterCandidateRefreshMinutes=hr;
+        hunterCandidateWarningRadius=hw;
         if (refreshPlayersSecs < 1) {
             refreshPlayersSecs = 1;
             changed = true;
@@ -412,6 +469,8 @@ public class TownyMapConfig {
      */
     private static final java.util.Set<String> PRESERVED_ON_RESET = java.util.Set.of(
             "favoriteTowns", "favoriteNations", "favoritePlayers",
+            "hunterWatchlist",
+            "disabledHunterNames",
             "chunkCounterSelection", "chunkCounterGroups",
             "activeChunkCounterGroup", "chunkCounterGroupCount");
 
