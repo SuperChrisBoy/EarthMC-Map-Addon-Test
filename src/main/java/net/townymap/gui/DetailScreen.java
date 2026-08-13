@@ -272,6 +272,17 @@ public class DetailScreen extends Screen {
 
     /** Draws the result rows just above the search box, and records their hit rects. */
     private void renderSearchResults(GuiGraphicsExtractor ctx, int mouseX, int mouseY) {
+        // Draw our own frame around the search field. A widget's look belongs to whatever is theming
+        // vanilla UI in the player's pack -- one reported it rendering as a button, and invisible once
+        // their button theme was switched off. This border is ours, so the field is always findable.
+        if (searchBox != null && searchBox.visible) {
+            int bx1 = searchBox.getX() - 1, by1 = searchBox.getY() - 1;
+            int bx2 = searchBox.getX() + searchBox.getWidth() + 1;
+            int by2 = searchBox.getY() + searchBox.getHeight() + 1;
+            ctx.fill(bx1, by1, bx2, by2, searchBox.isFocused() ? ACCENT : PANEL_BORDER);
+            ctx.fill(bx1 + 1, by1 + 1, bx2 - 1, by2 - 1, 0xFF101216);
+        }
+
         for (int[] r : searchRects) r[2] = 0;
         if (searchBox == null || searchHits.isEmpty()) return;
         int rowH = 12;
