@@ -179,6 +179,9 @@ public class DetailScreen extends Screen {
         searchBox = new TextFieldWidget(this.textRenderer, cLeft, searchBoxY(), cRight - cLeft, 18,
                 Text.empty());
         searchBox.setPlaceholder(Text.literal("Search towns, nations, players"));
+        // Turn off the widget's own chrome so only OUR frame shows. Without this the themed widget
+        // paints over the border we draw during content, which is why it still looked wrong.
+        searchBox.setDrawsBackground(false);
         searchBox.setMaxLength(64);
         searchBox.setChangedListener(q -> recomputeSearch());
         searchBox.visible = false;
