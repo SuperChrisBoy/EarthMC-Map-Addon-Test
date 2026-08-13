@@ -86,6 +86,7 @@ public abstract class MixinGuiMap {
         // raw camera every frame, regardless of dimension. jumpTo() suppresses the next pan-clear so that
         // centre-on-select doesn't wipe the bar.
         TownyMapMod.onWorldMapFrame(this, cameraX, cameraZ);
+        if (TownyMapMod.isAccessBlocked()) return;
         // The EarthMC map is overworld-only. Outside the overworld our overlay is hidden, except in
         // "Overworld Coords" mode in the Nether, where we scale the overlay's camera x8 and its
         // block-scale /8 so the overworld map/towns line up exactly over Xaero's real Nether tiles.
@@ -137,6 +138,7 @@ public abstract class MixinGuiMap {
     @Inject(require = 0, method = "renderPreDropdown", at = @At("HEAD"), remap = false)
     private void onRenderPreDropdown(GuiGraphicsExtractor ctx, int mouseX, int mouseY,
                                      float delta, CallbackInfo ci) {
+        if (TownyMapMod.isAccessBlocked()) return;
         // Freshness line goes HERE, not in the overlay inject: the squaremap tiles are drawn after that
         // one and painted straight over it, so the line vanished whenever the layer was switched on.
         // renderPreDropdown runs late enough to sit on top of everything. Screen-space at a fixed Y, so
@@ -297,6 +299,7 @@ public abstract class MixinGuiMap {
     @Inject(require = 0, method = "mouseClicked", at = @At("HEAD"), remap = false, cancellable = true)
     private void onMouseClicked(MouseButtonEvent click, boolean bl,
                                 CallbackInfoReturnable<Boolean> cir) {
+        if (TownyMapMod.isAccessBlocked()) return;   // let Xaero handle it as if we were not installed
         try {
             int button = click.buttonInfo().button();
             // Swallow 26.2's phantom left-click that trails every right-click (else it dismisses the popup).
@@ -439,6 +442,7 @@ public abstract class MixinGuiMap {
     @Inject(require = 0, method = "keyPressed", at = @At("HEAD"), remap = false, cancellable = true)
     private void onKeyPressed(KeyEvent input,
                               CallbackInfoReturnable<Boolean> cir) {
+        if (TownyMapMod.isAccessBlocked()) return;   // let Xaero handle it as if we were not installed
         try {
             // The clean-screenshot key is a normal rebindable keybind (Options -> Controls). Screens
             // swallow key presses, so match it here too — but never while the search bar has focus.

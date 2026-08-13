@@ -2052,6 +2052,7 @@ public class TownyMapMod implements ClientModInitializer {
 
     public static void openDetail(net.townymap.gui.DetailScreen.Kind kind, String name,
                                   net.minecraft.client.gui.screens.Screen parent) {
+        if (isAccessBlocked()) return;   // every panel funnels through here, including the keybind
         if (name == null || name.isBlank()) return;
         // Opening the expanded panel replaces what you were looking at, so drop the join-range zone with it.
         net.townymap.gui.TownSearchOverlay.showNationRange(null);

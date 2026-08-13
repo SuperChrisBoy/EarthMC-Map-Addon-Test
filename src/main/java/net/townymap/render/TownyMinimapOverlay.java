@@ -113,10 +113,12 @@ public final class TownyMinimapOverlay {
     }
 
     public static void render(GuiGraphicsExtractor ctx, MinimapSession session, ModuleRenderContext rc) {
+        if (TownyMapMod.isAccessBlocked()) return;
         render(ctx, session, rc.x, rc.y, Math.min(rc.w, rc.h));
     }
 
     public static void render(GuiGraphicsExtractor ctx, MinimapSession session, int mapX, int mapY, int mapSize) {
+        if (TownyMapMod.isAccessBlocked()) return;
         TownyMapConfig config = TownyMapMod.getConfig();
         SquaremapApiClient api = TownyMapMod.getApiClient();
         lastRenderCanCoverWaypoints = false;
@@ -327,6 +329,7 @@ public final class TownyMinimapOverlay {
 
     public static void renderWaypointsOnTop(GuiGraphicsExtractor ctx, MinimapSession session,
                                             int mapX, int mapY, int size) {
+        if (TownyMapMod.isAccessBlocked()) return;
         TownyMapConfig config = TownyMapMod.getConfig();
         if (config == null || !config.minimapExtensionsEnabled || size <= 12) return;
         if (session.getProcessor().isCaveModeDisplayed()) return;
