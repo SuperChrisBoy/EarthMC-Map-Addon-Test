@@ -2533,7 +2533,22 @@ public class TownyMapMod implements ClientModInitializer {
         return accessBlocked;
     }
 
+    private static volatile boolean evaluatingAccess = false;
+
     private static void evaluateAccess() {
+        // Re-entrancy guard. This calls selfPlayer(), which checks isActiveOnCurrentServer(), which now
+        // calls isAccessBlocked() -- straight back into here. Unguarded that recurses until the stack
+        // blows, on every frame, which is what stopped the blocked notice ever appearing.
+        if (evaluatingAccess) return;
+        evaluatingAccess = true;
+        try {
+            evaluateAccessInner();
+        } finally {
+            evaluatingAccess = false;
+        }
+    }
+
+    private static void evaluateAccessInner() {
         if (blocklist.isEmpty()) { accessBlocked = false; return; }
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null || client.getSession() == null) return;
