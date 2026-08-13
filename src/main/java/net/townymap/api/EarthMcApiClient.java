@@ -46,6 +46,9 @@ public class EarthMcApiClient {
     // fire a big entity's 100-id batches in parallel but throttled to this many at once (the safe max).
     // Base town/nation fetches are NOT gated (they have their own load cap), so the map stays responsive.
     private final java.util.concurrent.Semaphore activeBatchGate = new java.util.concurrent.Semaphore(4);
+    /** Batches that exhausted their retries; surfaced after a sweep so silent loss cannot hide. */
+    private final java.util.concurrent.atomic.AtomicInteger droppedPlayerBatches =
+            new java.util.concurrent.atomic.AtomicInteger();
 
     // Per-resident activity cache (id → {removalDate, fetchedAt}), so a huge nation like France (1000+
     // residents = ~11 /players calls) is fetched once, then repeat views and other nations that share
@@ -141,6 +144,144 @@ public class EarthMcApiClient {
             }
             return out;
         }, executor);
+    }
+
+    /**
+     * Counts, for every player, how many towns list them as an outlaw and how many trust them.
+     *
+     * <p>Uses the same batched /towns endpoint as {@link #fetchTowns}, but reads the outlaw and trusted
+     * arrays straight out of the JSON instead of going through TownPopupData, which does not model them.
+     * One sweep of ~56 batched calls covers the whole server; the caller caches the result.
+     *
+     * @return player display name -> {outlawedIn, trustedIn}
+     */
+    public CompletableFuture<java.util.Map<String, int[]>> fetchOutlawTrustedCounts(List<String> names) {
+        return CompletableFuture.supplyAsync(() -> {
+            java.util.Map<String, int[]> out = new ConcurrentHashMap<>();
+            if (names == null || names.isEmpty()) return out;
+            java.util.LinkedHashSet<String> unique = new java.util.LinkedHashSet<>();
+            for (String n : names) if (n != null && !n.isBlank()) unique.add(n);
+            List<String> list = new ArrayList<>(unique);
+
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
+            for (int i = 0; i < list.size(); i += TOWN_QUERY_BATCH) {
+                List<String> batch = new ArrayList<>(list.subList(i, Math.min(list.size(), i + TOWN_QUERY_BATCH)));
+                futures.add(CompletableFuture.runAsync(() -> countRosterBatch(batch, out), executor));
+            }
+            for (CompletableFuture<Void> f : futures) {
+                try { f.join(); } catch (RuntimeException ignored) { /* a failed batch just means fewer towns */ }
+            }
+            return out;
+        }, executor);
+    }
+
+    private void countRosterBatch(List<String> batch, java.util.Map<String, int[]> out) {
+        JsonObject body = new JsonObject();
+        JsonArray q = new JsonArray();
+        batch.forEach(q::add);
+        body.add("query", q);
+
+        String json = null;
+        for (int attempt = 0; attempt < 3 && json == null; attempt++) {
+            if (attempt > 0) {
+                try { Thread.sleep(120L * attempt); }
+                catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+            }
+            json = postGated(BASE + "/towns", body.toString());
+        }
+        if (json == null) return;
+        JsonArray arr;
+        try { arr = JsonParser.parseString(json).getAsJsonArray(); }
+        catch (RuntimeException e) { return; }
+
+        for (JsonElement el : arr) {
+            if (!el.isJsonObject()) continue;
+            JsonObject town = el.getAsJsonObject();
+            tally(town, "outlaws", 0, out);
+            tally(town, "trusted", 1, out);
+        }
+    }
+
+    /** Adds one town's roster to the tally. Entries may be plain strings or {name, uuid} objects. */
+    private static void tally(JsonObject town, String field, int slot, java.util.Map<String, int[]> out) {
+        JsonElement el = town.get(field);
+        if (el == null || !el.isJsonArray()) return;
+        for (JsonElement e : el.getAsJsonArray()) {
+            String name = null;
+            if (e.isJsonPrimitive()) name = e.getAsString();
+            else if (e.isJsonObject() && e.getAsJsonObject().has("name")) {
+                JsonElement n = e.getAsJsonObject().get("name");
+                if (n.isJsonPrimitive()) name = n.getAsString();
+            }
+            if (name == null || name.isBlank()) continue;
+            out.computeIfAbsent(name, k -> new int[2])[slot]++;
+        }
+    }
+
+    /** Balance, outlaw count and founding time for one town, for the Towns leaderboards. */
+    public record TownRank(String name, double balance, int outlaws, long foundedMs) {}
+
+    /**
+     * Sweeps every town for the three fields the Towns leaderboards need.
+     *
+     * <p>Reads them straight out of the batched /towns response rather than widening TownPopupData,
+     * which is used all over the mod. ~56 batches for the whole server, so the caller must cache this
+     * and only run it on demand -- never on panel open.
+     */
+    public CompletableFuture<java.util.Map<String, TownRank>> fetchTownRanks(List<String> names) {
+        return CompletableFuture.supplyAsync(() -> {
+            java.util.Map<String, TownRank> out = new ConcurrentHashMap<>();
+            if (names == null || names.isEmpty()) return out;
+            java.util.LinkedHashSet<String> unique = new java.util.LinkedHashSet<>();
+            for (String n : names) if (n != null && !n.isBlank()) unique.add(n);
+            List<String> list = new ArrayList<>(unique);
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
+            for (int i = 0; i < list.size(); i += TOWN_QUERY_BATCH) {
+                List<String> batch = new ArrayList<>(list.subList(i, Math.min(list.size(), i + TOWN_QUERY_BATCH)));
+                futures.add(CompletableFuture.runAsync(() -> rankBatch(batch, out), executor));
+            }
+            for (CompletableFuture<Void> f : futures) {
+                try { f.join(); } catch (RuntimeException ignored) { /* a lost batch just means fewer rows */ }
+            }
+            return out;
+        }, executor);
+    }
+
+    private void rankBatch(List<String> batch, java.util.Map<String, TownRank> out) {
+        JsonObject body = new JsonObject();
+        JsonArray q = new JsonArray();
+        batch.forEach(q::add);
+        body.add("query", q);
+        String json = null;
+        for (int attempt = 0; attempt < 5 && json == null; attempt++) {
+            if (attempt > 0) {
+                try { Thread.sleep(400L * (1L << (attempt - 1))); }
+                catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+            }
+            json = postGated(BASE + "/towns", body.toString());
+        }
+        if (json == null) return;
+        JsonArray arr;
+        try { arr = JsonParser.parseString(json).getAsJsonArray(); }
+        catch (RuntimeException e) { return; }
+        for (JsonElement el : arr) {
+            if (!el.isJsonObject()) continue;
+            JsonObject t = el.getAsJsonObject();
+            String name = str(t, "name", "");
+            if (name.isBlank()) continue;
+            double bal = 0;
+            if (t.has("stats") && t.get("stats").isJsonObject()) {
+                JsonObject st = t.getAsJsonObject("stats");
+                if (st.has("balance") && st.get("balance").isJsonPrimitive()) bal = st.get("balance").getAsDouble();
+            }
+            int outlaws = 0;
+            if (t.has("outlaws") && t.get("outlaws").isJsonArray()) outlaws = t.getAsJsonArray("outlaws").size();
+            long founded = 0;
+            if (t.has("timestamps") && t.get("timestamps").isJsonObject()) {
+                founded = ts(t.getAsJsonObject("timestamps"), "registered");
+            }
+            out.put(name.toLowerCase(java.util.Locale.ROOT), new TownRank(name, bal, outlaws, founded));
+        }
     }
 
     /** Looks up one ≤100-name batch and drops each parsed town into {@code out}, keyed by lowercase name. */
@@ -263,6 +404,11 @@ public class EarthMcApiClient {
             for (CompletableFuture<Void> f : futures) {
                 try { f.join(); } catch (RuntimeException ignored) { /* a failed batch just yields fewer entries */ }
             }
+            int dropped = droppedPlayerBatches.getAndSet(0);
+            if (dropped > 0) {
+                LOGGER.warn("[TownyMap] {} player batches gave up after retries -- up to {} players are"
+                        + " missing from this sweep", dropped, dropped * TOWN_QUERY_BATCH);
+            }
             return out;
         }, executor);
     }
@@ -273,15 +419,22 @@ public class EarthMcApiClient {
         batch.forEach(q::add);
         body.add("query", q);
 
+        // A whole-roster sweep is ~600 batches, so a batch that gives up loses 100 players silently.
+        // 120ms/240ms was never going to outlast a rate limiter: five attempts with exponential backoff
+        // (0.4s, 0.8s, 1.6s, 3.2s) costs nothing when the API is healthy and recovers the batches that
+        // were quietly vanishing from the leaderboards.
         String json = null;
-        for (int attempt = 0; attempt < 3 && json == null; attempt++) {
+        for (int attempt = 0; attempt < 5 && json == null; attempt++) {
             if (attempt > 0) {
-                try { Thread.sleep(120L * attempt); }
+                try { Thread.sleep(400L * (1L << (attempt - 1))); }
                 catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
             }
             json = postGated(BASE + "/players", body.toString());
         }
-        if (json == null) return;
+        if (json == null) {
+            droppedPlayerBatches.incrementAndGet();
+            return;
+        }
         JsonArray arr;
         try {
             arr = JsonParser.parseString(json).getAsJsonArray();
@@ -913,9 +1066,11 @@ public class EarthMcApiClient {
         String king = objectName(n, "king");
         String capital = objectName(n, "capital");
         String founded = "";
+        long foundedMs = 0L;
         if (n.has("timestamps") && n.get("timestamps").isJsonObject()) {
             JsonObject ts = n.getAsJsonObject("timestamps");
             long ms = ts(ts, "registered");
+            foundedMs = ms;
             if (ms > 0) {
                 founded = Instant.ofEpochMilli(ms)
                         .atZone(ZoneId.systemDefault())
@@ -976,7 +1131,7 @@ public class EarthMcApiClient {
         // not here — parseNation runs from the nation index/search en masse. -1 = "not looked up".
         return new EarthMcNationData(name, uuid, discord, board, king, capital, founded, towns, residents, chunks,
                 outlaws, allies, enemies, balance, isPublic, isOpen, isNeutral, hasSpawn, spawnX, spawnZ,
-                nationBonusVal, -1);
+                nationBonusVal, -1, foundedMs);
     }
 
     private static String objectName(JsonObject obj, String key) {

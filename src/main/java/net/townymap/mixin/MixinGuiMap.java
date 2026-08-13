@@ -133,6 +133,15 @@ public abstract class MixinGuiMap {
     @Inject(require = 0, method = "renderPreDropdown", at = @At("HEAD"), remap = false)
     private void onRenderPreDropdown(GuiGraphicsExtractor ctx, int mouseX, int mouseY,
                                      float delta, CallbackInfo ci) {
+        // Freshness line goes HERE, not in the overlay inject: the squaremap tiles are drawn after that
+        // one and painted straight over it, so the line vanished whenever the layer was switched on.
+        // renderPreDropdown runs late enough to sit on top of everything. Screen-space at a fixed Y, so
+        // it lands under Xaero's coordinates from here too, and it still reports outside the overworld.
+        try {
+            TownyMapMod.renderMapDataStatus(ctx);
+        } catch (Throwable ignored) {
+            // A broken status line must never take the map down with it -- that has happened twice.
+        }
         try {
             // Hide Xaero's own buttons for the capture too. Only SMALL widgets are touched: hiding every
             // widget last time took Xaero's map surface with it, so anything occupying a large share of the
@@ -290,7 +299,17 @@ public abstract class MixinGuiMap {
             int sw = mc.getWindow().getGuiScaledWidth();
             int sh = mc.getWindow().getGuiScaledHeight();
 
+            if (button == 0 && net.townymap.gui.TownSearchOverlay.isExpandClick(click.x(), click.y())) {
+                TownyMapMod.openStatsPanel();
+                cir.setReturnValue(true);
+                return;
+            }
             if (button == 0) {
+                // The freshness line's [R] button, checked before the search bar so it wins the click.
+                if (TownyMapMod.clickMapDataStatus(click.x(), click.y())) {
+                    cir.setReturnValue(true);
+                    return;
+                }
                 TownSearchOverlay.ClickResult result =
                         TownyMapMod.onTownSearchClick(click.x(), click.y(), sw, sh);
                 if (result.consumed()) {
@@ -416,6 +435,21 @@ public abstract class MixinGuiMap {
                 TownyMapMod.armMapScreenshot();
                 cir.setReturnValue(true);
                 return;
+            }
+            // Same story for refresh and the info panel: the map screen eats key presses, so the binds
+            // have to be matched here as well to work with the map open. Never while the search bar has
+            // focus, or typing "r" into it would reload the claims.
+            if (!TownSearchOverlay.isFocused()) {
+                if (net.townymap.input.TownyMapKeybinds.isRefreshKey(input)) {
+                    TownyMapMod.refreshTownClaimsFromSettings();
+                    cir.setReturnValue(true);
+                    return;
+                }
+                if (net.townymap.input.TownyMapKeybinds.isOpenStatsKey(input)) {
+                    TownyMapMod.openStatsPanel();
+                    cir.setReturnValue(true);
+                    return;
+                }
             }
             TownSearchOverlay.ClickResult result = TownyMapMod.onTownSearchKeyPressed(input.key());
             if (result.consumed()) {

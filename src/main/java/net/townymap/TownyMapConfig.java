@@ -41,6 +41,8 @@ public class TownyMapConfig {
     public boolean minimapNationAlertEnabled = true;
     public boolean minimapTownNamesEnabled = true;
     // ── Info display (text lines under the minimap, stacked with Xaero's coords) ──
+    /** Data-freshness line under Xaero's world-map coordinate readout. */
+    public boolean dataStatusEnabled = true;
     public boolean infoDisplayTownEnabled = true;
     public boolean infoDisplayNearbyPlayersEnabled = true;
     public boolean infoDisplayNearestTownEnabled = true;

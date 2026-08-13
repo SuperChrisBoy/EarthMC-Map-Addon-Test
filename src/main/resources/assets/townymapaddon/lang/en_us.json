@@ -1,4 +1,6 @@
 {
   "key.category.townymapaddon.keybinds": "EarthMC Map Addon",
-  "key.townymapaddon.map_screenshot": "Clean Map Screenshot"
+  "key.townymapaddon.map_screenshot": "Clean Map Screenshot",
+  "key.townymapaddon.refresh_towns": "Refresh Town Claims",
+  "key.townymapaddon.open_stats": "Open Info Panel"
 }

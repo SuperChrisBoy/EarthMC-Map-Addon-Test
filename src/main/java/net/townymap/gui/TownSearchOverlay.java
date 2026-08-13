@@ -174,6 +174,37 @@ public final class TownSearchOverlay {
         ctx.fill(x - 1, y - 1, x + W + 1, y + ROW_HEIGHT + 1, border);
         ctx.fill(x, y, x + W, y + ROW_HEIGHT, BG);
 
+        // Expand button, same frame and fill as the bar so the two read as one control. Two diagonal
+        // arrows pointing out of opposite corners -- the usual "open this bigger" glyph.
+        int ex = x + W + 4;
+        expandX1 = ex; expandY1 = y; expandX2 = ex + ROW_HEIGHT; expandY2 = y + ROW_HEIGHT;
+        // Cursor comes from the mouse handler rather than a render parameter: threading mouseX/mouseY
+        // through this signature would touch every caller for one highlight.
+        boolean eh = false;
+        net.minecraft.client.Minecraft hmc = net.minecraft.client.Minecraft.getInstance();
+        if (hmc != null && hmc.getWindow() != null && hmc.getWindow().getScreenWidth() > 0) {
+            double hmx = hmc.mouseHandler.xpos() * hmc.getWindow().getGuiScaledWidth()
+                    / (double) hmc.getWindow().getScreenWidth();
+            double hmy = hmc.mouseHandler.ypos() * hmc.getWindow().getGuiScaledHeight()
+                    / (double) hmc.getWindow().getScreenHeight();
+            eh = hmx >= ex && hmx <= expandX2 && hmy >= y && hmy <= expandY2;
+        }
+        ctx.fill(ex - 1, y - 1, expandX2 + 1, expandY2 + 1, eh ? ACTIVE_BORDER : border);
+        ctx.fill(ex, y, expandX2, expandY2, eh ? 0xFF2A2E33 : BG);
+        int gc = eh ? 0xFFFFFFFF : 0xFFCCCCCC;
+        int pad = 4, arm = 4;
+        int lx = ex + pad, ty = y + pad, rx = expandX2 - pad - 1, by = expandY2 - pad - 1;
+        for (int i = 0; i < arm; i++) {                       // top-left and bottom-right diagonals
+            ctx.fill(lx + i, ty + i, lx + i + 1, ty + i + 1, gc);
+            ctx.fill(rx - i, by - i, rx - i + 1, by - i + 1, gc);
+        }
+        for (int i = 0; i < 3; i++) {                         // the little corner ticks that read as arrows
+            ctx.fill(lx + i, ty, lx + i + 1, ty + 1, gc);
+            ctx.fill(lx, ty + i, lx + 1, ty + i + 1, gc);
+            ctx.fill(rx - i, by, rx - i + 1, by + 1, gc);
+            ctx.fill(rx, by - i, rx + 1, by - i + 1, gc);
+        }
+
         String display = query.isEmpty() && !focused ? "Search towns/nations/players" : query;
         int color = query.isEmpty() && !focused ? 0xFFAAAAAA : 0xFFFFFFFF;
         int textLeft = x + 7;
@@ -1514,6 +1545,13 @@ public final class TownSearchOverlay {
 
     private static boolean inside(double mouseX, double mouseY, int x, int y, int w, int h) {
         return mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h;
+    }
+
+    private static int expandX1, expandY1, expandX2, expandY2;
+
+    /** True if the click landed on the expand button; the caller opens the info panel. */
+    public static boolean isExpandClick(double mx, double my) {
+        return expandX2 > expandX1 && mx >= expandX1 && mx <= expandX2 && my >= expandY1 && my <= expandY2;
     }
 
     private static int left(int sw) {

@@ -4,6 +4,7 @@ import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.network.chat.Component;
 import net.townymap.TownyMapMod;
@@ -25,7 +26,7 @@ import java.util.Set;
  */
 public class DetailScreen extends Screen {
 
-    public enum Kind { TOWN, NATION, PLAYER, ALLIANCE }
+    public enum Kind { TOWN, NATION, PLAYER, ALLIANCE, STATS }
 
     /** A clickable entity reference. */
     public record Ref(Kind kind, String name) {}
@@ -65,7 +66,10 @@ public class DetailScreen extends Screen {
     public record RankList(String title, List<RankGroup> groups) implements Block {}
     /** A clickable entity followed by descriptive text (pacts: the other nation, then its terms). */
     public record RefLine(Ref ref, String suffix) {}
-    public record RefLineList(String title, List<RefLine> lines) implements Block {}
+    /** {@code ranked} draws the list as numbered cards; plain lists (pacts) keep the original look. */
+    public record RefLineList(String title, List<RefLine> lines, boolean ranked) implements Block {
+        public RefLineList(String title, List<RefLine> lines) { this(title, lines, false); }
+    }
 
     /** A page: header plus blocks plus optional external links for the footer. */
     public record Page(Kind kind, String title, String subtitle, List<Block> blocks,
@@ -163,12 +167,151 @@ public class DetailScreen extends Screen {
                         Component.literal(parent == null ? "Close" : "Back"), x -> this.onClose())
                 .bounds(cRight - 64, footerButtonY(), 64, 20).build();
         this.addRenderableWidget(backButton);
+
+        // Always build the search box, then show it only on the dashboard.
+        //
+        // It used to be created behind a page-kind check here -- but init() runs BEFORE the page is set
+        // (openDetail creates the screen, then calls setPage), so page was always null and the box was
+        // never created at all. Clicking where it should have been hit bare panel, which is why it read
+        // as "cannot type in it".
+        searchBox = new EditBox(this.font, cLeft, searchBoxY(), cRight - cLeft, 18,
+                Component.literal("Search towns, nations, players"));
+        searchBox.setHint(Component.literal("Search towns, nations, players"));
+        searchBox.setMaxLength(64);
+        searchBox.setResponder(q -> recomputeSearch());
+        searchBox.visible = false;
+        searchBox.active = false;
+        this.addRenderableWidget(searchBox);
     }
 
-    private int bodyTop() { return PANEL_TOP + 22; }
-    private int bodyBottom() { return panelBottom - FOOTER_H + 8; }
+    /** Height of the tab strip drawn under the title. */
+    private static final int TAB_H = 16;
+    private static final int TAB_GAP = 4;
+    private static final int TAB_ACTIVE_BG = 0x664FA37A;
+    private static final int TAB_HOVER_BG = 0x33FFFFFF;
+    private static final String[] TABS = { "Dashboard", "Statistics" };
+    // "Players" is deliberately absent: its leaderboards need a ~600-request sweep of the whole roster
+    // for data no index exposes, which was never fast enough to justify. Everything behind it is intact
+    // -- DetailPages.stats(2, ...), filtersFor(2), allPlayerStats(), outlawTrustedCounts() -- so putting
+    // it back is this one string plus the warm call in TownyMapMod.warmInfoPanelData().
+    private static final String[] SUBTABS = { "Towns", "Nations" };
+    private final int[][] subRects = new int[SUBTABS.length][4];
+    /** Hit rects for the sort options. Sized to the longest filter row (Nations has seven) -- the render
+     *  loop is bounded by this array, so anything beyond it silently never drew or responded. */
+    private final int[][] filterRects = new int[10][4];
+    /** Hit rects for the tabs and the settings cog, filled while rendering, read on click. */
+    private final int[][] tabRects = new int[TABS.length][4];
+    private final int[] cogRect = new int[4];
+
+    private int tabTop() { return PANEL_TOP + 20; }
+    /** The sub-tab strip only exists on the Statistics tab, so the body starts lower only there. */
+    private boolean hasSubTabs() { return page != null && page.kind() == Kind.STATS && activeTab == 1; }
+    private int subTop() { return tabTop() + TAB_H + 2; }
+    private int filterTop() { return subTop() + TAB_H + 5; }
+    private int bodyTop() {
+        return PANEL_TOP + 22 + TAB_H + TAB_GAP + (hasSubTabs() ? (TAB_H + 2) + (TAB_H + 7) : 0);
+    }
+    /** True when the dashboard's search bar is showing, which reserves a strip at the body's foot. */
+    private boolean hasSearch() { return page != null && page.kind() == Kind.STATS && activeTab == 0; }
+    private static final int SEARCH_STRIP = 28;
+    private int bodyBottom() {
+        return panelBottom - FOOTER_H + 8 - (hasSearch() ? SEARCH_STRIP : 0);
+    }
+    /** Y of the search box: inside the panel body, clear of the footer. Sitting it level with the footer
+     *  buttons put it where a click counted as outside the panel, which closed the screen instead of
+     *  focusing the field. */
+    private int searchBoxY() { return bodyBottom() + 4; }
+
+    /** Which tab is selected. Only meaningful on the info panel; entity pages leave it alone. */
+    private int activeTab = 0;
+    /** Whether the dashboard on screen was built with your own player record available. */
+    private boolean dashboardHasSelf = false;
+    private EditBox searchBox;
+    private final List<Ref> searchHits = new ArrayList<>();
+    private final int[][] searchRects = new int[6][4];
+    private int activeSub = 0;
+    private int activeFilter = 0;
+
+    /** Result rows to offer at once. Six keeps it a hint, not a second list to scroll. */
+    private static final int SEARCH_ROWS = 6;
+
+    /** A scored candidate: lower score is a better match, shorter name breaks ties. */
+    private record Cand(Ref ref, int score, int len) {}
+
+    /**
+     * Ranks towns, nations and players together against the query.
+     *
+     * <p>Exact match first, then prefix, then substring, shorter names winning ties -- so "ber" puts
+     * Berlin above Bergamo_Nuovo rather than whichever the underlying list happened to hold first.
+     * Towns edge out nations, which edge out players, at equal quality.
+     */
+    private void recomputeSearch() {
+        searchHits.clear();
+        String q = searchBox == null ? "" : searchBox.getValue().trim().toLowerCase(java.util.Locale.ROOT);
+        if (q.length() < 2) return;
+
+        List<Cand> found = new ArrayList<>();
+        var api = TownyMapMod.getApiClient();
+        if (api != null) for (var t : api.getTowns()) addCand(found, t.name(), q, Kind.TOWN, 0);
+        for (var n : TownyMapMod.apiNationIndex()) addCand(found, n.name(), q, Kind.NATION, 1);
+        for (var pl : TownyMapMod.apiPlayerIndex()) addCand(found, pl.name(), q, Kind.PLAYER, 2);
+
+        found.sort((a, b) -> a.score() != b.score() ? a.score() - b.score() : a.len() - b.len());
+        for (int i = 0; i < found.size() && i < SEARCH_ROWS; i++) searchHits.add(found.get(i).ref());
+    }
+
+    private static void addCand(List<Cand> out, String name, String q, Kind kind, int kindRank) {
+        if (name == null || name.isBlank()) return;
+        String lower = name.toLowerCase(java.util.Locale.ROOT);
+        int quality = lower.equals(q) ? 0 : lower.startsWith(q) ? 10 : lower.contains(q) ? 20 : -1;
+        if (quality < 0) return;
+        out.add(new Cand(new Ref(kind, name), quality + kindRank, name.length()));
+    }
+
+    /** Draws the result rows just above the search box, and records their hit rects. */
+    private void renderSearchResults(GuiGraphicsExtractor ctx, int mouseX, int mouseY) {
+        for (int[] r : searchRects) r[2] = 0;
+        if (searchBox == null || searchHits.isEmpty()) return;
+        int rowH = 12;
+        int top = searchBoxY() - 4 - searchHits.size() * rowH;
+        ctx.fill(cLeft - 2, top - 3, cRight + 2, searchBoxY() - 2, 0xEE0E0F12);
+        ctx.fill(cLeft - 2, top - 3, cRight + 2, top - 2, ACCENT);
+        for (int i = 0; i < searchHits.size(); i++) {
+            Ref ref = searchHits.get(i);
+            int ry = top + i * rowH;
+            boolean hot = mouseX >= cLeft - 2 && mouseX <= cRight + 2 && mouseY >= ry && mouseY < ry + rowH;
+            if (hot) ctx.fill(cLeft - 2, ry, cRight + 2, ry + rowH, 0x24FFFFFF);
+            ctx.text(this.font, ref.name(), cLeft + 4, ry + 2, hot ? HOVER : LINK, false);
+            String kindLabel = ref.kind().name().charAt(0) + ref.kind().name().substring(1).toLowerCase(java.util.Locale.ROOT);
+            ctx.text(this.font, kindLabel, cRight - this.font.width(kindLabel) - 4, ry + 2, MUTED, false);
+            searchRects[i][0] = cLeft - 2; searchRects[i][1] = ry;
+            searchRects[i][2] = cRight + 2; searchRects[i][3] = ry + rowH;
+        }
+    }
+
+    @Override
+    public boolean keyPressed(net.minecraft.client.input.KeyEvent input) {
+        // Enter opens the top result, so a search can be finished without reaching for the mouse.
+        if (searchBox != null && searchBox.isFocused() && !searchHits.isEmpty()
+                && (input.key() == org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER
+                    || input.key() == org.lwjgl.glfw.GLFW.GLFW_KEY_KP_ENTER)) {
+            Ref best = searchHits.get(0);
+            TownyMapMod.openDetail(best.kind(), best.name(), this);
+            return true;
+        }
+        return super.keyPressed(input);
+    }
+
+    private static boolean within(int[] r, int x, int y) {
+        return r[2] > r[0] && x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
+    }
     /** Y that vertically centres a 20px button inside the footer strip below the divider. */
-    private int footerButtonY() { return bodyBottom() + ((panelBottom - bodyBottom()) - 20) / 2; }
+    private int footerButtonY() {
+        // With the search bar present the footer strip is shared, and centring a 20px button in it put
+        // Close straight through the field. Sit it on its own row underneath instead.
+        if (hasSearch()) return searchBoxY() + 18 + 6;
+        return bodyBottom() + ((panelBottom - bodyBottom()) - 20) / 2;
+    }
 
     @Override
     public void extractRenderState(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float delta) {
@@ -186,8 +329,11 @@ public class DetailScreen extends Screen {
         int right = panelLeft + panelWidth;
         // Hug the content: measured last frame, clamped to the screen. A short page no longer leaves the
         // footer stranded at the bottom of a mostly-empty full-height panel.
+        // Entity pages hug their content so a short page does not strand the footer at the bottom of a
+        // mostly-empty panel. The dashboard is the exception: its search bar belongs at the bottom of the
+        // screen, and hugging left the bar floating mid-panel with dead background beneath it.
         int wanted = bodyTop() + Math.max(40, contentHeight) + FOOTER_H;
-        int bottom = Math.min(this.height - 8, wanted);
+        int bottom = hasSearch() ? this.height - 8 : Math.min(this.height - 8, wanted);
         if (bottom != panelBottom) {
             panelBottom = bottom;
             int by = footerButtonY();
@@ -212,7 +358,94 @@ public class DetailScreen extends Screen {
             ctx.text(this.font, sub,
                     cLeft + this.font.width(title) + 6, PANEL_TOP + 9, MUTED, false);
         }
+        // Tab strip. Drawn by hand rather than with vanilla Buttons: the panel has its own flat look
+        // (PANEL_BG / PANEL_BORDER / ACCENT) and a stock button would read as a foreign widget in it.
+        int tx = cLeft;
+        int ty = tabTop();
+        for (int i = 0; i < TABS.length; i++) {
+            int w = this.font.width(TABS[i]) + 12;
+            boolean active = i == activeTab;
+            boolean hover = mouseX >= tx && mouseX <= tx + w && mouseY >= ty && mouseY <= ty + TAB_H;
+            if (active) ctx.fill(tx, ty, tx + w, ty + TAB_H, TAB_ACTIVE_BG);
+            else if (hover) ctx.fill(tx, ty, tx + w, ty + TAB_H, TAB_HOVER_BG);
+            if (active) ctx.fill(tx, ty + TAB_H - 1, tx + w, ty + TAB_H, ACCENT);
+            ctx.text(this.font, TABS[i], tx + 6, ty + 4, active ? 0xFFFFFFFF : MUTED, false);
+            tabRects[i][0] = tx; tabRects[i][1] = ty; tabRects[i][2] = tx + w; tabRects[i][3] = ty + TAB_H;
+            tx += w + TAB_GAP;
+        }
+        // Settings cog, far right of the strip. Three bars read better than a gear at this size.
+        int cw = 18;
+        int cx0 = right - 10 - cw;
+        boolean cogHover = mouseX >= cx0 && mouseX <= cx0 + cw && mouseY >= ty && mouseY <= ty + TAB_H;
+        if (cogHover) ctx.fill(cx0, ty, cx0 + cw, ty + TAB_H, TAB_HOVER_BG);
+        for (int i = 0; i < 3; i++) {
+            int ly = ty + 4 + i * 3;
+            ctx.fill(cx0 + 4, ly, cx0 + cw - 4, ly + 1, cogHover ? 0xFFFFFFFF : MUTED);
+        }
+        cogRect[0] = cx0; cogRect[1] = ty; cogRect[2] = cx0 + cw; cogRect[3] = ty + TAB_H;
+
+        for (int[] r : subRects) r[2] = 0;   // collapse stale hit rects when the strip is hidden
+        if (hasSubTabs()) {
+            int sx = cLeft;
+            int sy = subTop();
+            for (int i = 0; i < SUBTABS.length; i++) {
+                int w = this.font.width(SUBTABS[i]) + 10;
+                boolean act = i == activeSub;
+                boolean hov = mouseX >= sx && mouseX <= sx + w && mouseY >= sy && mouseY <= sy + TAB_H;
+                if (act || hov) ctx.fill(sx, sy, sx + w, sy + TAB_H, act ? TAB_ACTIVE_BG : TAB_HOVER_BG);
+                ctx.text(this.font, SUBTABS[i], sx + 5, sy + 4, act ? 0xFFFFFFFF : MUTED, false);
+                subRects[i][0] = sx; subRects[i][1] = sy;
+                subRects[i][2] = sx + w; subRects[i][3] = sy + TAB_H;
+                sx += w + TAB_GAP;
+            }
+        }
+
+        for (int[] r : filterRects) r[2] = 0;
+        if (hasSubTabs()) {
+            // Separator, then the sort options in the same flat style as the strips above it.
+            int sepY = subTop() + TAB_H + 2;
+            ctx.fill(cLeft, sepY, right - 10, sepY + 1, 0x553A3D42);
+
+            String[] filters = DetailPages.filtersFor(activeSub);
+            int fx = cLeft;
+            int fy = filterTop();
+            for (int i = 0; i < filters.length && i < filterRects.length; i++) {
+                int w = this.font.width(filters[i]) + 10;
+                boolean act = i == activeFilter;
+                boolean hov = mouseX >= fx && mouseX <= fx + w && mouseY >= fy && mouseY <= fy + TAB_H;
+                if (act || hov) ctx.fill(fx, fy, fx + w, fy + TAB_H, act ? TAB_ACTIVE_BG : TAB_HOVER_BG);
+                ctx.text(this.font, filters[i], fx + 5, fy + 4, act ? 0xFFFFFFFF : MUTED, false);
+                filterRects[i][0] = fx; filterRects[i][1] = fy;
+                filterRects[i][2] = fx + w; filterRects[i][3] = fy + TAB_H;
+                fx += w + TAB_GAP;
+            }
+        }
+
         ctx.fill(panelLeft, bodyTop() - 1, right, bodyTop(), 0x663A3D42);
+        // Your town/nation card needs a record that is usually still being fetched when the dashboard is
+        // first built, so the page was rendering without it and only picked it up when a tab switch
+        // happened to rebuild the page. Rebuild once, the moment it arrives.
+        // Rebuild once when your own data lands. Two things arrive separately -- the player record, then
+        // the town record it points at -- so wait for the town too, unless you are townless and it will
+        // never come.
+        if (hasSearch() && !dashboardHasSelf) {
+            var self = TownyMapMod.selfPlayer();
+            boolean townless = self != null && (self.townName() == null || self.townName().isBlank());
+            if (self != null && (townless || TownyMapMod.selfTownFull() != null)) {
+                dashboardHasSelf = true;
+                setPage(DetailPages.dashboard());
+            }
+        }
+        if (searchBox != null) {
+            boolean show = hasSearch();
+            if (searchBox.visible != show) {
+                searchBox.visible = show;
+                searchBox.active = show;
+                if (!show) { searchBox.setValue(""); searchHits.clear(); }
+            }
+            if (show) searchBox.setY(searchBoxY());   // body height moves with the page
+        }
+        renderSearchResults(ctx, mouseX, mouseY);
 
         hits.clear();
         if (page == null) {
@@ -322,18 +555,25 @@ public class DetailScreen extends Screen {
     /** Header row for a collapsible block, then its contents when open. */
     private int drawCollapsible(GuiGraphicsExtractor ctx, int mouseX, int mouseY, int y,
                                 String title, int count, Block body) {
-        boolean isOpen = open.contains(title);
-        boolean hover = mouseY >= y - 2 && mouseY < y + 11 && mouseX >= cLeft && mouseX <= cRight
-                && mouseY >= bodyTop() && mouseY < bodyBottom();
-        if (hover) ctx.fill(cLeft - 5, y - 2, cRight + 3, y + 11, 0x18FFFFFF);
-        ctx.fill(cLeft, y, cLeft + 1, y + 9, ACCENT);
-        ctx.text(this.font, (isOpen ? "▾ " : "▸ ") + title, cLeft + 6, y,
-                isOpen ? 0xFFFFFFFF : VALUE, false);
-        String c = String.valueOf(count);
-        ctx.text(this.font, c, cRight - this.font.width(c), y, LABEL, false);
-        hits.add(new Hit(cLeft - 5, y - 2, cRight + 3, y + 11, null, title));
-        y += 14;
-        if (!isOpen) return y;
+        // A ranked leaderboard is the whole point of the tab it sits on -- there is nothing to collapse
+        // it away from, and a fold just adds a click before you can read it. So it renders bare: no
+        // header, no arrow, always open. Every other list keeps the collapsible treatment, which is what
+        // stops a 250-resident nation burying the rest of its page.
+        boolean bare = body instanceof RefLineList rlBare && rlBare.ranked();
+        boolean isOpen = bare || open.contains(title);
+        if (!bare) {
+            boolean hover = mouseY >= y - 2 && mouseY < y + 11 && mouseX >= cLeft && mouseX <= cRight
+                    && mouseY >= bodyTop() && mouseY < bodyBottom();
+            if (hover) ctx.fill(cLeft - 5, y - 2, cRight + 3, y + 11, 0x18FFFFFF);
+            ctx.fill(cLeft, y, cLeft + 1, y + 9, ACCENT);
+            ctx.text(this.font, (isOpen ? "\u25be " : "\u25b8 ") + title, cLeft + 6, y,
+                    isOpen ? 0xFFFFFFFF : VALUE, false);
+            String c = String.valueOf(count);
+            ctx.text(this.font, c, cRight - this.font.width(c), y, LABEL, false);
+            hits.add(new Hit(cLeft - 5, y - 2, cRight + 3, y + 11, null, title));
+            y += 14;
+            if (!isOpen) return y;
+        }
 
         if (body instanceof NameList nl) {
             // Names flow inline and wrap, each with its own hit box so it can be clicked through.
@@ -371,17 +611,45 @@ public class DetailScreen extends Screen {
             }
             y += 3;
         } else if (body instanceof RefLineList rll) {
+            int rank = 0;
             for (RefLine rl : rll.lines()) {
-                int x = cLeft + 10;
+                rank++;
                 String nm = rl.ref().name();
-                int w = this.font.width(nm);
-                boolean hot = mouseX >= x && mouseX < x + w && mouseY >= y - 1 && mouseY < y + 9
-                        && mouseY >= bodyTop() && mouseY < bodyBottom();
-                ctx.text(this.font, nm, x, y, hot ? HOVER : LINK, false);
-                hits.add(new Hit(x, y - 1, x + w, y + 9, rl.ref(), null));
-                ctx.text(this.font,
-                        this.font.plainSubstrByWidth(rl.suffix(), cRight - (x + w + 5)),
-                        x + w + 5, y, MUTED, false);
+                if (rll.ranked()) {
+                    // Card row: a banded background, the rank set dim on the left, and the value pushed
+                    // out to the right edge so the numbers line up into a column you can read down.
+                    int rowTop = y - 2, rowBot = y + LINE - 3;
+                    boolean rowHot = mouseX >= cLeft && mouseX < cRight
+                            && mouseY >= rowTop && mouseY < rowBot
+                            && mouseY >= bodyTop() && mouseY < bodyBottom();
+                    ctx.fill(cLeft + 4, rowTop, cRight, rowBot,
+                            rowHot ? 0x24FFFFFF : (rank % 2 == 0 ? 0x10FFFFFF : 0x1A000000));
+                    if (rowHot) ctx.fill(cLeft + 4, rowTop, cLeft + 6, rowBot, ACCENT);
+
+                    String num = rank + ".";
+                    ctx.text(this.font, num, cLeft + 12, y, MUTED, false);
+                    int nx = cLeft + 12 + 22;
+                    int nw = this.font.width(nm);
+                    ctx.text(this.font, nm, nx, y, rowHot ? HOVER : LINK, false);
+                    hits.add(new Hit(cLeft + 4, rowTop, cRight, rowBot, rl.ref(), null));
+                    String val = rl.suffix();
+                    if (val != null && !val.isBlank()) {
+                        int vw = this.font.width(val);
+                        int vx = Math.max(nx + nw + 8, cRight - 8 - vw);
+                        ctx.text(this.font, this.font.plainSubstrByWidth(val, cRight - 8 - vx),
+                                vx, y, MUTED, false);
+                    }
+                } else {
+                    int x = cLeft + 10;
+                    int w = this.font.width(nm);
+                    boolean hot = mouseX >= x && mouseX < x + w && mouseY >= y - 1 && mouseY < y + 9
+                            && mouseY >= bodyTop() && mouseY < bodyBottom();
+                    ctx.text(this.font, nm, x, y, hot ? HOVER : LINK, false);
+                    hits.add(new Hit(x, y - 1, x + w, y + 9, rl.ref(), null));
+                    ctx.text(this.font,
+                            this.font.plainSubstrByWidth(rl.suffix(), cRight - (x + w + 5)),
+                            x + w + 5, y, MUTED, false);
+                }
                 y += LINE;
             }
             y += 3;
@@ -399,6 +667,55 @@ public class DetailScreen extends Screen {
 
     @Override
     public boolean mouseClicked(MouseButtonEvent click, boolean doubled) {
+        int tabMx = (int) click.x(), tabMy = (int) click.y();
+        for (int i = 0; i < searchHits.size() && i < searchRects.length; i++) {
+            if (!within(searchRects[i], tabMx, tabMy)) continue;
+            Ref ref = searchHits.get(i);
+            TownyMapMod.openDetail(ref.kind(), ref.name(), this);
+            return true;
+        }
+        if (within(cogRect, tabMx, tabMy)) {
+            net.minecraft.client.Minecraft.getInstance().setScreen(
+                    new TownyMapConfigScreen(this));
+            return true;
+        }
+        for (int i = 0; i < filterRects.length; i++) {
+            if (!within(filterRects[i], tabMx, tabMy)) continue;
+            if (i != activeFilter) {
+                activeFilter = i;
+                setPage(DetailPages.stats(activeSub, activeFilter));
+            }
+            return true;
+        }
+        for (int i = 0; i < SUBTABS.length; i++) {
+            if (!within(subRects[i], tabMx, tabMy)) continue;
+            if (i != activeSub) {
+                activeSub = i;
+                activeFilter = 0;   // filters differ per sub-tab, so start at the first one
+                setPage(DetailPages.stats(activeSub, activeFilter));
+            }
+            return true;
+        }
+        for (int i = 0; i < TABS.length; i++) {
+            if (!within(tabRects[i], tabMx, tabMy)) continue;
+            if (i != activeTab) {
+                activeTab = i;
+                setPage(i == 0 ? DetailPages.dashboard() : DetailPages.stats(activeSub, activeFilter));
+            }
+            return true;
+        }
+        // Clicking anywhere in the panel that is not the search field drops focus and clears the
+        // suggestions -- otherwise the results stayed up and keystrokes kept going into a box you had
+        // visually moved on from.
+        if (searchBox != null && searchBox.visible) {
+            boolean onBox = tabMx >= searchBox.getX() && tabMx <= searchBox.getX() + searchBox.getWidth()
+                    && tabMy >= searchBox.getY() && tabMy <= searchBox.getY() + searchBox.getHeight();
+            if (!onBox) {
+                searchBox.setFocused(false);
+                this.setFocused(null);
+                searchHits.clear();
+            }
+        }
         if (UiScale.active()) click = UiScale.unscaleClick(click, this.width / 2.0, this.height / 2.0);
         double mx = click.x(), my = click.y();
 
