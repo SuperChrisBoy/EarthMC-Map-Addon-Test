@@ -60,88 +60,8 @@ public class TownyMapConfigScreen extends Screen {
     private static final int PANEL_ACCENT = 0xFF4FA37A;
     private static final int LABEL_COLOR = 0xFFE5E7EB;
 
-    private static final Component YES = Component.literal("Yes").withStyle(ChatFormatting.GREEN);
-    private static final Component NO = Component.literal("No").withStyle(ChatFormatting.RED);
-
-    /** Help text for the settings whose label does not explain them on its own. Options not listed here
-     *  are self-describing, so the strip simply stays empty rather than repeating the label back. */
-    private static final Map<String, String> DESCRIPTIONS = Map.ofEntries(
-            Map.entry("EarthMC Only",
-                    "Only run on EarthMC. Turn off to use the overlay on any server."),
-            Map.entry("EarthMC Map In Nether",
-                    "The map covers the overworld only. Choose whether to hide it in the Nether or convert coordinates."),
-            Map.entry("Smooth Town Outlines",
-                    "Smooth squaremap-style borders. Turn off for the original blocky chunk edges."),
-            Map.entry("Far Zoom Town Dots",
-                    "Collapse small towns to a dot when zoomed far out. Off keeps their real shape."),
-            Map.entry("Real Borders",
-                    "Draw actual country and state borders from Natural Earth data underneath the towns."),
-            Map.entry("Squaremap Background",
-                    "Show the map.earthmc.net imagery behind the overlay instead of Xaero's own tiles. "
-                    + "Choose the world map, the minimap, both or off."),
-            Map.entry("Darken Map",
-                    "Dim the map imagery so town borders and player dots stand out more."),
-            Map.entry("World Map Overview",
-                    "Allow zooming out past Xaero's normal limit to see the whole EarthMC map."),
-            Map.entry("Dark Buttons",
-                    "Flat dark styling for the on-map buttons and this screen instead of vanilla textures."),
-            Map.entry("Wilderness Player Alert",
-                    "Flash a warning on the minimap when a player outside your nation is nearby."),
-            Map.entry("Player Name Range",
-                    "How far out player names stay on screen before they fade at distance."),
-            Map.entry("Town/Nation Range",
-                    "Zoom range within which town and nation labels are drawn."),
-            Map.entry("Map Mode RGB",
-                    "Tint every town by a single colour instead of its nation's colours."),
-            Map.entry("Custom Overlays",
-                    "Load your own GeoJSON overlays from the config folder."),
-            Map.entry("Player Indicator",
-                    "Which minimap background shows the arrow marking you: over the EMC overlay, over "
-                    + "Xaero's own map, both, or off. Off also hides it under the EMC overlay, which "
-                    + "covers Xaero's own arrow."),
-            Map.entry("Chunk Grid",
-                    "Draw chunk boundaries on the minimap."),
-            Map.entry("Player Heads",
-                    "Show player skins on their map dots. Choose the world map, the minimap, both or off."),
-            Map.entry("Head Range",
-                    "How zoomed in you must be for heads to appear. Near = only up close, Far = from further out."),
-            Map.entry("Last Seen Positions",
-                    "Keep players on the map in red at their last spot after they go offline or hidden, re-checked every few seconds."),
-            Map.entry("Nation Capital Stars",
-                    "Mark each nation's capital with a star on the world map."),
-            Map.entry("Nation Join Range",
-                    "When a nation is selected, shade where a town could join it — 5k around the capital plus 1.5k around each town."),
-            Map.entry("UI Scale",
-                    "Scales all of this mod's GUIs — buttons, panels, this settings screen — smaller. 100% keeps "
-                    + "the current sizing; lower shrinks the text and the gaps, independent of your Minecraft GUI scale."),
-            Map.entry("Screenshot Players",
-                    "Include live player dots in the map screenshot. Off gives a picture of the map itself."),
-            Map.entry("Screenshot Nation Stars",
-                    "Keep the nation capital stars in the map screenshot."),
-            Map.entry("Screenshot Hides Dimmed Towns",
-                    "While filtering or in an alliance layer, leave the blacked-out towns out of the "
-                    + "screenshot entirely instead of capturing them as black shapes."),
-            Map.entry("Map Screenshot Key",
-                    "Key that saves a clean picture of the world map — no buttons, search bar or panels. "
-                    + "The same bind as Options > Controls; changing it in either place changes both."),
-            Map.entry("Data Freshness Line",
-                    "Shows how old the claim data on screen is, under the world map's coordinates, with a "
-                    + "button to reload it. Turns amber when the data is overdue and red if a refresh failed."),
-            Map.entry("Reload Claims",
-                    "Fetches towns and claims from squaremap right now instead of waiting for the next "
-                    + "automatic refresh, which happens every 60 seconds."),
-            Map.entry("Open Info Panel",
-                    "Leaderboards for towns and nations, built from the claim data already loaded, so it "
-                    + "opens instantly and works even while the EarthMC API is down. Every name is clickable."),
-            Map.entry("Info Panel Key",
-                    "Key that opens the info panel without opening the map first. Unbound by default. "
-                    + "The same bind as Options > Controls; changing it in either place changes both."),
-            Map.entry("Reload Claims Key",
-                    "Key that reloads towns and claims without opening the map. Unbound by default. "
-                    + "The same bind as Options > Controls; changing it in either place changes both."),
-            Map.entry("View Archive",
-                    "Type a date (dd/mm/yyyy) and press Enter to view the historical map from that day. "
-                    + "You can also do this from the world-map search bar, using . , or / (e.g. 17/4/2026)."));
+    private static final Component YES = Component.translatable("townymapaddon.common.yes").withStyle(ChatFormatting.GREEN);
+    private static final Component NO = Component.translatable("townymapaddon.common.no").withStyle(ChatFormatting.RED);
 
     /** Field-initialised defaults, used to drive the per-row Reset buttons. */
     private static final TownyMapConfig DEFAULTS = new TownyMapConfig();
@@ -170,7 +90,7 @@ public class TownyMapConfigScreen extends Screen {
     private int labelX, labelMaxW, ctrlX, resetX;
 
     public TownyMapConfigScreen(Screen parent) {
-        super(Component.literal("EarthMC Map Addon Settings"));
+        super(Component.translatable("townymapaddon.settings.title"));
         this.parent = parent;
     }
 
@@ -191,261 +111,267 @@ public class TownyMapConfigScreen extends Screen {
         labelMaxW = Math.max(40, ctrlX - COL_GAP - labelX);
 
         searchField = new EditBox(this.font, panelLeft + PANEL_PAD, SEARCH_Y,
-                innerRight - (panelLeft + PANEL_PAD), SEARCH_H, Component.literal("Search"));
+                innerRight - (panelLeft + PANEL_PAD), SEARCH_H, Component.translatable("townymapaddon.common.search"));
         searchField.setMaxLength(64);
-        searchField.setHint(Component.literal("Search…").withStyle(ChatFormatting.DARK_GRAY));
+        searchField.setHint(Component.translatable("townymapaddon.common.search_hint").withStyle(ChatFormatting.DARK_GRAY));
         searchField.setValue(searchQuery);
         searchField.setResponder(q -> { searchQuery = q; relayout(); });
         this.addRenderableWidget(searchField);
 
-        section("General");
-        option("Squaremap Background", cycle(cfg.squaremapBackgroundMode, new int[]{0, 1, 2, 3},
+        section(ui("general"));
+        option(ui("squaremap_background"), cycle(cfg.squaremapBackgroundMode, new int[]{0, 1, 2, 3},
                         TownyMapConfigScreen::squaremapBackgroundModeText,
                         v -> cfg.squaremapBackgroundMode = v),
                 () -> cfg.squaremapBackgroundMode == DEFAULTS.squaremapBackgroundMode,
                 () -> cfg.squaremapBackgroundMode = DEFAULTS.squaremapBackgroundMode);
-        option("Dark Buttons", onOff(cfg.darkButtons, v -> cfg.darkButtons = v),
+        option(ui("dark_buttons"), onOff(cfg.darkButtons, v -> cfg.darkButtons = v),
                 () -> cfg.darkButtons == DEFAULTS.darkButtons,
                 () -> cfg.darkButtons = DEFAULTS.darkButtons);
-        option("Darken Map", cycle(cfg.squaremapDarken, new int[]{0, 1, 2, 3},
+        option(ui("darken_map"), cycle(cfg.squaremapDarken, new int[]{0, 1, 2, 3},
                         TownyMapConfigScreen::darkenText, v -> cfg.squaremapDarken = v),
                 () -> cfg.squaremapDarken == DEFAULTS.squaremapDarken,
                 () -> cfg.squaremapDarken = DEFAULTS.squaremapDarken);
-        option("EarthMC Only", onOff(cfg.earthmcOnly, v -> cfg.earthmcOnly = v),
+        option(ui("earthmc_only"), onOff(cfg.earthmcOnly, v -> cfg.earthmcOnly = v),
                 () -> cfg.earthmcOnly == DEFAULTS.earthmcOnly,
                 () -> cfg.earthmcOnly = DEFAULTS.earthmcOnly);
-        option("EarthMC Map In Nether", cycle(cfg.netherMode == 2 ? 2 : 1, new int[]{1, 2},
+        option(ui("earthmc_map_in_nether"), cycle(cfg.netherMode == 2 ? 2 : 1, new int[]{1, 2},
                         TownyMapConfigScreen::netherModeText, v -> cfg.netherMode = v),
                 () -> cfg.netherMode == DEFAULTS.netherMode,
                 () -> cfg.netherMode = DEFAULTS.netherMode);
 
-        section("Minimap");
-        option("Town Names", cycle(cfg.minimapTownNameMode, new int[]{0, 1, 2, 3},
+        section(Component.translatable("townymapaddon.voteparty.settings.section").getString());
+        option(Component.translatable("townymapaddon.voteparty.settings.enabled").getString(),onOff(cfg.votePartyEnabled,v->cfg.votePartyEnabled=v),()->cfg.votePartyEnabled==DEFAULTS.votePartyEnabled,()->cfg.votePartyEnabled=DEFAULTS.votePartyEnabled);
+        option(Component.translatable("townymapaddon.voteparty.settings.hud").getString(),onOff(cfg.votePartyShowHud,v->cfg.votePartyShowHud=v),()->cfg.votePartyShowHud==DEFAULTS.votePartyShowHud,()->cfg.votePartyShowHud=DEFAULTS.votePartyShowHud);
+        option(Component.translatable("townymapaddon.voteparty.settings.world_map").getString(),onOff(cfg.votePartyShowWorldMap,v->cfg.votePartyShowWorldMap=v),()->cfg.votePartyShowWorldMap==DEFAULTS.votePartyShowWorldMap,()->cfg.votePartyShowWorldMap=DEFAULTS.votePartyShowWorldMap);
+        option(Component.translatable("townymapaddon.voteparty.settings.global_screens").getString(),onOff(cfg.votePartyShowGlobalScreens,v->cfg.votePartyShowGlobalScreens=v),()->cfg.votePartyShowGlobalScreens==DEFAULTS.votePartyShowGlobalScreens,()->cfg.votePartyShowGlobalScreens=DEFAULTS.votePartyShowGlobalScreens);
+
+        section(ui("minimap"));
+        option(ui("town_names"), cycle(cfg.minimapTownNameMode, new int[]{0, 1, 2, 3},
                         TownyMapConfigScreen::minimapTownNameModeText,
                         v -> { cfg.minimapTownNameMode = v; cfg.minimapTownNamesEnabled = v != 0; }),
                 () -> cfg.minimapTownNameMode == DEFAULTS.minimapTownNameMode,
                 () -> { cfg.minimapTownNameMode = DEFAULTS.minimapTownNameMode;
                         cfg.minimapTownNamesEnabled = DEFAULTS.minimapTownNameMode != 0; });
-        option("Player Indicator", cycle(cfg.minimapIndicatorMode, new int[]{0, 1, 2, 3},
+        option(ui("player_indicator"), cycle(cfg.minimapIndicatorMode, new int[]{0, 1, 2, 3},
                         TownyMapConfigScreen::minimapIndicatorModeText,
                         v -> cfg.minimapIndicatorMode = v),
                 () -> cfg.minimapIndicatorMode == DEFAULTS.minimapIndicatorMode,
                 () -> cfg.minimapIndicatorMode = DEFAULTS.minimapIndicatorMode);
-        option("Players On Minimap", onOff(cfg.minimapPlayersEnabled, v -> cfg.minimapPlayersEnabled = v),
+        option(ui("players_on_minimap"), onOff(cfg.minimapPlayersEnabled, v -> cfg.minimapPlayersEnabled = v),
                 () -> cfg.minimapPlayersEnabled == DEFAULTS.minimapPlayersEnabled,
                 () -> cfg.minimapPlayersEnabled = DEFAULTS.minimapPlayersEnabled);
-        option("Chunk Grid", cycle(cfg.minimapChunkGridMode, new int[]{0, 1, 2},
+        option(ui("chunk_grid"), cycle(cfg.minimapChunkGridMode, new int[]{0, 1, 2},
                         TownyMapConfigScreen::minimapChunkGridModeText, v -> cfg.minimapChunkGridMode = v),
                 () -> cfg.minimapChunkGridMode == DEFAULTS.minimapChunkGridMode,
                 () -> cfg.minimapChunkGridMode = DEFAULTS.minimapChunkGridMode);
-        option("Wilderness Player Alert", onOff(cfg.minimapNationAlertEnabled, v -> cfg.minimapNationAlertEnabled = v),
+        option(ui("wilderness_player_alert"), onOff(cfg.minimapNationAlertEnabled, v -> cfg.minimapNationAlertEnabled = v),
                 () -> cfg.minimapNationAlertEnabled == DEFAULTS.minimapNationAlertEnabled,
                 () -> cfg.minimapNationAlertEnabled = DEFAULTS.minimapNationAlertEnabled);
-        option("Hide Minimap In Nether", onOff(cfg.hideMinimapInNether, v -> cfg.hideMinimapInNether = v),
+        option(ui("hide_minimap_in_nether"), onOff(cfg.hideMinimapInNether, v -> cfg.hideMinimapInNether = v),
                 () -> cfg.hideMinimapInNether == DEFAULTS.hideMinimapInNether,
                 () -> cfg.hideMinimapInNether = DEFAULTS.hideMinimapInNether);
 
-        section("World Map");
-        option("Town Borders", onOff(cfg.townsEnabled, v -> cfg.townsEnabled = v),
+        section(ui("world_map"));
+        option(ui("town_borders"), onOff(cfg.townsEnabled, v -> cfg.townsEnabled = v),
                 () -> cfg.townsEnabled == DEFAULTS.townsEnabled,
                 () -> cfg.townsEnabled = DEFAULTS.townsEnabled);
-        option("Data Freshness Line", onOff(cfg.dataStatusEnabled, v -> cfg.dataStatusEnabled = v),
+        option(ui("data_freshness_line"), onOff(cfg.dataStatusEnabled, v -> cfg.dataStatusEnabled = v),
                 () -> cfg.dataStatusEnabled == DEFAULTS.dataStatusEnabled,
                 () -> cfg.dataStatusEnabled = DEFAULTS.dataStatusEnabled);
-        action("Reload Claims", TownyMapMod::refreshTownClaimsFromSettings);
+        action(ui("reload_claims"), TownyMapMod::refreshTownClaimsFromSettings);
         refreshKeyButton = Button.builder(refreshKeyLabel(), b -> {
             awaitingRefreshKey = true;
-            b.setMessage(Component.literal("> Press a key <"));
+            b.setMessage(Component.translatable("townymapaddon.settings.press_a_key"));
         }).bounds(ctrlX, 0, CTRL_W, 20).build();
         statsKeyButton = Button.builder(statsKeyLabel(), b -> {
             awaitingStatsKey = true;
-            b.setMessage(Component.literal("> Press a key <"));
+            b.setMessage(Component.translatable("townymapaddon.settings.press_a_key"));
         }).bounds(ctrlX, 0, CTRL_W, 20).build();
-        option("Info Panel Key", statsKeyButton,
+        option(ui("info_panel_key"), statsKeyButton,
                 () -> "Not bound".equals(net.townymap.input.TownyMapKeybinds.openStatsKeyName()),
                 () -> {
                     net.townymap.input.TownyMapKeybinds.setOpenStatsKey(GLFW.GLFW_KEY_UNKNOWN);
                     statsKeyButton.setMessage(statsKeyLabel());
                 });
-        action("Open Info Panel", TownyMapMod::openStatsPanel);
-        option("Reload Claims Key", refreshKeyButton,
+        action(ui("open_info_panel"), TownyMapMod::openStatsPanel);
+        option(ui("reload_claims_key"), refreshKeyButton,
                 () -> "Not bound".equals(net.townymap.input.TownyMapKeybinds.refreshTownsKeyName()),
                 () -> {
                     net.townymap.input.TownyMapKeybinds.setRefreshTownsKey(GLFW.GLFW_KEY_UNKNOWN);
                     refreshKeyButton.setMessage(refreshKeyLabel());
                 });
-        option("World Map Overview", onOff(cfg.worldMapOverview, v -> cfg.worldMapOverview = v),
+        option(ui("world_map_overview"), onOff(cfg.worldMapOverview, v -> cfg.worldMapOverview = v),
                 () -> cfg.worldMapOverview == DEFAULTS.worldMapOverview,
                 () -> cfg.worldMapOverview = DEFAULTS.worldMapOverview);
-        option("Nation Capital Stars", onOff(cfg.nationStarsEnabled, v -> cfg.nationStarsEnabled = v),
+        option(ui("nation_capital_stars"), onOff(cfg.nationStarsEnabled, v -> cfg.nationStarsEnabled = v),
                 () -> cfg.nationStarsEnabled == DEFAULTS.nationStarsEnabled,
                 () -> cfg.nationStarsEnabled = DEFAULTS.nationStarsEnabled);
-        option("Nation Join Range", onOff(cfg.nationRangeEnabled, v -> cfg.nationRangeEnabled = v),
+        option(ui("nation_join_range"), onOff(cfg.nationRangeEnabled, v -> cfg.nationRangeEnabled = v),
                 () -> cfg.nationRangeEnabled == DEFAULTS.nationRangeEnabled,
                 () -> cfg.nationRangeEnabled = DEFAULTS.nationRangeEnabled);
         // OFF = towns keep their outline at far zoom, ON = small towns collapse to a dot.
         // ON = smooth squaremap-style diagonals, OFF = the original blocky chunk-aligned borders.
-        option("Smooth Town Outlines", onOff(cfg.smoothTownOutlines, v -> cfg.smoothTownOutlines = v),
+        option(ui("smooth_town_outlines"), onOff(cfg.smoothTownOutlines, v -> cfg.smoothTownOutlines = v),
                 () -> cfg.smoothTownOutlines == DEFAULTS.smoothTownOutlines,
                 () -> cfg.smoothTownOutlines = DEFAULTS.smoothTownOutlines);
-        option("Far Zoom Town Dots", onOff(cfg.farZoomTownDots, v -> cfg.farZoomTownDots = v),
+        option(ui("far_zoom_town_dots"), onOff(cfg.farZoomTownDots, v -> cfg.farZoomTownDots = v),
                 () -> cfg.farZoomTownDots == DEFAULTS.farZoomTownDots,
                 () -> cfg.farZoomTownDots = DEFAULTS.farZoomTownDots);
-        option("Real Borders", cycle(cfg.borderOverlayMode, new int[]{0, 1, 2},
+        option(ui("real_borders"), cycle(cfg.borderOverlayMode, new int[]{0, 1, 2},
                         TownyMapConfigScreen::borderModeText, v -> cfg.borderOverlayMode = v),
                 () -> cfg.borderOverlayMode == DEFAULTS.borderOverlayMode,
                 () -> cfg.borderOverlayMode = DEFAULTS.borderOverlayMode);
-        option("Border Thickness", presets(cfg.borderThicknessMultiplier, THICKNESSES, THIN_MED_THICK,
+        option(ui("border_thickness"), presets(cfg.borderThicknessMultiplier, THICKNESSES, THIN_MED_THICK,
                         v -> cfg.borderThicknessMultiplier = (float) v),
                 () -> cfg.borderThicknessMultiplier == DEFAULTS.borderThicknessMultiplier,
                 () -> cfg.borderThicknessMultiplier = DEFAULTS.borderThicknessMultiplier);
-        option("Map Mode RGB", onOff(cfg.statusHighlightRainbow, v -> cfg.statusHighlightRainbow = v),
+        option(ui("map_mode_rgb"), onOff(cfg.statusHighlightRainbow, v -> cfg.statusHighlightRainbow = v),
                 () -> cfg.statusHighlightRainbow == DEFAULTS.statusHighlightRainbow,
                 () -> cfg.statusHighlightRainbow = DEFAULTS.statusHighlightRainbow);
-        option("Map Mode Color", new StatusHighlightHueSlider(ctrlX, 0, CTRL_W, 20, cfg),
+        option(ui("map_mode_color"), new StatusHighlightHueSlider(ctrlX, 0, CTRL_W, 20, cfg),
                 () -> cfg.statusHighlightColor == DEFAULTS.statusHighlightColor,
                 () -> cfg.statusHighlightColor = DEFAULTS.statusHighlightColor);
 
-        section("Players");
-        option("Online Players", onOff(cfg.playersEnabled, v -> cfg.playersEnabled = v),
+        section(ui("players"));
+        option(ui("online_players"), onOff(cfg.playersEnabled, v -> cfg.playersEnabled = v),
                 () -> cfg.playersEnabled == DEFAULTS.playersEnabled,
                 () -> cfg.playersEnabled = DEFAULTS.playersEnabled);
-        option("Player Heads", cycle(cfg.playerHeadMode, new int[]{0, 1, 2, 3},
+        option(ui("player_heads"), cycle(cfg.playerHeadMode, new int[]{0, 1, 2, 3},
                         TownyMapConfigScreen::playerHeadModeText, v -> cfg.playerHeadMode = v),
                 () -> cfg.playerHeadMode == DEFAULTS.playerHeadMode,
                 () -> cfg.playerHeadMode = DEFAULTS.playerHeadMode);
-        option("Head Range", presets(cfg.playerHeadMinScale, HEAD_RANGES, NEAR_MED_FAR,
+        option(ui("head_range"), presets(cfg.playerHeadMinScale, HEAD_RANGES, NEAR_MED_FAR,
                         v -> cfg.playerHeadMinScale = v),
                 () -> cfg.playerHeadMinScale == DEFAULTS.playerHeadMinScale,
                 () -> cfg.playerHeadMinScale = DEFAULTS.playerHeadMinScale);
-        option("Last Seen Positions", onOff(cfg.playerLastSeen, v -> cfg.playerLastSeen = v),
+        option(ui("last_seen_positions"), onOff(cfg.playerLastSeen, v -> cfg.playerLastSeen = v),
                 () -> cfg.playerLastSeen == DEFAULTS.playerLastSeen,
                 () -> cfg.playerLastSeen = DEFAULTS.playerLastSeen);
-        option("Player Name Color", new ColorHueSlider(ctrlX, 0, CTRL_W, 20, cfg,
+        option(ui("player_name_color"), new ColorHueSlider(ctrlX, 0, CTRL_W, 20, cfg,
                         () -> cfg.playerLabelColor, v -> cfg.playerLabelColor = v),
                 () -> cfg.playerLabelColor == DEFAULTS.playerLabelColor,
                 () -> cfg.playerLabelColor = DEFAULTS.playerLabelColor);
-        option("Player Names", onOff(cfg.showPlayerNames, v -> cfg.showPlayerNames = v),
+        option(ui("player_names"), onOff(cfg.showPlayerNames, v -> cfg.showPlayerNames = v),
                 () -> cfg.showPlayerNames == DEFAULTS.showPlayerNames,
                 () -> cfg.showPlayerNames = DEFAULTS.showPlayerNames);
-        option("Player Name Range", presets(cfg.playerNameMinScale, NAME_RANGES, NEAR_MED_FAR,
+        option(ui("player_name_range"), presets(cfg.playerNameMinScale, NAME_RANGES, NEAR_MED_FAR,
                         v -> cfg.playerNameMinScale = v),
                 () -> cfg.playerNameMinScale == DEFAULTS.playerNameMinScale,
                 () -> cfg.playerNameMinScale = DEFAULTS.playerNameMinScale);
-        option("Town/Nation Range", presets(cfg.playerAffiliationMinScale, AFFIL_RANGES, NEAR_MED_FAR,
+        option(ui("town_nation_range"), presets(cfg.playerAffiliationMinScale, AFFIL_RANGES, NEAR_MED_FAR,
                         v -> cfg.playerAffiliationMinScale = v),
                 () -> cfg.playerAffiliationMinScale == DEFAULTS.playerAffiliationMinScale,
                 () -> cfg.playerAffiliationMinScale = DEFAULTS.playerAffiliationMinScale);
 
-        section("Hunter Warning");
-        option("Hunter System", onOff(cfg.hunterWarningEnabled, v -> cfg.hunterWarningEnabled = v),
+        section(hunterLabel("section"));
+        option(hunterLabel("system"), onOff(cfg.hunterWarningEnabled, v -> cfg.hunterWarningEnabled = v),
                 () -> cfg.hunterWarningEnabled == DEFAULTS.hunterWarningEnabled,
                 () -> cfg.hunterWarningEnabled = DEFAULTS.hunterWarningEnabled);
-        option("Show Hunter HUD", onOff(cfg.hunterShowHud, v -> cfg.hunterShowHud = v),
+        option(hunterLabel("show_hud"), onOff(cfg.hunterShowHud, v -> cfg.hunterShowHud = v),
                 () -> cfg.hunterShowHud == DEFAULTS.hunterShowHud,
                 () -> cfg.hunterShowHud = DEFAULTS.hunterShowHud);
         option(Component.translatable("townymapaddon.hunter.settings.hud_position").getString(),Button.builder(Component.translatable("townymapaddon.hunter.settings.hud_position."+cfg.hunterHudPosition.name().toLowerCase(java.util.Locale.ROOT)),b->{var values=TownyMapConfig.HunterHudPosition.values();cfg.hunterHudPosition=values[(cfg.hunterHudPosition.ordinal()+1)%values.length];cfg.save();rebuildWidgets();}).bounds(0,0,150,20).build(),()->cfg.hunterHudPosition==DEFAULTS.hunterHudPosition,()->cfg.hunterHudPosition=DEFAULTS.hunterHudPosition);
-        option("Show Nearby Hunters", onOff(cfg.hunterShowNearby, v -> cfg.hunterShowNearby = v),
+        option(hunterLabel("show_nearby"), onOff(cfg.hunterShowNearby, v -> cfg.hunterShowNearby = v),
                 () -> cfg.hunterShowNearby == DEFAULTS.hunterShowNearby,
                 () -> cfg.hunterShowNearby = DEFAULTS.hunterShowNearby);
-        option("Show Recent Events", onOff(cfg.hunterShowRecentEvents, v -> cfg.hunterShowRecentEvents = v),
+        option(hunterLabel("show_recent"), onOff(cfg.hunterShowRecentEvents, v -> cfg.hunterShowRecentEvents = v),
                 () -> cfg.hunterShowRecentEvents == DEFAULTS.hunterShowRecentEvents,
                 () -> cfg.hunterShowRecentEvents = DEFAULTS.hunterShowRecentEvents);
-        option("Warnings In Chat", onOff(cfg.hunterWarningsInChat, v -> cfg.hunterWarningsInChat = v),
+        option(hunterLabel("warnings_chat"), onOff(cfg.hunterWarningsInChat, v -> cfg.hunterWarningsInChat = v),
                 () -> cfg.hunterWarningsInChat == DEFAULTS.hunterWarningsInChat,
                 () -> cfg.hunterWarningsInChat = DEFAULTS.hunterWarningsInChat);
-        option("Notifications In Chat", onOff(cfg.hunterNotificationsInChat, v -> cfg.hunterNotificationsInChat = v),
+        option(hunterLabel("notifications_chat"), onOff(cfg.hunterNotificationsInChat, v -> cfg.hunterNotificationsInChat = v),
                 () -> cfg.hunterNotificationsInChat == DEFAULTS.hunterNotificationsInChat,
                 () -> cfg.hunterNotificationsInChat = DEFAULTS.hunterNotificationsInChat);
-        option("Show Activity Window", onOff(cfg.hunterActivityWindowShown, v -> cfg.hunterActivityWindowShown = v),
+        option(hunterLabel("show_activity"), onOff(cfg.hunterActivityWindowShown, v -> cfg.hunterActivityWindowShown = v),
                 () -> cfg.hunterActivityWindowShown == DEFAULTS.hunterActivityWindowShown,
                 () -> cfg.hunterActivityWindowShown = DEFAULTS.hunterActivityWindowShown);
-        option("Show Risk", onOff(cfg.hunterShowRisk, v -> cfg.hunterShowRisk = v),
+        option(hunterLabel("show_risk"), onOff(cfg.hunterShowRisk, v -> cfg.hunterShowRisk = v),
                 () -> cfg.hunterShowRisk == DEFAULTS.hunterShowRisk,
                 () -> cfg.hunterShowRisk = DEFAULTS.hunterShowRisk);
-        action("Manage Watched Hunters", () -> this.minecraft.gui.setScreen(new HunterWatchScreen(this)));
-        option("Nearby Radius", cycle(cfg.hunterNearbyRadius, new int[]{500, 1000, 2000, 5000},
-                        v -> Component.literal(v + " blocks"), v -> cfg.hunterNearbyRadius = v),
+        action(hunterLabel("manage"), () -> this.minecraft.gui.setScreen(new HunterWatchScreen(this)));
+        option(hunterLabel("nearby_radius"), cycle(cfg.hunterNearbyRadius, new int[]{500, 1000, 2000, 5000},
+                        v -> Component.translatable("townymapaddon.common.blocks",v), v -> cfg.hunterNearbyRadius = v),
                 () -> cfg.hunterNearbyRadius == DEFAULTS.hunterNearbyRadius,
                 () -> cfg.hunterNearbyRadius = DEFAULTS.hunterNearbyRadius);
-        option("Elevated Threshold", cycle(cfg.hunterElevatedRadius, new int[]{250, 500, 750, 1000},
-                        v -> Component.literal(v + " blocks"), v -> cfg.hunterElevatedRadius = v),
+        option(hunterLabel("elevated_radius"), cycle(cfg.hunterElevatedRadius, new int[]{250, 500, 750, 1000},
+                        v -> Component.translatable("townymapaddon.common.blocks",v), v -> cfg.hunterElevatedRadius = v),
                 () -> cfg.hunterElevatedRadius == DEFAULTS.hunterElevatedRadius,
                 () -> cfg.hunterElevatedRadius = DEFAULTS.hunterElevatedRadius);
-        option("High Threshold", cycle(cfg.hunterHighRadius, new int[]{100, 250, 500},
-                        v -> Component.literal(v + " blocks"), v -> cfg.hunterHighRadius = v),
+        option(hunterLabel("high_radius"), cycle(cfg.hunterHighRadius, new int[]{100, 250, 500},
+                        v -> Component.translatable("townymapaddon.common.blocks",v), v -> cfg.hunterHighRadius = v),
                 () -> cfg.hunterHighRadius == DEFAULTS.hunterHighRadius,
                 () -> cfg.hunterHighRadius = DEFAULTS.hunterHighRadius);
-        option("Critical Threshold", cycle(cfg.hunterCriticalRadius, new int[]{50, 100, 150},
-                        v -> Component.literal(v + " blocks"), v -> cfg.hunterCriticalRadius = v),
+        option(hunterLabel("critical_radius"), cycle(cfg.hunterCriticalRadius, new int[]{50, 100, 150},
+                        v -> Component.translatable("townymapaddon.common.blocks",v), v -> cfg.hunterCriticalRadius = v),
                 () -> cfg.hunterCriticalRadius == DEFAULTS.hunterCriticalRadius,
                 () -> cfg.hunterCriticalRadius = DEFAULTS.hunterCriticalRadius);
-        option("Teleport Threat Radius", cycle(cfg.hunterTeleportThreatRadius, new int[]{1000, 2000, 3000, 5000},
-                        v -> Component.literal(v + " blocks"), v -> cfg.hunterTeleportThreatRadius = v),
+        option(hunterLabel("teleport_radius"), cycle(cfg.hunterTeleportThreatRadius, new int[]{1000, 2000, 3000, 5000},
+                        v -> Component.translatable("townymapaddon.common.blocks",v), v -> cfg.hunterTeleportThreatRadius = v),
                 () -> cfg.hunterTeleportThreatRadius == DEFAULTS.hunterTeleportThreatRadius,
                 () -> cfg.hunterTeleportThreatRadius = DEFAULTS.hunterTeleportThreatRadius);
-        option("Maximum HUD Entries", cycle(cfg.hunterMaxHudEntries, new int[]{1, 2, 3, 5, 10},
+        option(hunterLabel("max_hud"), cycle(cfg.hunterMaxHudEntries, new int[]{1, 2, 3, 5, 10},
                         v -> Component.literal(Integer.toString(v)), v -> cfg.hunterMaxHudEntries = v),
                 () -> cfg.hunterMaxHudEntries == DEFAULTS.hunterMaxHudEntries,
                 () -> cfg.hunterMaxHudEntries = DEFAULTS.hunterMaxHudEntries);
-        option("Normal Event Duration", cycle(cfg.hunterNormalEventDurationSecs, new int[]{5, 8, 10, 15},
-                        v -> Component.literal(v + " seconds"), v -> cfg.hunterNormalEventDurationSecs = v),
+        option(hunterLabel("event_duration"), cycle(cfg.hunterNormalEventDurationSecs, new int[]{5, 8, 10, 15},
+                        v -> Component.translatable("townymapaddon.common.seconds",v), v -> cfg.hunterNormalEventDurationSecs = v),
                 () -> cfg.hunterNormalEventDurationSecs == DEFAULTS.hunterNormalEventDurationSecs,
                 () -> cfg.hunterNormalEventDurationSecs = DEFAULTS.hunterNormalEventDurationSecs);
-        option("Candidate Outlaw Threshold", cycle(cfg.hunterCandidateOutlawThreshold, new int[]{5, 10, 15, 20, 30},
-                        v -> Component.literal("> " + v + " towns"), v -> cfg.hunterCandidateOutlawThreshold = v),
+        option(hunterLabel("candidate_threshold"), cycle(cfg.hunterCandidateOutlawThreshold, new int[]{5, 10, 15, 20, 30},
+                        v -> Component.translatable("townymapaddon.hunter.settings.more_than_towns",v), v -> cfg.hunterCandidateOutlawThreshold = v),
                 () -> cfg.hunterCandidateOutlawThreshold == DEFAULTS.hunterCandidateOutlawThreshold,
                 () -> cfg.hunterCandidateOutlawThreshold = DEFAULTS.hunterCandidateOutlawThreshold);
         option(Component.translatable("townymapaddon.hunter.settings.candidate_warnings").getString(), onOff(cfg.hunterCandidateWarningsEnabled, v -> cfg.hunterCandidateWarningsEnabled = v),
                 () -> cfg.hunterCandidateWarningsEnabled == DEFAULTS.hunterCandidateWarningsEnabled,
                 () -> cfg.hunterCandidateWarningsEnabled = DEFAULTS.hunterCandidateWarningsEnabled);
         option(Component.translatable("townymapaddon.hunter.settings.candidate_radius").getString(), cycle(cfg.hunterCandidateWarningRadius, new int[]{500, 1000, 1500, 2000, 5000},
-                        v -> Component.literal(v + " blocks"), v -> cfg.hunterCandidateWarningRadius = v),
+                        v -> Component.translatable("townymapaddon.common.blocks",v), v -> cfg.hunterCandidateWarningRadius = v),
                 () -> cfg.hunterCandidateWarningRadius == DEFAULTS.hunterCandidateWarningRadius,
                 () -> cfg.hunterCandidateWarningRadius = DEFAULTS.hunterCandidateWarningRadius);
-        option("Candidate Refresh", cycle(cfg.hunterCandidateRefreshMinutes, new int[]{5, 10, 15, 30, 60},
-                        v -> Component.literal(v + " minutes"), v -> cfg.hunterCandidateRefreshMinutes = v),
+        option(hunterLabel("candidate_refresh"), cycle(cfg.hunterCandidateRefreshMinutes, new int[]{5, 10, 15, 30, 60},
+                        v -> Component.translatable("townymapaddon.common.minutes",v), v -> cfg.hunterCandidateRefreshMinutes = v),
                 () -> cfg.hunterCandidateRefreshMinutes == DEFAULTS.hunterCandidateRefreshMinutes,
                 () -> cfg.hunterCandidateRefreshMinutes = DEFAULTS.hunterCandidateRefreshMinutes);
-        option("Activity History", cycle(cfg.hunterActivityMaxEvents, new int[]{50, 100, 200, 500},
-                        v -> Component.literal(v + " events"), v -> cfg.hunterActivityMaxEvents = v),
+        option(hunterLabel("activity_history"), cycle(cfg.hunterActivityMaxEvents, new int[]{50, 100, 200, 500},
+                        v -> Component.translatable("townymapaddon.common.events",v), v -> cfg.hunterActivityMaxEvents = v),
                 () -> cfg.hunterActivityMaxEvents == DEFAULTS.hunterActivityMaxEvents,
                 () -> cfg.hunterActivityMaxEvents = DEFAULTS.hunterActivityMaxEvents);
-        option("Direction", onOff(cfg.hunterDirectionEnabled, v -> cfg.hunterDirectionEnabled = v),
+        option(hunterLabel("direction"), onOff(cfg.hunterDirectionEnabled, v -> cfg.hunterDirectionEnabled = v),
                 () -> cfg.hunterDirectionEnabled == DEFAULTS.hunterDirectionEnabled,
                 () -> cfg.hunterDirectionEnabled = DEFAULTS.hunterDirectionEnabled);
-        option("Dynmap Exposure", onOff(cfg.hunterExposureHud, v -> cfg.hunterExposureHud = v),
+        option(hunterLabel("dynmap_exposure"), onOff(cfg.hunterExposureHud, v -> cfg.hunterExposureHud = v),
                 () -> cfg.hunterExposureHud == DEFAULTS.hunterExposureHud,
                 () -> cfg.hunterExposureHud = DEFAULTS.hunterExposureHud);
 
         section(Component.translatable("townymapaddon.teleport.title").getString());
         option(Component.translatable("townymapaddon.teleport.settings.enabled").getString(), onOff(cfg.teleportViewerEnabled,v->cfg.teleportViewerEnabled=v),()->cfg.teleportViewerEnabled==DEFAULTS.teleportViewerEnabled,()->cfg.teleportViewerEnabled=DEFAULTS.teleportViewerEnabled);
         option(Component.translatable("townymapaddon.teleport.settings.map_click").getString(),onOff(cfg.teleportMapClickAction,v->cfg.teleportMapClickAction=v),()->cfg.teleportMapClickAction==DEFAULTS.teleportMapClickAction,()->cfg.teleportMapClickAction=DEFAULTS.teleportMapClickAction);
-        option(Component.translatable("townymapaddon.teleport.settings.default_mode").getString(),Button.builder(Component.translatable(cfg.teleportDefaultAdvanced?"townymapaddon.teleport.mode.advanced":"townymapaddon.teleport.mode.standard"),b->{cfg.teleportDefaultAdvanced=!cfg.teleportDefaultAdvanced;cfg.save();rebuildWidgets();}).bounds(0,0,120,20).build(),()->cfg.teleportDefaultAdvanced==DEFAULTS.teleportDefaultAdvanced,()->cfg.teleportDefaultAdvanced=DEFAULTS.teleportDefaultAdvanced);
+        option(Component.translatable("townymapaddon.teleport.settings.advanced_enabled").getString(),onOff(cfg.teleportAdvancedEnabled,v->{cfg.teleportAdvancedEnabled=v;if(!v)cfg.teleportDefaultAdvanced=false;}),()->cfg.teleportAdvancedEnabled==DEFAULTS.teleportAdvancedEnabled,()->cfg.teleportAdvancedEnabled=DEFAULTS.teleportAdvancedEnabled);
         option(Component.translatable("townymapaddon.teleport.settings.show_uncertain").getString(),onOff(cfg.teleportShowUncertain,v->cfg.teleportShowUncertain=v),()->cfg.teleportShowUncertain==DEFAULTS.teleportShowUncertain,()->cfg.teleportShowUncertain=DEFAULTS.teleportShowUncertain);
         option(Component.translatable("townymapaddon.teleport.settings.show_obstructed").getString(),onOff(cfg.teleportShowObstructed,v->cfg.teleportShowObstructed=v),()->cfg.teleportShowObstructed==DEFAULTS.teleportShowObstructed,()->cfg.teleportShowObstructed=DEFAULTS.teleportShowObstructed);
         option(Component.translatable("townymapaddon.teleport.settings.remember_home").getString(),onOff(cfg.teleportRememberPrimaryHome,v->cfg.teleportRememberPrimaryHome=v),()->cfg.teleportRememberPrimaryHome==DEFAULTS.teleportRememberPrimaryHome,()->cfg.teleportRememberPrimaryHome=DEFAULTS.teleportRememberPrimaryHome);
 
-        section("Info Display");
-        option("Current Town & Nation", onOff(cfg.infoDisplayTownEnabled, v -> cfg.infoDisplayTownEnabled = v),
+        section(ui("info_display"));
+        option(ui("current_town_and_nation"), onOff(cfg.infoDisplayTownEnabled, v -> cfg.infoDisplayTownEnabled = v),
                 () -> cfg.infoDisplayTownEnabled == DEFAULTS.infoDisplayTownEnabled,
                 () -> cfg.infoDisplayTownEnabled = DEFAULTS.infoDisplayTownEnabled);
-        option("Nearby Players", onOff(cfg.infoDisplayNearbyPlayersEnabled, v -> cfg.infoDisplayNearbyPlayersEnabled = v),
+        option(ui("nearby_players"), onOff(cfg.infoDisplayNearbyPlayersEnabled, v -> cfg.infoDisplayNearbyPlayersEnabled = v),
                 () -> cfg.infoDisplayNearbyPlayersEnabled == DEFAULTS.infoDisplayNearbyPlayersEnabled,
                 () -> cfg.infoDisplayNearbyPlayersEnabled = DEFAULTS.infoDisplayNearbyPlayersEnabled);
-        option("Nearest Town (Wilderness)", onOff(cfg.infoDisplayNearestTownEnabled, v -> cfg.infoDisplayNearestTownEnabled = v),
+        option(ui("nearest_town_wilderness"), onOff(cfg.infoDisplayNearestTownEnabled, v -> cfg.infoDisplayNearestTownEnabled = v),
                 () -> cfg.infoDisplayNearestTownEnabled == DEFAULTS.infoDisplayNearestTownEnabled,
                 () -> cfg.infoDisplayNearestTownEnabled = DEFAULTS.infoDisplayNearestTownEnabled);
 
-        section("Screenshots");
-        option("Screenshot Players", onOff(cfg.screenshotPlayers, v -> cfg.screenshotPlayers = v),
+        section(ui("screenshots"));
+        option(ui("screenshot_players"), onOff(cfg.screenshotPlayers, v -> cfg.screenshotPlayers = v),
                 () -> cfg.screenshotPlayers == DEFAULTS.screenshotPlayers,
                 () -> cfg.screenshotPlayers = DEFAULTS.screenshotPlayers);
-        option("Screenshot Nation Stars",
+        option(ui("screenshot_nation_stars"),
                 onOff(cfg.screenshotNationStars, v -> cfg.screenshotNationStars = v),
                 () -> cfg.screenshotNationStars == DEFAULTS.screenshotNationStars,
                 () -> cfg.screenshotNationStars = DEFAULTS.screenshotNationStars);
-        option("Screenshot Hides Dimmed Towns",
+        option(ui("screenshot_hides_dimmed_towns"),
                 onOff(cfg.screenshotHideDimmedTowns, v -> cfg.screenshotHideDimmedTowns = v),
                 () -> cfg.screenshotHideDimmedTowns == DEFAULTS.screenshotHideDimmedTowns,
                 () -> cfg.screenshotHideDimmedTowns = DEFAULTS.screenshotHideDimmedTowns);
@@ -453,47 +379,47 @@ public class TownyMapConfigScreen extends Screen {
         // The screenshot bind, editable here as well as in vanilla Controls — both write the same KeyMapping.
         screenshotKeyButton = Button.builder(screenshotKeyLabel(), b -> {
             awaitingScreenshotKey = true;
-            b.setMessage(Component.literal("> Press a key <"));
+            b.setMessage(Component.translatable("townymapaddon.settings.press_a_key"));
         }).bounds(ctrlX, 0, CTRL_W, 20).build();
-        option("Map Screenshot Key", screenshotKeyButton,
+        option(ui("map_screenshot_key"), screenshotKeyButton,
                 () -> "P".equalsIgnoreCase(net.townymap.input.TownyMapKeybinds.mapScreenshotKeyName()),
                 () -> {
                     net.townymap.input.TownyMapKeybinds.setMapScreenshotKey(GLFW.GLFW_KEY_P);
                     screenshotKeyButton.setMessage(screenshotKeyLabel());
                 });
 
-        section("Advanced");
-        option("UI Scale", new PanelScaleSlider(ctrlX, 0, CTRL_W, 20, cfg),
+        section(ui("advanced"));
+        option(ui("ui_scale"), new PanelScaleSlider(ctrlX, 0, CTRL_W, 20, cfg),
                 () -> cfg.infoPanelScale == DEFAULTS.infoPanelScale,
                 () -> cfg.infoPanelScale = DEFAULTS.infoPanelScale);
-        option("Custom Overlays", onOff(cfg.customOverlaysEnabled, v -> {
+        option(ui("custom_overlays"), onOff(cfg.customOverlaysEnabled, v -> {
             cfg.customOverlaysEnabled = v;
             if (v) net.townymap.integration.CustomOverlayManager.reload();
         }),
                 () -> cfg.customOverlaysEnabled == DEFAULTS.customOverlaysEnabled,
                 () -> cfg.customOverlaysEnabled = DEFAULTS.customOverlaysEnabled);
-        action("Open Overlays Folder", () -> net.townymap.integration.CustomOverlayManager.openFolder());
-        option("Shop Waypoints", onOff(cfg.shopWaypointsEnabled, v -> {
+        action(ui("open_overlays_folder"), () -> net.townymap.integration.CustomOverlayManager.openFolder());
+        option(ui("shop_waypoints"), onOff(cfg.shopWaypointsEnabled, v -> {
                     cfg.shopWaypointsEnabled = v;
                     if (!v) net.townymap.integration.ShopWaypoints.clearAll();
                 }),
                 () -> cfg.shopWaypointsEnabled == DEFAULTS.shopWaypointsEnabled,
                 () -> cfg.shopWaypointsEnabled = DEFAULTS.shopWaypointsEnabled);
-        option("Shop Waypoint Range", cycle(nearestPreset(cfg.shopWaypointRange, SHOP_RANGES),
+        option(ui("shop_waypoint_range"), cycle(nearestPreset(cfg.shopWaypointRange, SHOP_RANGES),
                         new int[]{0, 1, 2}, i -> Component.literal(SHOP_RANGE_LABELS[i]),
                         i -> cfg.shopWaypointRange = (int) SHOP_RANGES[i]),
                 () -> cfg.shopWaypointRange == DEFAULTS.shopWaypointRange,
                 () -> cfg.shopWaypointRange = DEFAULTS.shopWaypointRange);
-        action("Reload Overlays", () -> net.townymap.integration.CustomOverlayManager.reload());
+        action(ui("reload_overlays"), () -> net.townymap.integration.CustomOverlayManager.reload());
 
         archiveField = new EditBox(this.font, ctrlX, 0, CTRL_W, 20, Component.literal("dd/mm/yyyy"));
         archiveField.setHint(Component.literal("dd/mm/yyyy"));
         archiveField.setMaxLength(14);
-        inputRow("View Archive", archiveField);
+        inputRow(ui("view_archive"), archiveField);
 
 
         this.addRenderableWidget(
-                Button.builder(Component.literal("Reset All"), b -> {
+                Button.builder(Component.translatable("townymapaddon.common.reset_all"), b -> {
                     TownyMapConfig d = new TownyMapConfig();
                     d.copyInto(cfg);
                     cfg.save();
@@ -508,6 +434,24 @@ public class TownyMapConfigScreen extends Screen {
 
     // ── Row building ──────────────────────────────────────────────────────────
 
+    private static String hunterLabel(String suffix){return Component.translatable("townymapaddon.hunter.settings."+suffix).getString();}
+    private static String ui(String suffix){return Component.translatable("townymapaddon.settings."+suffix).getString();}
+    private static final String[] DESCRIPTION_IDS = {
+            "earthmc_only", "earthmc_map_in_nether", "smooth_town_outlines", "far_zoom_town_dots",
+            "real_borders", "squaremap_background", "darken_map", "world_map_overview", "dark_buttons",
+            "wilderness_player_alert", "player_name_range", "town_nation_range", "map_mode_rgb",
+            "custom_overlays", "player_indicator", "chunk_grid", "player_heads", "head_range",
+            "last_seen_positions", "nation_capital_stars", "nation_join_range", "ui_scale",
+            "screenshot_players", "screenshot_nation_stars", "screenshot_hides_dimmed_towns",
+            "map_screenshot_key", "data_freshness_line", "reload_claims", "open_info_panel",
+            "info_panel_key", "reload_claims_key", "view_archive"
+    };
+    private static String settingDescription(String label) {
+        for (String id : DESCRIPTION_IDS) {
+            if (ui(id).equals(label)) return Component.translatable("townymapaddon.settings.description." + id).getString();
+        }
+        return null;
+    }
     private void section(String label) {
         currentCategory = label;
         if (!categories.contains(label)) categories.add(label);
@@ -515,7 +459,7 @@ public class TownyMapConfigScreen extends Screen {
     }
 
     private void option(String label, AbstractWidget control, BooleanSupplier isDefault, Runnable resetAction) {
-        Button reset = Button.builder(Component.literal("Reset"), b -> {
+        Button reset = Button.builder(Component.translatable("townymapaddon.common.reset"), b -> {
             resetAction.run();
             cfg.save();
             this.rebuildWidgets();
@@ -569,8 +513,19 @@ public class TownyMapConfigScreen extends Screen {
                                                  java.util.function.DoubleConsumer setter) {
         int[] idx = new int[values.length];
         for (int i = 0; i < idx.length; i++) idx[i] = i;
-        return cycle(nearestPreset(current, values), idx, i -> Component.literal(labels[i]),
+        return cycle(nearestPreset(current, values), idx, i -> presetText(labels[i]),
                 i -> setter.accept(values[i]));
+    }
+
+    private static Component presetText(String value) {
+        return switch (value) {
+            case "Near" -> Component.translatable("townymapaddon.settings.value.near");
+            case "Medium" -> Component.translatable("townymapaddon.settings.value.medium");
+            case "Far" -> Component.translatable("townymapaddon.settings.value.far");
+            case "Thin" -> Component.translatable("townymapaddon.settings.value.thin");
+            case "Thick" -> Component.translatable("townymapaddon.settings.value.thick");
+            default -> Component.literal(value);
+        };
     }
 
     private static int nearestPreset(double current, double[] values) {
@@ -874,7 +829,7 @@ public class TownyMapConfigScreen extends Screen {
             if (mouseY >= rowY && mouseY < rowY + 20) {
                 ctx.fill(contentLeft - 6, rowY, contentRight + 2, rowY + 20, ROW_HOVER);
                 ctx.fill(contentLeft - 6, rowY, contentLeft - 4, rowY + 20, PANEL_ACCENT);
-                hoveredDescription = DESCRIPTIONS.get(r.label);
+                hoveredDescription = settingDescription(r.label);
                 return;
             }
         }
@@ -957,67 +912,62 @@ public class TownyMapConfigScreen extends Screen {
     // ── Value → text for cycling controls ──────────────────────────────────────────
 
     private static Component borderModeText(Integer mode) {
-        return Component.literal(switch (mode) {
-            case 1 -> "Countries";
-            case 2 -> "States + Countries";
-            default -> "Off";
+        return Component.translatable("townymapaddon.settings.value." + switch (mode) {
+            case 1 -> "countries";
+            case 2 -> "states_countries";
+            default -> "off";
         });
     }
 
     private static Component squaremapBackgroundModeText(Integer mode) {
-        return Component.literal(switch (mode) {
-            case 1 -> "World Map";
-            case 2 -> "Minimap";
-            case 3 -> "Both";
-            default -> "Off";
+        return Component.translatable("townymapaddon.settings.value." + switch (mode) {
+            case 1 -> "world_map";
+            case 2 -> "minimap";
+            case 3 -> "both";
+            default -> "off";
         });
     }
 
     private static Component minimapIndicatorModeText(Integer mode) {
-        return Component.literal(switch (mode) {
-            case 0 -> "Off";
-            case 1 -> "EMC";
-            case 2 -> "Xaero";
-            default -> "Both";
+        return Component.translatable("townymapaddon.settings.value." + switch (mode) {
+            case 0 -> "off";
+            case 1 -> "emc";
+            case 2 -> "xaero";
+            default -> "both";
         });
     }
 
     private static Component minimapTownNameModeText(Integer mode) {
-        return Component.literal(switch (mode) {
-            case 1 -> "Nearby";
-            case 2 -> "Major";
-            case 3 -> "All";
-            default -> "Off";
+        return Component.translatable("townymapaddon.settings.value." + switch (mode) {
+            case 1 -> "nearby";
+            case 2 -> "major";
+            case 3 -> "all";
+            default -> "off";
         });
     }
 
     private static Component playerHeadModeText(Integer mode) {
-        return Component.literal(switch (mode) {
-            case 1 -> "World Map";
-            case 2 -> "Minimap";
-            case 3 -> "Both";
-            default -> "Off";
-        });
+        return squaremapBackgroundModeText(mode);
     }
 
     private static Component netherModeText(Integer mode) {
-        return Component.literal(mode == 2 ? "Overworld Coords" : "Hidden");
+        return Component.translatable("townymapaddon.settings.value." + (mode == 2 ? "overworld_coords" : "hidden"));
     }
 
     private static Component darkenText(Integer level) {
-        return Component.literal(switch (level) {
-            case 1 -> "Light";
-            case 2 -> "Medium";
-            case 3 -> "Dark";
-            default -> "Off";
+        return Component.translatable("townymapaddon.settings.value." + switch (level) {
+            case 1 -> "light";
+            case 2 -> "medium";
+            case 3 -> "dark";
+            default -> "off";
         });
     }
 
     private static Component minimapChunkGridModeText(Integer mode) {
-        return Component.literal(switch (mode) {
-            case 1 -> "Always";
-            case 2 -> "Enlarged Only";
-            default -> "Off";
+        return Component.translatable("townymapaddon.settings.value." + switch (mode) {
+            case 1 -> "always";
+            case 2 -> "enlarged_only";
+            default -> "off";
         });
     }
 

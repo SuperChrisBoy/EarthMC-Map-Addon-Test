@@ -24,11 +24,10 @@ public final class BlockedScreen extends Screen {
     private final String message;
 
     public BlockedScreen(Screen parent, String message) {
-        super(Component.literal("EarthMC Map Addon"));
+        super(Component.translatable("townymapaddon.blocked.mod_name"));
         this.parent = parent;
         this.message = message == null || message.isBlank()
-                ? "Your access to the EarthMC Map Addon has been removed. If you believe this is a "
-                  + "mistake, please contact the developer of the mod."
+                ? Component.translatable("townymapaddon.blocked.default_message").getString()
                 : message;
     }
 
@@ -38,10 +37,10 @@ public final class BlockedScreen extends Screen {
     @Override
     protected void init() {
         int y = this.height / 2 + 52;
-        this.addRenderableWidget(Button.builder(Component.literal("Message the developer"),
+        this.addRenderableWidget(Button.builder(Component.translatable("townymapaddon.blocked.contact"),
                         b -> Util.getPlatform().openUri(URI.create(DISCORD_URL)))
                 .bounds(this.width / 2 - 108, y, 130, 20).build());
-        this.addRenderableWidget(Button.builder(Component.literal("Acknowledge"), b -> this.onClose())
+        this.addRenderableWidget(Button.builder(Component.translatable("townymapaddon.blocked.acknowledge"), b -> this.onClose())
                 .bounds(this.width / 2 + 28, y, 80, 20).build());
     }
 
@@ -57,7 +56,7 @@ public final class BlockedScreen extends Screen {
         ctx.fill(left, top, left + w, bottom, PANEL_BG);
         ctx.fill(left, top, left + w, top + 3, ACCENT);
 
-        ctx.text(this.font, "Access removed", left + 12, top + 14, 0xFFFFFFFF, false);
+        ctx.text(this.font, Component.translatable("townymapaddon.blocked.title"), left + 12, top + 14, 0xFFFFFFFF, false);
         int y = top + 34;
         for (var line : this.font.split(Component.literal(message), w - 24)) {
             ctx.text(this.font, line, left + 12, y, 0xFFC8C8C8, false);

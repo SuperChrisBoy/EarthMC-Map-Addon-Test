@@ -2,6 +2,7 @@ package net.townymap.gui;
 
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.network.chat.Component;
 import net.townymap.TownyMapMod;
 
 import java.util.ArrayList;
@@ -166,7 +167,7 @@ public final class PlanningOverlay {
         if (scaled) UiScale.push(ctx, LEFT, TOP);
 
         if (!hasNation()) {
-            String msg = "Planning · choose a nation";
+            String msg = Component.translatable("townymapaddon.planning.choose_nation").getString();
             int w = tr.width(msg) + 10;
             ctx.fill(LEFT - 1, TOP - 1, LEFT + w + 1, TOP + CHIP_H + 1, BORDER);
             ctx.fill(LEFT, TOP, LEFT + w, TOP + CHIP_H, BG);
@@ -196,7 +197,8 @@ public final class PlanningOverlay {
         // Header shows which nation the plan belongs to, and flags any towns that can't legally be reached.
         int bad = 0;
         for (int i = 0; i < planned.size(); i++) if (!isValid(i)) bad++;
-        String head = nation + " · +" + planned.size() + (bad > 0 ? " · " + bad + " out of range" : "");
+        String head = Component.translatable(bad > 0 ? "townymapaddon.planning.summary_invalid" : "townymapaddon.planning.summary",
+                nation, planned.size(), bad).getString();
         int headW = Math.max(chipW, tr.width(head) + 10);
         ctx.fill(LEFT - 1, TOP - 1, LEFT + headW + 1, TOP + CHIP_H + 1, BORDER);
         ctx.fill(LEFT, TOP, LEFT + headW, TOP + CHIP_H, BG);
@@ -228,7 +230,7 @@ public final class PlanningOverlay {
 
         if (armed) {   // tell the user what the armed "+" is waiting for
             int hy = gridTop + usedRows * (CHIP_H + CHIP_GAP) + 2;
-            String hint = "MouseButtonEvent the map to place";
+            String hint = Component.translatable("townymapaddon.planning.place_hint").getString();
             int hw = tr.width(hint) + 10;
             if (hy + CHIP_H < bottomLimit) {
                 ctx.fill(LEFT - 1, hy - 1, LEFT + hw + 1, hy + CHIP_H + 1, BORDER);

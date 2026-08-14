@@ -29,11 +29,17 @@ import java.util.Map;
 
 /** Builds the block list for each kind of expanded panel. Layout lives in {@link DetailScreen}. */
 public final class DetailPages {
+    private static String label(String id) {
+        return net.minecraft.network.chat.Component.translatable("townymapaddon.details.label." + id).getString();
+    }
+    private static String msg(String id, Object... args) {
+        return net.minecraft.network.chat.Component.translatable("townymapaddon.details." + id, args).getString();
+    }
 
     private DetailPages() {}
 
     private static final DateTimeFormatter DATE =
-            DateTimeFormatter.ofPattern("d MMM yyyy").withZone(ZoneId.systemDefault());
+            DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.MEDIUM).withZone(ZoneId.systemDefault());
 
     private static String date(long ms) {
         return ms > 0 ? DATE.format(Instant.ofEpochMilli(ms)) : "—";
@@ -84,8 +90,8 @@ public final class DetailPages {
      */
     private static void addAllianceBlocks(List<DetailScreen.Block> b, String nation) {
         if (nation == null || nation.isBlank()) return;
-        addBlocRefs(b, TownyMapMod.meganationsForNation(nation), "Meganation", "Meganations");
-        addBlocRefs(b, TownyMapMod.alliancesForNation(nation), "Alliance", "Alliances");
+        addBlocRefs(b, TownyMapMod.meganationsForNation(nation), label("meganation"), label("meganations"));
+        addBlocRefs(b, TownyMapMod.alliancesForNation(nation), label("alliance"), label("alliances"));
     }
 
     private static void addBlocRefs(List<DetailScreen.Block> b, List<String> names,
@@ -130,13 +136,13 @@ public final class DetailPages {
         }
 
         b.add(new Cols(List.of(
-                new Col("Type", a.mega() ? "Meganation" : "Alliance", null),
-                new Col("Tag", orDash(a.identifier()), null),
-                new Col("Nations", String.valueOf(nations.size()), null))));
+                new Col(label("type"), a.mega() ? "Meganation" : "Alliance", null),
+                new Col(label("tag"), orDash(a.identifier()), null),
+                new Col(label("nations"), String.valueOf(nations.size()), null))));
         b.add(new Cols(List.of(
-                new Col("Towns", towns > 0 ? String.valueOf(towns) : "—", null),
-                new Col("Chunks", chunks > 0 ? String.format("%,d", chunks) : "—", null),
-                new Col("Residents", residents > 0 ? String.format("%,d", residents)
+                new Col(label("towns"), towns > 0 ? String.valueOf(towns) : "—", null),
+                new Col(label("chunks"), chunks > 0 ? String.format("%,d", chunks) : "—", null),
+                new Col(label("residents"), residents > 0 ? String.format("%,d", residents)
                         + (partial ? "+" : "") : "—", null))));
         b.add(new DetailScreen.Rule());
 
@@ -146,10 +152,10 @@ public final class DetailPages {
             String suffix = nd == null ? "" : "  " + nd.townCount() + " towns";
             lines.add(new DetailScreen.RefLine(new Ref(Kind.NATION, n), suffix));
         }
-        b.add(new DetailScreen.RefLineList("Members", lines));
+        b.add(new DetailScreen.RefLineList(label("members"), lines));
 
         return new Page(Kind.ALLIANCE, a.label() == null || a.label().isBlank() ? a.identifier() : a.label(),
-                (a.mega() ? "Meganation" : "Alliance") + " · " + nations.size() + " nations",
+                msg("bloc_summary", label(a.mega() ? "meganation" : "alliance"), nations.size()),
                 b, "", "");
     }
 
@@ -186,22 +192,22 @@ public final class DetailPages {
                 if (t.name().equalsIgnoreCase(myTown)) { mine = t; break; }
             }
             b.add(new Cols(List.of(
-                    new Col("Your town", myTown, new Ref(Kind.TOWN, myTown)),
-                    new Col("Nation", self.nationName() == null || self.nationName().isBlank()
+                    new Col(label("your_town"), myTown, new Ref(Kind.TOWN, myTown)),
+                    new Col(label("nation"), self.nationName() == null || self.nationName().isBlank()
                             ? "-" : self.nationName(),
                             self.nationName() == null || self.nationName().isBlank()
                                     ? null : new Ref(Kind.NATION, self.nationName())),
-                    new Col("Your balance", money(self.balance())))));
+                    new Col(label("your_balance"), money(self.balance())))));
             net.townymap.model.TownFullData full = TownyMapMod.selfTownFull();
             if (full != null) {
                 // Identical to the right-click town page (DetailPages.town): EarthMC's own claimed/max,
                 // which already accounts for the nation bonus and any server-side overrides. Deriving it
                 // here from residents x 12 gave a different number to the rest of the mod.
                 b.add(new Cols(List.of(
-                        new Col("Residents", String.valueOf(full.residents() == null ? 0 : full.residents().size())),
-                        new Col("Chunks", full.numTownBlocks() + " / "
+                        new Col(label("residents"), String.valueOf(full.residents() == null ? 0 : full.residents().size())),
+                        new Col(label("chunks"), full.numTownBlocks() + " / "
                                 + (full.maxTownBlocks() >= 0 ? full.maxTownBlocks() : "?")),
-                        new Col("Can still claim", full.maxTownBlocks() >= 0
+                        new Col(label("can_still_claim"), full.maxTownBlocks() >= 0
                                 ? String.valueOf(Math.max(0, full.maxTownBlocks() - full.numTownBlocks()))
                                 : "?"))));
             }
@@ -209,11 +215,11 @@ public final class DetailPages {
         }
 
         b.add(new Cols(List.of(
-                new Col("Towns", String.valueOf(towns.size())),
-                new Col("Nations", String.valueOf(nations.size())),
-                new Col("Residents", String.valueOf(residents)))));
+                new Col(label("towns"), String.valueOf(towns.size())),
+                new Col(label("nations"), String.valueOf(nations.size())),
+                new Col(label("residents"), String.valueOf(residents)))));
         // Live so the age keeps counting up while the panel stays open.
-        b.add(new Cols(List.of(Col.live("Claim data", () -> TownyMapMod.mapDataStatus().text()))));
+        b.add(new Cols(List.of(Col.live(label("claim_data"), () -> TownyMapMod.mapDataStatus().text()))));
         b.add(new Rule());
 
         // favoriteTownKeys() holds lower-cased keys; resolve them back to the town's real casing so the
@@ -226,11 +232,11 @@ public final class DetailPages {
             for (String k : favKeys) favourites.add(byKey.getOrDefault(k, k));
             favourites.sort(String.CASE_INSENSITIVE_ORDER);
         }
-        addNames(b, "Favourites", favourites, Kind.TOWN);
+        addNames(b, label("favourites"), favourites, Kind.TOWN);
 
         String subtitle = api != null && api.isArchiveActive()
-                ? "From the loaded archive snapshot" : "Live from squaremap";
-        return new Page(Kind.STATS, "Info Panel", subtitle, b, null, null);
+                ? msg("archive_snapshot") : msg("live_squaremap");
+        return new Page(Kind.STATS, msg("info_panel"), subtitle, b, null, null);
     }
 
     /** Chunks a town claims: shoelace area of its rings (first = outer, rest = holes) over 16x16. */
@@ -257,9 +263,9 @@ public final class DetailPages {
     /** Filter labels per sub-tab, mirrored by DetailScreen so the strip and the data agree. */
     public static String[] filtersFor(int sub) {
         return switch (sub) {
-            case 1 -> new String[]{ "Towns", "Residents", "Chunks", "Gold", "Outlaws", "Founded" };
-            case 2 -> new String[]{ "Gold", "Joined", "Friends", "Outlawed", "Trusted" };
-            default -> new String[]{ "Residents", "Chunks", "Gold", "Outlaws", "Founded" };
+            case 1 -> new String[]{ label("towns"), label("residents"), label("chunks"), label("gold"), label("outlaws"), label("founded") };
+            case 2 -> new String[]{ label("gold"), label("joined"), label("friends"), label("outlawed"), label("trusted") };
+            default -> new String[]{ label("residents"), label("chunks"), label("gold"), label("outlaws"), label("founded") };
         };
     }
 
@@ -310,7 +316,7 @@ public final class DetailPages {
                 residents.merge(n, api.getTownResidents(t.key()), Integer::sum);
                 chunks.merge(n, chunkCount(t), Integer::sum);
             }
-            b.add(new Cols(List.of(new Col("Nations", String.valueOf(townCount.size())))));
+            b.add(new Cols(List.of(new Col(label("nations"), String.valueOf(townCount.size())))));
             b.add(new Rule());
             if (filter == 5) {
                 // Oldest first. The index carries a formatted date string only, so sorting on it would
@@ -319,8 +325,8 @@ public final class DetailPages {
                         new ArrayList<>(TownyMapMod.nationStats().values());
                 idx.removeIf(nd -> nd.foundedMs() <= 0);
                 if (idx.isEmpty()) {
-                    b.add(new Cols(List.of(new Col("Nations", "loading..."))));
-                    return new Page(Kind.STATS, "Info Panel", "fetching the nation index", b, null, null);
+                    b.add(new Cols(List.of(new Col(label("nations"), msg("loading")))));
+                    return new Page(Kind.STATS, msg("info_panel"), msg("fetching_nations"), b, null, null);
                 }
                 idx.sort((x, y) -> Long.compare(x.foundedMs(), y.foundedMs()));
                 List<String[]> rows = new ArrayList<>();
@@ -328,9 +334,9 @@ public final class DetailPages {
                     if (rows.size() >= RANK_DEPTH) break;
                     rows.add(new String[]{nd.name(), date(nd.foundedMs())});
                 }
-                b.add(new Cols(List.of(new Col("Nations", String.valueOf(idx.size())))));
-                rankList(b, "Oldest nations", rows, "", Kind.NATION);
-                return new Page(Kind.STATS, "Info Panel", "oldest first", b, null, null);
+                b.add(new Cols(List.of(new Col(label("nations"), String.valueOf(idx.size())))));
+                rankList(b, msg("oldest_nations"), rows, "", Kind.NATION);
+                return new Page(Kind.STATS, msg("info_panel"), msg("oldest_first"), b, null, null);
             }
             if (filter >= 3) {
                 // Gold and outlaw counts come from the nation index -- one request for every nation,
@@ -338,8 +344,8 @@ public final class DetailPages {
                 List<net.townymap.model.EarthMcNationData> idx =
                         new ArrayList<>(TownyMapMod.nationStats().values());
                 if (idx.isEmpty()) {
-                    b.add(new Cols(List.of(new Col("Nations", "loading..."))));
-                    return new Page(Kind.STATS, "Info Panel", "fetching the nation index", b, null, null);
+                    b.add(new Cols(List.of(new Col(label("nations"), msg("loading")))));
+                    return new Page(Kind.STATS, msg("info_panel"), msg("fetching_nations"), b, null, null);
                 }
                 boolean gold = filter == 3;
                 List<net.townymap.model.EarthMcNationData> sorted = new ArrayList<>(idx);
@@ -351,15 +357,15 @@ public final class DetailPages {
                     rows.add(new String[]{nd.name(),
                             gold ? money(nd.balance()) : String.valueOf(nd.outlawCount())});
                 }
-                b.add(new Cols(List.of(new Col("Nations", String.valueOf(idx.size())))));
-                rankList(b, gold ? "Nations by gold" : "Nations by outlaws",
-                        rows, gold ? "" : "outlaws", Kind.NATION);
-                return new Page(Kind.STATS, "Info Panel", idx.size() + " nations", b, null, null);
+                b.add(new Cols(List.of(new Col(label("nations"), String.valueOf(idx.size())))));
+                rankList(b, msg(gold ? "nations_by_gold" : "nations_by_outlaws"),
+                        rows, gold ? "" : label("outlaws"), Kind.NATION);
+                return new Page(Kind.STATS, msg("info_panel"), msg("nation_count", idx.size()), b, null, null);
             }
             Map<String, Integer> src = filter == 1 ? residents : filter == 2 ? chunks : townCount;
-            String unit = filter == 1 ? "residents" : filter == 2 ? "chunks" : "towns";
-            rankList(b, "Nations by " + unit, rowsOf(src), unit, Kind.NATION);
-            return new Page(Kind.STATS, "Info Panel", townCount.size() + " nations", b, null, null);
+            String unit = label(filter == 1 ? "residents" : filter == 2 ? "chunks" : "towns");
+            rankList(b, msg("nations_by", unit), rowsOf(src), unit, Kind.NATION);
+            return new Page(Kind.STATS, msg("info_panel"), msg("nation_count", townCount.size()), b, null, null);
         }
 
         if (sub == 2) {
@@ -367,9 +373,8 @@ public final class DetailPages {
                 boolean outlawed = filter == 3;
                 Map<String, int[]> counts = TownyMapMod.outlawTrustedCounts();
                 if (counts.isEmpty()) {
-                    b.add(new Cols(List.of(new Col("Players", "sweeping towns..."))));
-                    return new Page(Kind.STATS, "Info Panel",
-                            "reading every town roster, this one takes a moment", b, null, null);
+                    b.add(new Cols(List.of(new Col(label("players"), msg("scanning_towns")))));
+                    return new Page(Kind.STATS, msg("info_panel"), msg("reading_rosters"), b, null, null);
                 }
                 List<String[]> rows = new ArrayList<>();
                 List<Map.Entry<String, int[]>> es = new ArrayList<>(counts.entrySet());
@@ -380,17 +385,15 @@ public final class DetailPages {
                     if (e.getValue()[slot] <= 0) break;
                     rows.add(new String[]{e.getKey(), String.valueOf(e.getValue()[slot])});
                 }
-                b.add(new Cols(List.of(new Col("Players", String.valueOf(counts.size())))));
-                rankList(b, outlawed ? "Outlawed in the most towns" : "Trusted in the most towns",
-                        rows, "towns", Kind.PLAYER);
-                return new Page(Kind.STATS, "Info Panel",
-                        counts.size() + " players on town rosters", b, null, null);
+                b.add(new Cols(List.of(new Col(label("players"), String.valueOf(counts.size())))));
+                rankList(b, msg(outlawed ? "most_outlawed" : "most_trusted"), rows, label("towns"), Kind.PLAYER);
+                return new Page(Kind.STATS, msg("info_panel"), msg("roster_player_count", counts.size()), b, null, null);
             }
             java.util.Map<String, net.townymap.model.EarthMcPlayerData> stats =
                     TownyMapMod.allPlayerStats();
             if (stats.isEmpty()) {
-                b.add(new Cols(List.of(new Col("Players", "loading..."))));
-                return new Page(Kind.STATS, "Info Panel", "fetching online player data", b, null, null);
+                b.add(new Cols(List.of(new Col(label("players"), msg("loading")))));
+                return new Page(Kind.STATS, msg("info_panel"), msg("fetching_players"), b, null, null);
             }
             List<net.townymap.model.EarthMcPlayerData> sorted = new ArrayList<>(stats.values());
             if (filter == 1) sorted.sort((x, y) -> Long.compare(x.registeredMs(), y.registeredMs()));
@@ -410,11 +413,11 @@ public final class DetailPages {
                         : money(pd.balance())});
             }
             boolean full = TownyMapMod.playerSweepComplete();
-            b.add(new Cols(List.of(new Col("Players", String.valueOf(stats.size())))));
-            rankList(b, "Players by " + (filter == 1 ? "join date" : filter == 2 ? "friends" : "gold"),
-                    rows, filter == 2 ? "friends" : "", Kind.PLAYER);
-            return new Page(Kind.STATS, "Info Panel",
-                    full ? stats.size() + " players" : "online players so far, full sweep running",
+            b.add(new Cols(List.of(new Col(label("players"), String.valueOf(stats.size())))));
+            rankList(b, msg("players_by", label(filter == 1 ? "registered" : filter == 2 ? "friends" : "bank")),
+                    rows, filter == 2 ? label("friends") : "", Kind.PLAYER);
+            return new Page(Kind.STATS, msg("info_panel"),
+                    full ? msg("player_count", stats.size()) : msg("player_sweep_running"),
                     b, null, null);
         }
 
@@ -430,9 +433,9 @@ public final class DetailPages {
             byChunks.add(new String[]{t.name(), String.valueOf(ch)});
         }
         b.add(new Cols(List.of(
-                new Col("Towns", String.valueOf(towns.size())),
-                new Col("Residents", String.valueOf(totalResidents)),
-                new Col("Chunks", String.valueOf(totalChunks)))));
+                new Col(label("towns"), String.valueOf(towns.size())),
+                new Col(label("residents"), String.valueOf(totalResidents)),
+                new Col(label("chunks"), String.valueOf(totalChunks)))));
         b.add(new Rule());
         byResidents.sort((x, y) -> Integer.parseInt(y[1]) - Integer.parseInt(x[1]));
         byChunks.sort((x, y) -> Integer.parseInt(y[1]) - Integer.parseInt(x[1]));
@@ -441,22 +444,21 @@ public final class DetailPages {
             // rather than warmed -- open one and it starts; never open them and it never runs.
             var ranks = TownyMapMod.townRanks();
             if (ranks.isEmpty()) {
-                b.add(new Cols(List.of(new Col("Towns", "sweeping towns..."))));
-                return new Page(Kind.STATS, "Info Panel",
-                        "reading every town, this one takes a moment", b, null, null);
+                b.add(new Cols(List.of(new Col(label("towns"), msg("scanning_towns")))));
+                return new Page(Kind.STATS, msg("info_panel"), msg("reading_towns"), b, null, null);
             }
             List<net.townymap.api.EarthMcApiClient.TownRank> list = new ArrayList<>(ranks.values());
             String title, unit;
             if (filter == 2) {
                 list.sort((x, y) -> Double.compare(y.balance(), x.balance()));
-                title = "Richest towns"; unit = "";
+                title = msg("richest_towns"); unit = "";
             } else if (filter == 3) {
                 list.sort((x, y) -> Integer.compare(y.outlaws(), x.outlaws()));
-                title = "Towns by outlaws"; unit = "outlaws";
+                title = msg("towns_by_outlaws"); unit = label("outlaws");
             } else {
                 list.removeIf(r -> r.foundedMs() <= 0);
                 list.sort((x, y) -> Long.compare(x.foundedMs(), y.foundedMs()));
-                title = "Oldest towns"; unit = "";
+                title = msg("oldest_towns"); unit = "";
             }
             List<String[]> rows = new ArrayList<>();
             for (var r : list) {
@@ -466,18 +468,18 @@ public final class DetailPages {
                         : filter == 3 ? String.valueOf(r.outlaws())
                         : date(r.foundedMs())});
             }
-            b.add(new Cols(List.of(new Col("Towns", String.valueOf(ranks.size())))));
+            b.add(new Cols(List.of(new Col(label("towns"), String.valueOf(ranks.size())))));
             rankList(b, title, rows, unit, Kind.TOWN);
-            return new Page(Kind.STATS, "Info Panel", ranks.size() + " towns", b, null, null);
+            return new Page(Kind.STATS, msg("info_panel"), msg("town_count", ranks.size()), b, null, null);
         }
 
-        rankList(b, filter == 1 ? "Towns by chunks" : "Towns by residents",
+        rankList(b, msg(filter == 1 ? "towns_by_chunks" : "towns_by_residents"),
                 filter == 1 ? byChunks : byResidents,
-                filter == 1 ? "chunks" : "residents", Kind.TOWN);
+                label(filter == 1 ? "chunks" : "residents"), Kind.TOWN);
 
         String subtitle = api != null && api.isArchiveActive()
-                ? "From the loaded archive snapshot" : towns.size() + " towns";
-        return new Page(Kind.STATS, "Info Panel", subtitle, b, null, null);
+                ? msg("archive_snapshot") : msg("town_count", towns.size());
+        return new Page(Kind.STATS, msg("info_panel"), subtitle, b, null, null);
     }
 
     /** Top n rows of {name, value}, labelled "name - value" so the ranking is readable in the list. */
@@ -505,64 +507,64 @@ public final class DetailPages {
         List<DetailScreen.Block> b = new ArrayList<>();
 
         b.add(new Cols(List.of(
-                new Col("Mayor", t.mayor(), new Ref(Kind.PLAYER, t.mayor())),
-                new Col("Founded", date(t.registeredMs())),
-                new Col("Founder", t.founder().isBlank() ? "—" : t.founder(),
+                new Col(label("mayor"), t.mayor(), new Ref(Kind.PLAYER, t.mayor())),
+                new Col(label("founded"), date(t.registeredMs())),
+                new Col(label("founder"), t.founder().isBlank() ? "—" : t.founder(),
                         t.founder().isBlank() ? null : new Ref(Kind.PLAYER, t.founder())))));
 
         if (t.hasNation() && !t.nation().isBlank()) {
             b.add(new Cols(List.of(
-                    new Col("Nation", t.nation(), new Ref(Kind.NATION, t.nation())),
-                    new Col("Joined nation", ago(t.joinedNationAtMs())),
-                    new Col("Spawn", t.spawnX() + ", " + t.spawnY() + ", " + t.spawnZ()))));
+                    new Col(label("nation"), t.nation(), new Ref(Kind.NATION, t.nation())),
+                    new Col(label("joined_nation"), ago(t.joinedNationAtMs())),
+                    new Col(label("spawn"), t.spawnX() + ", " + t.spawnY() + ", " + t.spawnZ()))));
         } else {
             b.add(new Cols(List.of(
-                    new Col("Nation", "—"),
-                    new Col("Spawn", t.spawnX() + ", " + t.spawnY() + ", " + t.spawnZ()))));
+                    new Col(label("nation"), "—"),
+                    new Col(label("spawn"), t.spawnX() + ", " + t.spawnY() + ", " + t.spawnZ()))));
         }
         addAllianceBlocks(b, t.hasNation() ? t.nation() : "");
 
-        if (!t.board().isBlank()) b.add(new DetailScreen.Wide("Board", t.board()));
+        if (!t.board().isBlank()) b.add(new DetailScreen.Wide(label("board"), t.board()));
         b.add(new Rule());
 
         String size = t.numTownBlocks() + " / " + (t.maxTownBlocks() >= 0 ? t.maxTownBlocks() : "?")
                 + (t.bonusBlocks() > 0 ? "  (+" + t.bonusBlocks() + ")" : "");
         b.add(new Cols(List.of(
-                new Col("Size", size),
-                new Col("Bank", money(t.balance())),
-                new Col("Nation bonus", String.valueOf(t.nationBonus())))));
+                new Col(label("size"), size),
+                new Col(label("bank"), money(t.balance())),
+                new Col(label("nation_bonus"), String.valueOf(t.nationBonus())))));
         // No residents/trusted/outlawed counts here: the collapsible lists below already show them on
         // the right, and repeating them at the top just spent a row saying the same thing twice.
         if (t.isForSale() && t.forSalePrice() >= 0) {
-            b.add(new Cols(List.of(new Col("For sale", money(t.forSalePrice())))));
+            b.add(new Cols(List.of(new Col(label("for_sale"), money(t.forSalePrice())))));
         }
         b.add(overclaimCols(t));
         b.add(new Rule());
 
         b.add(chips(
-                "public", t.isPublic(), "open", t.isOpen(), "neutral", t.isNeutral(),
-                "capital", t.isCapital(), "overclaimed", t.isOverClaimed(), "ruined", t.isRuined(),
-                "for sale", t.isForSale(), "outsider spawn", t.canOutsidersSpawn(),
-                "pvp", t.pvp(), "explosions", t.explosion(), "fire", t.fire(), "mobs", t.mobs(),
-                "passive mobs", t.canPassiveMobsSpawn(), "snow", t.hasSnowAccumulation(),
-                "friendly fire", t.hasFriendlyFire()));
+                label("public"), t.isPublic(), label("open"), t.isOpen(), label("neutral"), t.isNeutral(),
+                label("capital"), t.isCapital(), label("overclaimed"), t.isOverClaimed(), label("ruined"), t.isRuined(),
+                label("for_sale"), t.isForSale(), label("outsider_spawn"), t.canOutsidersSpawn(),
+                label("pvp"), t.pvp(), label("explosions"), t.explosion(), label("fire"), t.fire(), label("mobs"), t.mobs(),
+                label("passive_mobs"), t.canPassiveMobsSpawn(), label("snow"), t.hasSnowAccumulation(),
+                label("friendly_fire"), t.hasFriendlyFire()));
 
-        addNames(b, "Residents", t.residents(), Kind.PLAYER);
-        addNames(b, "Trusted", t.trusted(), Kind.PLAYER);
-        addNames(b, "Outlawed", t.outlaws(), Kind.PLAYER);
-        if (!t.quarters().isEmpty()) b.add(new LineList("Quarters", t.quarters()));
+        addNames(b, label("residents"), t.residents(), Kind.PLAYER);
+        addNames(b, label("trusted"), t.trusted(), Kind.PLAYER);
+        addNames(b, label("outlawed"), t.outlaws(), Kind.PLAYER);
+        if (!t.quarters().isEmpty()) b.add(new LineList(label("quarters"), t.quarters()));
         if (!t.warps().isEmpty()) {
             List<String> w = new ArrayList<>();
             for (TownFullData.Warp warp : t.warps()) {
                 w.add(warp.name() + " — " + warp.access() + " — " + warp.x() + ", " + warp.y() + ", " + warp.z()
                         + (warp.createdBy().isBlank() ? "" : " (by " + warp.createdBy() + ")"));
             }
-            b.add(new LineList("Warps", w));
+            b.add(new LineList(label("warps"), w));
         }
         addRanks(b, t.occupiedRanks());
 
         String sub = t.hasNation() && !t.nation().isBlank()
-                ? (t.isCapital() ? "capital of " + t.nation() : t.nation()) : "no nation";
+                ? (t.isCapital() ? msg("capital_of", t.nation()) : t.nation()) : msg("no_nation");
         return new Page(Kind.TOWN, t.name(), sub, b, DiscordUrl.normalize(t.discord()), t.wiki());
     }
 
@@ -572,23 +574,23 @@ public final class DetailPages {
         List<DetailScreen.Block> b = new ArrayList<>();
 
         b.add(new Cols(List.of(
-                new Col("Mayor", orDash(t.mayor()), t.mayor() == null || t.mayor().isBlank() ? null : new Ref(Kind.PLAYER, t.mayor())),
-                new Col("Founded", orDash(t.founded())),
-                new Col("Chunks", String.valueOf(t.chunks())))));
+                new Col(label("mayor"), orDash(t.mayor()), t.mayor() == null || t.mayor().isBlank() ? null : new Ref(Kind.PLAYER, t.mayor())),
+                new Col(label("founded"), orDash(t.founded())),
+                new Col(label("chunks"), String.valueOf(t.chunks())))));
 
         if (t.nation() != null && !t.nation().isBlank()) {
             // No alliance/meganation rows here: that data is only available live, not for the archived date.
-            b.add(new Cols(List.of(new Col("Nation", t.nation(), new Ref(Kind.NATION, t.nation())))));
+            b.add(new Cols(List.of(new Col(label("nation"), t.nation(), new Ref(Kind.NATION, t.nation())))));
         }
-        if (t.board() != null && !t.board().isBlank()) b.add(new DetailScreen.Wide("Board", t.board()));
+        if (t.board() != null && !t.board().isBlank()) b.add(new DetailScreen.Wide(label("board"), t.board()));
         b.add(new Rule());
 
-        b.add(chips("public", t.isPublic(), "pvp", t.pvp()));
-        addNames(b, "Residents", t.residents(), Kind.PLAYER);
-        addNames(b, "Councillors", t.councillors(), Kind.PLAYER);
+        b.add(chips(label("public"), t.isPublic(), label("pvp"), t.pvp()));
+        addNames(b, label("residents"), t.residents(), Kind.PLAYER);
+        addNames(b, label("councillors"), t.councillors(), Kind.PLAYER);
 
-        String sub = (t.nation() == null || t.nation().isBlank()) ? "no nation"
-                : (t.capital() ? "capital of " + t.nation() : t.nation());
+        String sub = (t.nation() == null || t.nation().isBlank()) ? msg("no_nation")
+                : (t.capital() ? msg("capital_of", t.nation()) : t.nation());
         return new Page(Kind.TOWN, t.name(), sub, b, "", "");
     }
 
@@ -643,9 +645,9 @@ public final class DetailPages {
     public static Page archivePlayer(String name, String town, String nation, String role) {
         List<DetailScreen.Block> b = new ArrayList<>();
         List<Col> cols = new ArrayList<>();
-        cols.add(new Col("Town", orDash(town), town == null || town.isBlank() ? null : new Ref(Kind.TOWN, town)));
-        if (nation != null && !nation.isBlank()) cols.add(new Col("Nation", nation, new Ref(Kind.NATION, nation)));
-        cols.add(new Col("Rank", orDash(role)));
+        cols.add(new Col(label("town"), orDash(town), town == null || town.isBlank() ? null : new Ref(Kind.TOWN, town)));
+        if (nation != null && !nation.isBlank()) cols.add(new Col(label("nation"), nation, new Ref(Kind.NATION, nation)));
+        cols.add(new Col(label("rank"), orDash(role)));
         b.add(new Cols(cols));
         String sub = town == null || town.isBlank() ? "" : role.toLowerCase(java.util.Locale.ROOT) + " of " + town;
         return new Page(Kind.PLAYER, name, sub, b, "", "");
@@ -658,13 +660,13 @@ public final class DetailPages {
                                      List<String> residents, int chunks) {
         List<DetailScreen.Block> b = new ArrayList<>();
         b.add(new Cols(List.of(
-                new Col("Capital", orDash(capital), capital == null || capital.isBlank() ? null : new Ref(Kind.TOWN, capital)),
-                new Col("Towns", String.valueOf(towns.size())),
-                new Col("Residents", String.valueOf(residents.size())))));
-        b.add(new Cols(List.of(new Col("Chunks", String.valueOf(chunks)))));
+                new Col(label("capital"), orDash(capital), capital == null || capital.isBlank() ? null : new Ref(Kind.TOWN, capital)),
+                new Col(label("towns"), String.valueOf(towns.size())),
+                new Col(label("residents"), String.valueOf(residents.size())))));
+        b.add(new Cols(List.of(new Col(label("chunks"), String.valueOf(chunks)))));
         b.add(new Rule());
-        addNames(b, "Towns", towns, Kind.TOWN);
-        addNames(b, "Residents", residents, Kind.PLAYER);
+        addNames(b, label("towns"), towns, Kind.TOWN);
+        addNames(b, label("residents"), residents, Kind.PLAYER);
         return new Page(Kind.NATION, name, towns.size() + " towns", b, "", "");
     }
 
@@ -675,12 +677,12 @@ public final class DetailPages {
      * "no", since the date is the part worth acting on.
      */
     private static Cols overclaimCols(TownFullData t) {
-        return new Cols(List.of(Col.live("Overclaimable", () -> overclaimText(t))));
+        return new Cols(List.of(Col.live(label("overclaimable"), () -> overclaimText(t))));
     }
 
     private static String overclaimText(TownFullData t) {
-        if (t.maxTownBlocks() < 0) return "unknown";
-        if (t.numTownBlocks() > t.maxTownBlocks()) return "yes, now";
+        if (t.maxTownBlocks() < 0) return msg("unknown");
+        if (t.numTownBlocks() > t.maxTownBlocks()) return msg("yes_now");
 
         long now = System.currentTimeMillis();
         long soonest = Long.MAX_VALUE;
@@ -709,7 +711,7 @@ public final class DetailPages {
 
         if (soonest == Long.MAX_VALUE) return "no";
         int d = (int) Math.max(0, Math.ceil((soonest - now) / 86_400_000.0));
-        String when = d > 1 ? d + " days" : d == 1 ? "1 day" : "today";
+        String when = d > 1 ? msg("days", d) : d == 1 ? msg("one_day") : msg("today");
         return (date == null || date.isBlank() ? "" : date + ", ") + when;
     }
 
@@ -719,37 +721,37 @@ public final class DetailPages {
         List<DetailScreen.Block> b = new ArrayList<>();
 
         b.add(new Cols(List.of(
-                new Col("Town", p.hasTown() && !p.town().isBlank() ? p.town() : "—",
+                new Col(label("town"), p.hasTown() && !p.town().isBlank() ? p.town() : "—",
                         p.hasTown() && !p.town().isBlank() ? new Ref(Kind.TOWN, p.town()) : null),
-                new Col("Nation", p.hasNation() && !p.nation().isBlank() ? p.nation() : "—",
+                new Col(label("nation"), p.hasNation() && !p.nation().isBlank() ? p.nation() : "—",
                         p.hasNation() && !p.nation().isBlank() ? new Ref(Kind.NATION, p.nation()) : null),
-                new Col("Balance", money(p.balance())))));
+                new Col(label("balance"), money(p.balance())))));
 
         if (!p.formattedName().isBlank() && !p.formattedName().equals(p.name())) {
-            b.add(new DetailScreen.LegacyLine("Formatted name", miniToText(p.formattedName())));
+            b.add(new DetailScreen.LegacyLine(label("formatted_name"), miniToText(p.formattedName())));
         }
-        if (!p.about().isBlank()) b.add(new DetailScreen.Wide("About", p.about()));
+        if (!p.about().isBlank()) b.add(new DetailScreen.Wide(label("about"), p.about()));
         b.add(new Rule());
 
         b.add(new Cols(List.of(
-                new Col("Registered", date(p.registeredMs())),
-                new Col("Joined town", ago(p.joinedTownAtMs())),
-                new Col(p.isOnline() ? "Online" : "Last online",
-                        p.isOnline() ? "now" : ago(p.lastOnlineMs())))));
+                new Col(label("registered"), date(p.registeredMs())),
+                new Col(label("joined_town"), ago(p.joinedTownAtMs())),
+                new Col(label(p.isOnline() ? "online" : "last_online"),
+                        p.isOnline() ? msg("now") : ago(p.lastOnlineMs())))));
         b.add(new Rule());
 
-        b.add(chips("online", p.isOnline(), "mayor", p.isMayor(), "king", p.isKing(),
-                "has town", p.hasTown(), "has nation", p.hasNation(), "npc", p.isNPC()));
+        b.add(chips(label("online"), p.isOnline(), label("mayor"), p.isMayor(), label("king"), p.isKing(),
+                label("has_town"), p.hasTown(), label("has_nation"), p.hasNation(), label("npc"), p.isNPC()));
 
         if (!p.townRanks().isEmpty() || !p.nationRanks().isEmpty()) {
             List<String> r = new ArrayList<>();
-            if (!p.townRanks().isEmpty()) r.add("Town: " + String.join(", ", p.townRanks()));
-            if (!p.nationRanks().isEmpty()) r.add("Nation: " + String.join(", ", p.nationRanks()));
-            b.add(new LineList("Ranks", r));
+            if (!p.townRanks().isEmpty()) r.add(msg("town_value", String.join(", ", p.townRanks())));
+            if (!p.nationRanks().isEmpty()) r.add(msg("nation_value", String.join(", ", p.nationRanks())));
+            b.add(new LineList(label("ranks"), r));
         }
-        addNames(b, "Friends", p.friends(), Kind.PLAYER);
+        addNames(b, label("friends"), p.friends(), Kind.PLAYER);
 
-        String sub = p.hasTown() && !p.town().isBlank() ? p.town() : "townless";
+        String sub = p.hasTown() && !p.town().isBlank() ? p.town() : msg("townless");
         return new Page(Kind.PLAYER, p.name(), sub, b, "", "");
     }
 
@@ -759,35 +761,35 @@ public final class DetailPages {
         List<DetailScreen.Block> b = new ArrayList<>();
 
         b.add(new Cols(List.of(
-                new Col("King", n.king().isBlank() ? "—" : n.king(),
+                new Col(label("king"), n.king().isBlank() ? "—" : n.king(),
                         n.king().isBlank() ? null : new Ref(Kind.PLAYER, n.king())),
-                new Col("Capital", n.capital().isBlank() ? "—" : n.capital(),
+                new Col(label("capital"), n.capital().isBlank() ? "—" : n.capital(),
                         n.capital().isBlank() ? null : new Ref(Kind.TOWN, n.capital())),
-                new Col("Founded", date(n.registeredMs())))));
+                new Col(label("founded"), date(n.registeredMs())))));
 
-        if (!n.board().isBlank()) b.add(new DetailScreen.Wide("Board", n.board()));
+        if (!n.board().isBlank()) b.add(new DetailScreen.Wide(label("board"), n.board()));
         b.add(new Rule());
 
         b.add(new Cols(List.of(
-                new Col("Chunks", String.valueOf(n.numTownBlocks())),
-                new Col("Towns", String.valueOf(n.numTowns())),
-                new Col("Residents", String.valueOf(n.numResidents())))));
+                new Col(label("chunks"), String.valueOf(n.numTownBlocks())),
+                new Col(label("towns"), String.valueOf(n.numTowns())),
+                new Col(label("residents"), String.valueOf(n.numResidents())))));
         b.add(new Cols(List.of(
-                new Col("Bank", money(n.balance())),
+                new Col(label("bank"), money(n.balance())),
                 // Live: the projection is fetched asynchronously and may not exist yet when this page is
                 // built, and once it does the countdown has to keep moving while the panel stays open.
-                Col.live("Nation bonus", () -> bonusText(n.name(), n.nationBonus())),
-                new Col("Spawn", n.spawnX() + ", " + n.spawnY() + ", " + n.spawnZ()))));
+                Col.live(label("nation_bonus"), () -> bonusText(n.name(), n.nationBonus())),
+                new Col(label("spawn"), n.spawnX() + ", " + n.spawnY() + ", " + n.spawnZ()))));
         b.add(new Rule());
 
-        b.add(chips("public", n.isPublic(), "open", n.isOpen(), "neutral", n.isNeutral()));
+        b.add(chips(label("public"), n.isPublic(), label("open"), n.isOpen(), label("neutral"), n.isNeutral()));
 
-        addNames(b, "Towns", n.towns(), Kind.TOWN);
-        addNames(b, "Allies", n.allies(), Kind.NATION);
-        addNames(b, "Enemies", n.enemies(), Kind.NATION);
-        addNames(b, "Sanctioned", n.sanctioned(), Kind.NATION);
-        addNames(b, "Outlaws", n.outlaws(), Kind.PLAYER);
-        addNames(b, "Residents", n.residents(), Kind.PLAYER);
+        addNames(b, label("towns"), n.towns(), Kind.TOWN);
+        addNames(b, label("allies"), n.allies(), Kind.NATION);
+        addNames(b, label("enemies"), n.enemies(), Kind.NATION);
+        addNames(b, label("sanctioned"), n.sanctioned(), Kind.NATION);
+        addNames(b, label("outlaws"), n.outlaws(), Kind.PLAYER);
+        addNames(b, label("residents"), n.residents(), Kind.PLAYER);
         // Blocs sit with the other collapsible lists rather than up in the summary rows.
         addAllianceBlocks(b, n.name());
         addRanks(b, n.occupiedRanks());
@@ -808,12 +810,12 @@ public final class DetailPages {
                 p.add(new DetailScreen.RefLine(
                         new Ref(Kind.NATION, pact.other(n.name())), terms));
             }
-            b.add(new DetailScreen.RefLineList("Pacts", p));
+            b.add(new DetailScreen.RefLineList(label("pacts"), p));
         }
         List<String> emb = new ArrayList<>();
-        for (String e : n.embargoesOwn()) emb.add("against " + e);
-        for (String e : n.embargoesAgainst()) emb.add("from " + e);
-        if (!emb.isEmpty()) b.add(new LineList("Embargoes", emb));
+        for (String e : n.embargoesOwn()) emb.add(msg("against", e));
+        for (String e : n.embargoesAgainst()) emb.add(msg("from", e));
+        if (!emb.isEmpty()) b.add(new LineList(label("embargoes"), emb));
 
         return new Page(Kind.NATION, n.name(), n.numTowns() + " towns", b,
                 DiscordUrl.normalize(n.discord()), n.wiki());
@@ -849,7 +851,7 @@ public final class DetailPages {
         List<DetailScreen.RankGroup> groups = new ArrayList<>();
         ranks.forEach((rank, holders) -> groups.add(
                 new DetailScreen.RankGroup(rank, refs(holders, Kind.PLAYER))));
-        b.add(new DetailScreen.RankList("Ranks", groups));
+        b.add(new DetailScreen.RankList(label("ranks"), groups));
     }
 
     /** chips("label", state, "label", state, …) */

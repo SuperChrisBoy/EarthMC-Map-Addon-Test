@@ -36,13 +36,13 @@ public final class MapToggleOverlay {
         Font tr = Minecraft.getInstance().font;
         int y = togglesTop(sh);
 
-        drawToggle(ctx, tr, 0, y, squaremapLoading ? "Squaremap..." : "Squaremap", config.squaremapOnWorldMap());
-        drawMode(ctx, tr, 1, y, bordersLoading ? "Borders..." : "Borders", borderModeLabel(config.borderOverlayMode),
+        drawToggle(ctx, tr, 0, y, tr(squaremapLoading ? "squaremap_loading" : "squaremap"), config.squaremapOnWorldMap());
+        drawMode(ctx, tr, 1, y, tr(bordersLoading ? "borders_loading" : "borders"), borderModeLabel(config.borderOverlayMode),
                 config.borderOverlayMode != 0);
-        drawMode(ctx, tr, 2, y, "Map", statusModeLabel(config.townStatusOverlayMode),
+        drawMode(ctx, tr, 2, y, tr("map"), statusModeLabel(config.townStatusOverlayMode),
                 config.townStatusOverlayMode != 0);
-        drawToggle(ctx, tr, 3, y, "Chunks", config.chunkGridEnabled);
-        drawMode(ctx, tr, 4, y, "Counter", ChunkCounterOverlay.toolbarLabel(config), config.chunkCounterEnabled);
+        drawToggle(ctx, tr, 3, y, tr("chunks"), config.chunkGridEnabled);
+        drawMode(ctx, tr, 4, y, tr("counter"), ChunkCounterOverlay.toolbarLabel(config), config.chunkCounterEnabled);
         if (config.chunkCounterEnabled) {
             if (ChunkCounterOverlay.isMultiMode(config)) {
                 drawCounterGroupButtons(ctx, tr, config);
@@ -51,9 +51,9 @@ public final class MapToggleOverlay {
         }
 
         drawSettingsButton(ctx, tr, settingsTop(sh));
-        if(config.teleportViewerEnabled)drawTexturedButton(ctx,LEFT,teleportTop(sh),WIDTH,HEIGHT,Component.translatable(TownyMapMod.teleportTargetArmed()?"townymapaddon.teleport.toggle.on":"townymapaddon.teleport.title").getString(),true,TownyMapMod.teleportTargetArmed()?0xFF7EE2B8:0xFFFFFFFF);
+        if(config.teleportViewerEnabled)drawTexturedButton(ctx,LEFT,teleportTop(sh),WIDTH,HEIGHT,Component.translatable("townymapaddon.teleport.title").getString(),true,0xFF7EE2B8);
         drawTexturedButton(ctx, LEFT, hunterTop(sh), WIDTH, HEIGHT, net.minecraft.network.chat.Component.translatable("townymapaddon.hunter.watch.title").getString(), true, 0xFFFFB45C);
-        drawTexturedButton(ctx, LEFT+WIDTH+3, hunterTop(sh), 26, HEIGHT, "Log", true, 0xFF9FD7FF);
+        drawTexturedButton(ctx, LEFT+WIDTH+3, hunterTop(sh), 26, HEIGHT, tr("log"), true, 0xFF9FD7FF);
         } finally {
             if (scaled) UiScale.pop(ctx);
         }
@@ -138,7 +138,8 @@ public final class MapToggleOverlay {
         int x = LEFT;
         int y = baseY + row * (HEIGHT + GAP);
         int text = enabled ? 0xFFFFFFFF : 0xFFBDBDBD;
-        String label = name + ": " + (enabled ? "ON" : "OFF");
+        String label = Component.translatable("townymapaddon.map_controls.named_value", name,
+                Component.translatable(enabled ? "options.on" : "options.off")).getString();
 
         drawTexturedButton(ctx, x, y, WIDTH, HEIGHT, label, true, text);
         ctx.fill(x + 2, y + 3, x + 5, y + HEIGHT - 3, enabled ? 0xFF67D76B : 0xFF606060);
@@ -149,7 +150,7 @@ public final class MapToggleOverlay {
         int x = LEFT;
         int y = baseY + row * (HEIGHT + GAP);
         int text = enabled ? 0xFFFFFFFF : 0xFFBDBDBD;
-        String label = name + ": " + mode;
+        String label = Component.translatable("townymapaddon.map_controls.named_value", name, mode).getString();
 
         drawTexturedButton(ctx, x, y, WIDTH, HEIGHT, label, true, text);
         ctx.fill(x + 2, y + 3, x + 5, y + HEIGHT - 3, enabled ? 0xFF67D76B : 0xFF606060);
@@ -178,14 +179,14 @@ public final class MapToggleOverlay {
     private static int hunterTop(int sh) { return teleportTop(sh) + HEIGHT + GAP; }
 
     private static void drawSettingsButton(GuiGraphicsExtractor ctx, Font tr, int y) {
-        String label = "⚙ Settings";
+        String label = Component.translatable("townymapaddon.map_controls.settings").getString();
         drawTexturedButton(ctx, LEFT, y, WIDTH, HEIGHT, label, true, 0xFFCCCCCC);
     }
 
     private static void drawCounterResetButton(GuiGraphicsExtractor ctx, Font tr, int baseY) {
         int x = LEFT + WIDTH + RESET_GAP;
         int y = baseY + 4 * (HEIGHT + GAP);
-        drawTexturedButton(ctx, x, y, RESET_WIDTH, HEIGHT, "Reset", true, 0xFFFF5555);
+        drawTexturedButton(ctx, x, y, RESET_WIDTH, HEIGHT, Component.translatable("townymapaddon.common.reset").getString(), true, 0xFFFF5555);
     }
 
     private static void drawCounterGroupButtons(GuiGraphicsExtractor ctx, Font tr, TownyMapConfig config) {
@@ -208,7 +209,7 @@ public final class MapToggleOverlay {
         // Fill: count/shade any area fully enclosed by the selection (draw an outline, get the inside).
         boolean fillOn = ChunkCounterOverlay.isFillEnclosed(config);
         int fx = counterFillX(config);
-        drawTexturedButton(ctx, fx, y, FILL_WIDTH, HEIGHT, "Fill", true,
+        drawTexturedButton(ctx, fx, y, FILL_WIDTH, HEIGHT, tr("fill"), true,
                 fillOn ? 0xFFFFFFFF : 0xFFBDBDBD);
         ctx.fill(fx + 2, y + HEIGHT - 4, fx + FILL_WIDTH - 2, y + HEIGHT - 2,
                 fillOn ? 0xFF67D76B : 0xFF606060);
@@ -290,23 +291,14 @@ public final class MapToggleOverlay {
     }
 
     private static String borderModeLabel(int mode) {
-        return switch (mode) {
-            case 1 -> "Countries";
-            case 2 -> "States";
-            default -> "OFF";
-        };
+        return tr(switch (mode) { case 1 -> "countries"; case 2 -> "states"; default -> "off"; });
     }
 
     private static String statusModeLabel(int mode) {
-        return switch (mode) {
-            case 1 -> "Public";
-            case 2 -> "Overclaim";
-            case 3 -> "Open";
-            case 4 -> "Meganations";
-            case 5 -> "Alliances";
-            case 6 -> "Planning";
-            default -> "None";
-        };
+        return tr(switch (mode) { case 1 -> "public"; case 2 -> "overclaim"; case 3 -> "open";
+            case 4 -> "meganations"; case 5 -> "alliances"; case 6 -> "planning"; default -> "none"; });
     }
+
+    private static String tr(String id) { return Component.translatable("townymapaddon.map_controls." + id).getString(); }
 
 }

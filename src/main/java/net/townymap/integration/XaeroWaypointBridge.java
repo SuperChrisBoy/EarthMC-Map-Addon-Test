@@ -16,6 +16,7 @@ import java.util.List;
 public final class XaeroWaypointBridge {
 
     private static final String ROUTE_PREFIX = "TM: ";
+    private static final List<Waypoint> TELEPORT_VIEWER_WAYPOINTS = new ArrayList<>();
 
     private XaeroWaypointBridge() {
     }
@@ -59,8 +60,9 @@ public final class XaeroWaypointBridge {
     }
     public static boolean createTeleportWaypoint(String label,int x,int y,int z){
         WaypointSet set=currentWaypointSet();Minecraft client=Minecraft.getInstance();if(set==null||client==null||client.player==null)return false;
-        double scale=net.townymap.TownyMapMod.dimensionCoordinateScale();Waypoint waypoint=new Waypoint((int)Math.round(x/scale),y<=0?client.player.getBlockY():y,(int)Math.round(z/scale),cleanLabel(label),symbol(label),WaypointColor.PURPLE,WaypointPurpose.NORMAL,true,y>0);set.add(waypoint,true);touch();return true;
+        double scale=net.townymap.TownyMapMod.dimensionCoordinateScale();Waypoint waypoint=new Waypoint((int)Math.round(x/scale),y<=0?client.player.getBlockY():y,(int)Math.round(z/scale),cleanLabel(label),symbol(label),WaypointColor.PURPLE,WaypointPurpose.NORMAL,true,y>0);set.add(waypoint,true);TELEPORT_VIEWER_WAYPOINTS.add(waypoint);touch();return true;
     }
+    public static boolean removeTeleportWaypoints(){WaypointSet set=currentWaypointSet();if(set==null)return false;boolean removed=false;for(Waypoint waypoint:List.copyOf(TELEPORT_VIEWER_WAYPOINTS)){try{set.remove(waypoint);removed=true;}catch(RuntimeException ignored){}}TELEPORT_VIEWER_WAYPOINTS.clear();if(removed)touch();return removed;}
 
     /**
      * Adds one temporary shop waypoint. The coordinates are literal in-world positions in the

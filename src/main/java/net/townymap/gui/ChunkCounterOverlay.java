@@ -71,7 +71,7 @@ public final class ChunkCounterOverlay {
     }
 
     public static String toolbarLabel(TownyMapConfig config) {
-        if (config == null || !config.chunkCounterEnabled) return "OFF";
+        if (config == null || !config.chunkCounterEnabled) return net.minecraft.network.chat.Component.translatable("townymapaddon.map_controls.off").getString();
         return activeGroupLabel(config) + " " + effectiveChunks(activeSelection(config)).size();
     }
 

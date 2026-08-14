@@ -5,10 +5,12 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "CycleButtonAccessor",
+    "MixinBossHealthOverlay",
     "MixinCommonMinimapRenderer",
     "MixinGuiMap",
     "MixinInfoDisplayRenderer",
     "MixinMinimapModuleRenderer",
+    "MixinScreen",
     "MixinWaypointMapRenderer"
   ],
   "injectors": {

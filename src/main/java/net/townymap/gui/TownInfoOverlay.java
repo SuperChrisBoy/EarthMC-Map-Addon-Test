@@ -244,7 +244,7 @@ public final class TownInfoOverlay {
         if (d == null) return lines;
 
         if (d == TownPopupData.WILDERNESS) {
-            lines.add(InfoRow.text("§aWilderness"));
+            lines.add(InfoRow.text(Component.translatable("townymapaddon.town_popup.wilderness").getString()));
             return lines;
         }
 
@@ -253,7 +253,7 @@ public final class TownInfoOverlay {
         if (d.nationName().isEmpty()) {
             lines.add(InfoRow.text("§f§l" + d.townName()));
         } else {
-            String capPrefix = isNationCapital(d, nationDetails) ? "Capital of " : "";
+            String capPrefix = isNationCapital(d, nationDetails) ? Component.translatable("townymapaddon.town_popup.capital_of").getString() : "";
             lines.add(InfoRow.link("§f§l" + d.townName() + " §7§l(" + capPrefix, d.nationName(), "§7§l)", "nation"));
         }
 
@@ -273,35 +273,35 @@ public final class TownInfoOverlay {
         boolean archive = TownyMapMod.isArchiveMode();
 
         // Mayor name → clickable player search.
-        lines.add(InfoRow.link("§7Mayor: §f§l", d.mayor(), "", "player"));
+        lines.add(InfoRow.link(Component.translatable("townymapaddon.town_popup.mayor").getString(), d.mayor(), "", "player"));
         // "claimed / max chunks" using EarthMC's own claim max (stats.maxTownBlocks), which already
         // accounts for residents + bonus blocks + nation bonus. Over-limit is highlighted in red.
         if (archive) {
             // The archive has no claim limit, but the claimed count is derived from the snapshot's claim polygon.
-            lines.add(InfoRow.text("§7Size: §f§l" + d.numChunks() + " chunks"));
+            lines.add(InfoRow.text(Component.translatable("townymapaddon.town_popup.size", d.numChunks()).getString()));
         } else if (d.maxChunks() > 0) {
             boolean overLimit = d.isOverClaimed() || d.numChunks() > d.maxChunks();
             String sizeColor = overLimit ? "§c§l" : "§f§l";
-            lines.add(InfoRow.text("§7Size: " + sizeColor + d.numChunks() + " / " + d.maxChunks() + " chunks"));
+            lines.add(InfoRow.text(Component.translatable("townymapaddon.town_popup.size_limit", sizeColor, d.numChunks(), d.maxChunks()).getString()));
         } else {
-            lines.add(InfoRow.text("§7Size: §f§l" + d.numChunks() + " chunks"));
+            lines.add(InfoRow.text(Component.translatable("townymapaddon.town_popup.size", d.numChunks()).getString()));
         }
         if (!d.founded().isEmpty()) {
-            lines.add(InfoRow.text("§7Founded: §f§l" + d.founded()));
+            lines.add(InfoRow.text(Component.translatable("townymapaddon.town_popup.founded", d.founded()).getString()));
         }
         if (archive) {
-            lines.add(InfoRow.text("§7PVP: §f§l"   + (d.pvp() ? "Yes" : "No")));   // archive records PVP, not Open
+            lines.add(InfoRow.text(Component.translatable("townymapaddon.town_popup.pvp", Component.translatable(d.pvp() ? "townymapaddon.common.yes" : "townymapaddon.common.no")).getString()));
         } else {
-            lines.add(InfoRow.text("§7Open: §f§l"  + (d.isOpen() ? "Yes" : "No")));
+            lines.add(InfoRow.text(Component.translatable("townymapaddon.town_popup.open", Component.translatable(d.isOpen() ? "townymapaddon.common.yes" : "townymapaddon.common.no")).getString()));
         }
-        lines.add(InfoRow.text("§7Public: §f§l"    + (d.isPublic() ? "Yes" : "No")));
-        String residentsLine = "§7Residents: §f§l" + d.residentCount();
+        lines.add(InfoRow.text(Component.translatable("townymapaddon.town_popup.public", Component.translatable(d.isPublic() ? "townymapaddon.common.yes" : "townymapaddon.common.no")).getString()));
+        String residentsLine = Component.translatable("townymapaddon.town_popup.residents", d.residentCount()).getString();
         if (d.activeResidentCount() >= 0 && d.activeResidentCount() < d.residentCount()) {
-            residentsLine += " §8(" + (d.residentCount() - d.activeResidentCount()) + " Inactive)";
+            residentsLine += Component.translatable("townymapaddon.town_popup.inactive", d.residentCount() - d.activeResidentCount()).getString();
         }
         lines.add(InfoRow.text(residentsLine));
         if (!archive) {
-            lines.add(InfoRow.text("§7Gold: §f§l"  + formatGold(d.balance())));
+            lines.add(InfoRow.text(Component.translatable("townymapaddon.town_popup.gold", formatGold(d.balance())).getString()));
         }
 
         return lines;
@@ -428,8 +428,8 @@ public final class TownInfoOverlay {
         // "Expand" replaces the old Discord button: the popup can only show a handful of fields, and the
         // full panel carries the Discord link itself. Always enabled — unlike Discord, every town has
         // something to show. Mouse coords are in the popup's local (scaled) space so hover matches.
-        drawButton(ctx, tr, discordX1, discordY1, discordX2, discordY2, "Expand", true, mouseX, mouseY);
-        drawButton(ctx, tr, routeX1, routeY1, routeX2, routeY2, "Route", true, mouseX, mouseY);
+        drawButton(ctx, tr, discordX1, discordY1, discordX2, discordY2, Component.translatable("townymapaddon.town_popup.expand").getString(), true, mouseX, mouseY);
+        drawButton(ctx, tr, routeX1, routeY1, routeX2, routeY2, Component.translatable("townymapaddon.town_popup.route").getString(), true, mouseX, mouseY);
     }
 
     private static void drawButton(GuiGraphicsExtractor ctx, Font tr, int x1, int y1, int x2, int y2,

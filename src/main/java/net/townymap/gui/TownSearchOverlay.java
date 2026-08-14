@@ -205,7 +205,7 @@ public final class TownSearchOverlay {
             ctx.fill(rx, by - i, rx + 1, by - i + 1, gc);
         }
 
-        String display = query.isEmpty() && !focused ? "Search towns/nations/players" : query;
+        String display = query.isEmpty() && !focused ? tr("hint") : query;
         int color = query.isEmpty() && !focused ? 0xFFAAAAAA : 0xFFFFFFFF;
         int textLeft = x + 7;
         if (focused && hasSelection()) {   // drag / Ctrl+A selection highlight behind the text
@@ -634,7 +634,7 @@ public final class TownSearchOverlay {
         // A dd/mm/yyyy query is an archive request: load the Wayback snapshot nearest that date.
         int archiveDate = parseArchiveDate(query.trim());
         if (archiveDate > 0) {
-            return List.of(new Result("View archive: " + archiveDateLabel(archiveDate),
+            return List.of(new Result(Component.translatable("townymapaddon.search.archive", archiveDateLabel(archiveDate)).getString(),
                     null, 0, "archive", String.valueOf(archiveDate)));
         }
         // Filter query ("nationless", "residents>20", "chunks<10", "nation:Germany") — searches by property
@@ -681,7 +681,7 @@ public final class TownSearchOverlay {
         for (TownData town : towns) {
             String lowerName = town.name().toLowerCase(Locale.ROOT);
             if (lowerName.contains(needle)) {
-                townMatches.add(new Result("Town: " + town.name(),
+                townMatches.add(new Result(Component.translatable("townymapaddon.search.town", town.name()).getString(),
                         new MapJumpTarget(town.name(), town.centerX(), town.centerZ()),
                         score(town.name(), needle), "town", town.name()));
             }
@@ -696,10 +696,10 @@ public final class TownSearchOverlay {
             if (!lowerName.contains(needle)) continue;
 
             EarthMcNationData details = nationDetails.get(lowerName);
-            String suffix = details == null ? "Checking" : capitalLabel(details);
+            String suffix = details == null ? tr("checking") : capitalLabel(details);
             String allianceTag = TownyMapMod.allianceTagForNation(nation.name());
             if (!allianceTag.isEmpty()) suffix += " · " + allianceTag;
-            nationMatches.add(new Result("Nation: " + nation.name() + " (" + suffix + ")",
+            nationMatches.add(new Result(Component.translatable("townymapaddon.search.nation", nation.name(), suffix).getString(),
                     nationTarget(nation.name(), details, townIndex),
                     score(nation.name(), needle), "nation", nation.name()));
         }
@@ -717,14 +717,14 @@ public final class TownSearchOverlay {
             String status = playerStatus(details, marker);
             PlayerHistoryEntry history = playerHistory.get(lowerName);
             MapJumpTarget target = playerTarget(player.name(), marker, details, history, townIndex);
-            playerMatches.add(new Result("Player: " + player.name() + " (" + status + ")",
+            playerMatches.add(new Result(Component.translatable("townymapaddon.search.player", player.name(), status).getString(),
                     target, score(player.name(), needle), "player", player.name()));
         }
         for (PlayerMarker player : players) {
             String lowerName = player.name().toLowerCase(Locale.ROOT);
             if (lowerName.contains(needle)
                     && !apiPlayerNames.contains(lowerName)) {
-                playerMatches.add(new Result("Player: " + player.name() + " (Online)",
+                playerMatches.add(new Result(Component.translatable("townymapaddon.search.player", player.name(), tr("online")).getString(),
                         new MapJumpTarget(player.name(), player.x(), player.z()),
                         score(player.name(), needle), "player", player.name()));
             }
@@ -736,7 +736,7 @@ public final class TownSearchOverlay {
             if (markerIndex.containsKey(lowerName)) continue;
             PlayerMarker marker = markerIndex.get(lowerName);
             PlayerHistoryEntry history = playerHistory.get(lowerName);
-            playerMatches.add(new Result("Player: " + player.name() + " (" + playerStatus(player, marker) + ")",
+            playerMatches.add(new Result(Component.translatable("townymapaddon.search.player", player.name(), playerStatus(player, marker)).getString(),
                     playerTarget(player.name(), marker, player, history, townIndex),
                     score(player.name(), needle), "player", player.name()));
         }
@@ -746,7 +746,7 @@ public final class TownSearchOverlay {
             if (apiPlayerNames.contains(lowerName)) continue;
             if (markerIndex.containsKey(lowerName)) continue;
             if (playerDetailNames.contains(lowerName)) continue;
-            playerMatches.add(new Result("Player: " + history.name() + " (Last seen)",
+            playerMatches.add(new Result(Component.translatable("townymapaddon.search.player", history.name(), tr("last_seen")).getString(),
                     new MapJumpTarget(history.name(), history.x(), history.z()),
                     score(history.name(), needle), "player", history.name()));
         }
@@ -756,7 +756,7 @@ public final class TownSearchOverlay {
                 && playerMatches.stream().noneMatch(r -> r.name().equalsIgnoreCase(exact))
                 && !apiPlayerNames.contains(exactKey)
                 && !markerIndex.containsKey(exactKey)) {
-            playerMatches.add(new Result("Player: " + exact + " (Checking)",
+            playerMatches.add(new Result(Component.translatable("townymapaddon.search.player", exact, tr("checking")).getString(),
                     null, score(exact, needle), "player", exact));
         }
         playerMatches.sort(byScore);
@@ -808,10 +808,17 @@ public final class TownSearchOverlay {
     }
 
     private static String playerStatus(EarthMcPlayerData details, PlayerMarker marker) {
-        if (marker != null) return "Online";
-        if (details == null) return "Checking";
-        if (details.online()) return "Hidden";
-        return "Offline";
+        if (marker != null) return tr("online");
+        if (details == null) return tr("checking");
+        if (details.online()) return tr("hidden");
+        return tr("offline");
+    }
+
+    private static String tr(String id) {
+        return Component.translatable("townymapaddon.search." + id).getString();
+    }
+    private static String info(String id, Object... args) {
+        return Component.translatable("townymapaddon.search.info." + id, args).getString();
     }
 
     private static MapJumpTarget playerTarget(String name, PlayerMarker marker,
@@ -841,8 +848,8 @@ public final class TownSearchOverlay {
     }
 
     private static String capitalLabel(EarthMcNationData details) {
-        if (details == null || details.capitalName().isBlank()) return "No capital";
-        return "Capital: " + details.capitalName();
+        if (details == null || details.capitalName().isBlank()) return tr("no_capital");
+        return Component.translatable("townymapaddon.search.capital", details.capitalName()).getString();
     }
 
     /** Parses a dd/mm/yyyy date (lenient) to yyyymmdd, or 0 if invalid / before MIN_DATE. Public so the
@@ -1077,7 +1084,7 @@ public final class TownSearchOverlay {
             if (on) ctx.fill(infoRangeX + d / 2 - 1, infoRangeY + d / 2 - 1,
                              infoRangeX + d / 2 + 1, infoRangeY + d / 2 + 1, ring);
             if (hov) {   // left of the ring, so it never runs off the screen edge
-                pendingTipText = "Nation Range";
+                pendingTipText = tr("nation_range");
                 pendingTipX = (infoStarVisible ? infoStarX : infoRangeX) - 4;
                 pendingTipY = infoRangeY + 3;
             }
@@ -1092,7 +1099,7 @@ public final class TownSearchOverlay {
             int swid = tr.width(star);
             ctx.text(tr, star, infoStarX + (starD - swid) / 2, infoStarY + 3, col, false);
             if (hov) {
-                pendingTipText = on ? "Unfavourite" : "Favourite";
+                pendingTipText = tr(on ? "unfavourite" : "favourite");
                 pendingTipX = infoStarX - 4;
                 pendingTipY = infoStarY + 3;
             }
@@ -1127,7 +1134,7 @@ public final class TownSearchOverlay {
                 infoDiscordH = ROW_HEIGHT;
                 infoDiscordVisible = true;
                 infoDiscordUrl = discordUrl;
-                drawPanelButton(ctx, infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH, "Discord");
+                drawPanelButton(ctx, infoDiscordX, infoDiscordY, infoDiscordW, infoDiscordH, tr("discord"));
                 bx += btnW + gap;
             }
             if (showExpand) {
@@ -1136,7 +1143,7 @@ public final class TownSearchOverlay {
                 infoExpandW = btnW;
                 infoExpandH = ROW_HEIGHT;
                 infoExpandVisible = true;
-                drawPanelButton(ctx, infoExpandX, infoExpandY, infoExpandW, infoExpandH, "Expand");
+                drawPanelButton(ctx, infoExpandX, infoExpandY, infoExpandW, infoExpandH, tr("expand"));
             }
         }
         // Hover labels last, so nothing in the panel can paint over them.
@@ -1191,30 +1198,30 @@ public final class TownSearchOverlay {
         if ("nation".equals(selectedType)) {
             EarthMcNationData details = nationDetails.get(selectedName.toLowerCase(Locale.ROOT));
             ArrayList<InfoRow> lines = new ArrayList<>();
-            lines.add(InfoRow.text("§f§lNation: " + selectedName));
+            lines.add(InfoRow.text(info("nation_title", selectedName)));
             if (details == null) {
-                lines.add(InfoRow.text("§7Details: §fChecking..."));
+                lines.add(InfoRow.text(info("checking")));
                 return List.copyOf(lines);
             }
             boolean archive = TownyMapMod.isArchiveMode();
-            if (!details.capitalName().isBlank()) lines.add(InfoRow.link("§7Capital: §f", details.capitalName(), "town"));
+            if (!details.capitalName().isBlank()) lines.add(InfoRow.link(tr("capital_prefix"), details.capitalName(), "town"));
             if (!archive) {   // alliance/meganation membership is only known live, not for the archived date
                 // One row per bloc, each a link straight into that bloc's own panel.
                 for (String mega : TownyMapMod.meganationsForNation(selectedName)) {
-                    lines.add(InfoRow.link("§7Meganation: §f", mega, "alliance"));
+                    lines.add(InfoRow.link(tr("meganation_prefix"), mega, "alliance"));
                 }
                 for (String alli : TownyMapMod.alliancesForNation(selectedName)) {
-                    lines.add(InfoRow.link("§7Alliance: §f", alli, "alliance"));
+                    lines.add(InfoRow.link(tr("alliance_prefix"), alli, "alliance"));
                 }
             }
-            if (!details.kingName().isBlank()) lines.add(InfoRow.link("§7King: §f", details.kingName(), "player"));
-            if (!details.founded().isBlank()) lines.add(InfoRow.text("§7Founded: §f" + details.founded()));
-            if (details.townCount() > 0) lines.add(InfoRow.text("§7Towns: §f" + details.townCount()));
+            if (!details.kingName().isBlank()) lines.add(InfoRow.link(tr("leader_prefix"), details.kingName(), "player"));
+            if (!details.founded().isBlank()) lines.add(InfoRow.text(info("founded", details.founded())));
+            if (details.townCount() > 0) lines.add(InfoRow.text(info("towns", details.townCount())));
             if (details.residentCount() > 0) {
                 String inactive = details.activeResidentCount() >= 0
                         && details.activeResidentCount() < details.residentCount()
                         ? " §8(" + (details.residentCount() - details.activeResidentCount()) + " Inactive)" : "";
-                lines.add(InfoRow.text("§7Residents: §f" + details.residentCount() + inactive));
+                lines.add(InfoRow.text(info("residents", details.residentCount(), inactive)));
                 // Nation bonus on its own row, with a projection of the next level drop when known.
                 // EarthMC computes the bonus on ACTIVE residents (inactive members are still counted in
                 // residentCount but don't earn bonus), so use its authoritative stats.nationBonus — the
@@ -1237,10 +1244,10 @@ public final class TownSearchOverlay {
                     lines.add(InfoRow.text(bonusLine));
                 }
             }
-            if (details.chunkCount() > 0) lines.add(InfoRow.text("§7Chunks: §f" + details.chunkCount()));
-            if (!archive) lines.add(InfoRow.text("§7Gold: §f" + formatGold(details.balance())));
-            if (details.outlawCount() > 0) lines.add(InfoRow.text("§7Outlaws: §f" + details.outlawCount()));
-            if (details.enemyCount() > 0) lines.add(InfoRow.text("§7Enemies: §f" + details.enemyCount()));
+            if (details.chunkCount() > 0) lines.add(InfoRow.text(info("chunks", details.chunkCount())));
+            if (!archive) lines.add(InfoRow.text(info("gold", formatGold(details.balance()))));
+            if (details.outlawCount() > 0) lines.add(InfoRow.text(info("outlaws", details.outlawCount())));
+            if (details.enemyCount() > 0) lines.add(InfoRow.text(info("enemies", details.enemyCount())));
             return List.copyOf(lines);
         }
         if (!"player".equals(selectedType)) return List.of();
@@ -1249,14 +1256,14 @@ public final class TownSearchOverlay {
         // Nothing live (status, last seen, gold, last online…) is shown.
         if (TownyMapMod.isArchiveMode()) {
             ArrayList<InfoRow> lines = new ArrayList<>();
-            lines.add(InfoRow.text("§f§lPlayer: " + selectedName));
+            lines.add(InfoRow.text(info("player_title", selectedName)));
             TownyMapMod.ArchivePlayerInfo info = TownyMapMod.archivePlayerInfo(selectedName);
             if (info == null) {
-                lines.add(InfoRow.text("§7Not in this snapshot"));
+                lines.add(InfoRow.text(info("not_in_snapshot")));
             } else {
-                lines.add(InfoRow.link("§7Town: §f", info.town(), "town"));
-                if (!info.nation().isBlank()) lines.add(InfoRow.link("§7Nation: §f", info.nation(), "nation"));
-                lines.add(InfoRow.text("§7Rank: §f" + info.role()));
+                lines.add(InfoRow.link(tr("town_prefix"), info.town(), "town"));
+                if (!info.nation().isBlank()) lines.add(InfoRow.link(tr("nation_prefix"), info.nation(), "nation"));
+                lines.add(InfoRow.text(info("rank", info.role())));
             }
             return List.copyOf(lines);
         }
@@ -1267,35 +1274,34 @@ public final class TownSearchOverlay {
         String status = playerStatus(details, marker);
 
         ArrayList<InfoRow> lines = new ArrayList<>();
-        lines.add(InfoRow.text("§f§lPlayer: " + selectedName));
-        lines.add(InfoRow.text("§7Status: §f" + status));
-        if (marker != null) lines.add(InfoRow.text("§7Location: §f" + marker.x() + ", " + marker.z()));
+        lines.add(InfoRow.text(info("player_title", selectedName)));
+        lines.add(InfoRow.text(info("status", status)));
+        if (marker != null) lines.add(InfoRow.text(info("location", marker.x(), marker.z())));
         else if (history != null) {
-            lines.add(InfoRow.text("§7Last seen: §f" + history.x() + ", " + history.z()));
-            lines.add(InfoRow.text("§7On map: §f" + dateWithAgo(history.lastSeenMs())));
+            lines.add(InfoRow.text(info("last_seen", history.x(), history.z())));
+            lines.add(InfoRow.text(info("on_map", dateWithAgo(history.lastSeenMs()))));
         }
         if (details == null) {
-            lines.add(InfoRow.text("§7Details: §fChecking..."));
+            lines.add(InfoRow.text(info("checking")));
             return List.copyOf(lines);
         }
-        if (!details.townName().isBlank()) lines.add(InfoRow.link("§7Town: §f", details.townName(), "town"));
-        if (!details.nationName().isBlank()) lines.add(InfoRow.link("§7Nation: §f", details.nationName(), "nation"));
+        if (!details.townName().isBlank()) lines.add(InfoRow.link(tr("town_prefix"), details.townName(), "town"));
+        if (!details.nationName().isBlank()) lines.add(InfoRow.link(tr("nation_prefix"), details.nationName(), "nation"));
         if (details.king()) {
-            lines.add(InfoRow.text("§7Role: §fKing"));
+            lines.add(InfoRow.text(info("role", Component.translatable("townymapaddon.details.label.king").getString())));
         } else if (details.mayor()) {
-            lines.add(InfoRow.text("§7Role: §fMayor"));
+            lines.add(InfoRow.text(info("role", Component.translatable("townymapaddon.details.label.mayor").getString())));
         }
-        lines.add(InfoRow.text("§7Gold: §f" + formatGold(details.balance())));
-        if (!details.registered().isBlank()) lines.add(InfoRow.text("§7Registered: §f" + details.registered()));
+        lines.add(InfoRow.text(info("gold", formatGold(details.balance()))));
+        if (!details.registered().isBlank()) lines.add(InfoRow.text(info("registered", details.registered())));
         // Always say something about presence. This used to be skipped entirely for a player visible on the
         // map, so the one case where the answer is simply "right now" showed nothing at all.
         if (marker != null || details.online()) {
-            lines.add(InfoRow.text("§7Online: §anow"));
+            lines.add(InfoRow.text(info("online_now")));
         } else if (details.lastOnlineMs() > 0) {
-            lines.add(InfoRow.text("§7Last online: §f" + ageLabel(details.lastOnlineMs())
-                    + " §7(" + details.lastOnline() + ")"));
+            lines.add(InfoRow.text(info("last_online_detail", ageLabel(details.lastOnlineMs()), details.lastOnline())));
         } else if (!details.lastOnline().isBlank()) {
-            lines.add(InfoRow.text("§7Last online: §f" + details.lastOnline()));
+            lines.add(InfoRow.text(info("last_online", details.lastOnline())));
         }
         return List.copyOf(lines);
     }
@@ -1312,10 +1318,10 @@ public final class TownSearchOverlay {
                                           Map<String, EarthMcNationData> nationDetails) {
         TownyMapMod.requestTownActive(town.name());   // active count on-demand for the opened town only
         ArrayList<InfoRow> lines = new ArrayList<>();
-        lines.add(InfoRow.text("§f§lTown: " + town.name()));
+        lines.add(InfoRow.text(info("town_title", town.name())));
         if (details == null) {
-            lines.add(InfoRow.text("§7Chunks: §f" + town.approximateChunks()));
-            lines.add(InfoRow.text("§7Details: §fChecking..."));
+            lines.add(InfoRow.text(info("chunks", town.approximateChunks())));
+            lines.add(InfoRow.text(info("checking")));
             return List.copyOf(lines);
         }
         if (!details.nationName().isBlank()) {
@@ -1323,26 +1329,26 @@ public final class TownSearchOverlay {
             String label = capital ? "§7Capital of: §f" : "§7Nation: §f";
             lines.add(InfoRow.link(label, details.nationName(), "nation"));
         }
-        if (!details.mayor().isBlank()) lines.add(InfoRow.link("§7Mayor: §f", details.mayor(), "player"));
+        if (!details.mayor().isBlank()) lines.add(InfoRow.link(tr("mayor_prefix"), details.mayor(), "player"));
         boolean overLimit = details.isOverClaimed()
                 || (details.maxChunks() > 0 && details.numChunks() > details.maxChunks());
         String sizeColor = overLimit ? "§c" : "§f";
         String maxStr = details.maxChunks() > 0 ? " / " + details.maxChunks() : "";
-        lines.add(InfoRow.text("§7Chunks: " + sizeColor + details.numChunks() + maxStr));
-        if (!details.founded().isBlank()) lines.add(InfoRow.text("§7Founded: §f" + details.founded()));
+        lines.add(InfoRow.text(info("chunks_styled", sizeColor, details.numChunks(), maxStr)));
+        if (!details.founded().isBlank()) lines.add(InfoRow.text(info("founded", details.founded())));
         String townInactive = details.activeResidentCount() >= 0
                 && details.activeResidentCount() < details.residentCount()
                 ? " §8(" + (details.residentCount() - details.activeResidentCount()) + " Inactive)" : "";
-        lines.add(InfoRow.text("§7Residents: §f" + details.residentCount() + townInactive));
-        lines.add(InfoRow.text("§7Gold: §f" + formatGold(details.balance())));
-        lines.add(InfoRow.text("§7Open: §f" + yesNo(details.isOpen())));
-        lines.add(InfoRow.text("§7Public: §f" + yesNo(details.isPublic())));
+        lines.add(InfoRow.text(info("residents", details.residentCount(), townInactive)));
+        lines.add(InfoRow.text(info("gold", formatGold(details.balance()))));
+        lines.add(InfoRow.text(info("open", yesNo(details.isOpen()))));
+        lines.add(InfoRow.text(info("public", yesNo(details.isPublic()))));
         return List.copyOf(lines);
     }
 
     /** "MMM d, yyyy (5h ago)" — absolute date plus relative age for a timestamp. */
     private static String dateWithAgo(long timestampMs) {
-        if (timestampMs <= 0) return "Unknown";
+        if (timestampMs <= 0) return tr("unknown");
         String date = Instant.ofEpochMilli(timestampMs).atZone(ZoneOffset.UTC).toLocalDate().format(DATE_FMT);
         return date + " §7(" + ageLabel(timestampMs) + ")";
     }
@@ -1354,7 +1360,7 @@ public final class TownSearchOverlay {
     }
 
     private static String yesNo(boolean value) {
-        return value ? "Yes" : "No";
+        return Component.translatable(value ? "townymapaddon.common.yes" : "townymapaddon.common.no").getString();
     }
 
     private static String formatGold(double gold) {
@@ -1384,17 +1390,17 @@ public final class TownSearchOverlay {
 
     private static String ageLabel(long timestampMs) {
         long seconds = Math.max(0, (System.currentTimeMillis() - timestampMs) / 1000);
-        if (seconds < 60) return seconds + "s ago";
+        if (seconds < 60) return Component.translatable("townymapaddon.search.seconds_ago", seconds).getString();
         long minutes = seconds / 60;
-        if (minutes < 60) return minutes + "m ago";
+        if (minutes < 60) return Component.translatable("townymapaddon.search.minutes_ago", minutes).getString();
         long hours = minutes / 60;
-        if (hours < 48) return hours + "h ago";
-        return (hours / 24) + "d ago";
+        if (hours < 48) return Component.translatable("townymapaddon.search.hours_ago", hours).getString();
+        return Component.translatable("townymapaddon.search.days_ago", hours / 24).getString();
     }
 
     private static void renderFavorites(GuiGraphicsExtractor ctx, Font tr, int x, int y, int sw,
                                         List<TownData> towns, List<String> favoriteTowns) {
-        String label = "Favorites";
+        String label = tr("favorites");
         if (DarkButtons.enabled()) {
             DarkButtons.draw(ctx, x, y, FAVORITES_WIDTH, ROW_HEIGHT, label, true, 0xFFFFFFFF,
                     scaledMouseX(), scaledMouseY());
@@ -1427,7 +1433,7 @@ public final class TownSearchOverlay {
             int rowY = resultRowY(y, 0);
             ctx.fill(x - 1, rowY - 1, x + FAVORITES_WIDTH + 1, rowY + ROW_HEIGHT + 1, BORDER);
             ctx.fill(x, rowY, x + FAVORITES_WIDTH, rowY + ROW_HEIGHT, BG);
-            ctx.text(tr, trimToWidth(tr, "No favorites", FAVORITES_WIDTH - 14), x + 7, rowY + 5, 0xFFAAAAAA, true);
+            ctx.text(tr, trimToWidth(tr, tr("no_favorites"), FAVORITES_WIDTH - 14), x + 7, rowY + 5, 0xFFAAAAAA, true);
         }
     }
 

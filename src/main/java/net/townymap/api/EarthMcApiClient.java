@@ -9,6 +9,7 @@ import net.townymap.model.NationFullData;
 import net.townymap.model.PlayerFullData;
 import net.townymap.model.TownFullData;
 import net.townymap.model.TownOverclaimProjection;
+import net.townymap.model.VotePartyStatus;
 import net.townymap.model.TownPopupData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,6 +62,8 @@ public class EarthMcApiClient {
     private final java.util.concurrent.ConcurrentHashMap<String, long[]> residentActivityCache =
             new java.util.concurrent.ConcurrentHashMap<>();
     private static final long RESIDENT_ACTIVITY_TTL_MS = 15L * 60 * 1000;
+
+    public CompletableFuture<VotePartyStatus> fetchVoteParty(){return CompletableFuture.supplyAsync(()->{try{String json=get(BASE);return json==null?null:VotePartyStatus.parse(json,System.currentTimeMillis());}catch(RuntimeException e){LOGGER.warn("[TownyMap] EarthMC vote-party lookup failed: {}",e.getMessage());return null;}},executor);}
 
     public EarthMcApiClient() {
         this.executor = Executors.newVirtualThreadPerTaskExecutor();

@@ -16,6 +16,7 @@ public final class HunterState {
     public String name;
     public String uuid = "";
     public OnlineStatus online = OnlineStatus.UNKNOWN;
+    public long offlineSinceMs;
     public Visibility visibility = Visibility.UNKNOWN;
     public Observation direct;
     public Observation inferred;
@@ -34,6 +35,7 @@ public final class HunterState {
         online = data.online() ? OnlineStatus.ONLINE : OnlineStatus.OFFLINE;
     }
     public Observation bestObservation() { return direct != null ? direct : inferred; }
+    public boolean offlineResidualActive(long now){Observation o=bestObservation();return online==OnlineStatus.OFFLINE&&offlineSinceMs>0&&o!=null&&now-offlineSinceMs<=30*60_000L;}
     private static String safe(String s) { return s == null ? "" : s; }
 
     public record Observation(int x, int z, long atMs, ObservationType type, String claim, String claimNation, Confidence confidence) {}

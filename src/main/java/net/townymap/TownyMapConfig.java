@@ -21,6 +21,10 @@ public class TownyMapConfig {
     // ── Feature toggles ──────────────────────────────────────────────────────
     public boolean townsEnabled   = true;
     public boolean playersEnabled = true;
+    public boolean votePartyEnabled = true;
+    public boolean votePartyShowHud = true;
+    public boolean votePartyShowWorldMap = true;
+    public boolean votePartyShowGlobalScreens = true;
     public boolean earthmcOnly = true;
     /**
      * Kept as a gate throughout the minimap rendering, but no longer user-facing: the settings row was
@@ -132,6 +136,10 @@ public class TownyMapConfig {
     public boolean hunterWarningsInChat = true;
     public boolean hunterNotificationsInChat = true;
     public boolean hunterActivityWindowShown = true;
+    public boolean hunterActivityWindowMinimized = false;
+    /** Negative X keeps the activity window anchored right until it is dragged. */
+    public int hunterActivityWindowX = -1;
+    public int hunterActivityWindowY = 34;
     public boolean hunterShowRisk = true;
     public boolean hunterExposureHud = true;
     public boolean hunterDirectionEnabled = true;
@@ -150,11 +158,21 @@ public class TownyMapConfig {
     public boolean teleportViewerEnabled = true;
     public boolean teleportMapClickAction = true;
     public boolean teleportDefaultAdvanced = false;
+    public boolean teleportAdvancedEnabled = false;
     public boolean teleportShowUncertain = true;
     public boolean teleportShowObstructed = true;
+    public boolean teleportShowTownSpawns = true;
+    public boolean teleportShowNationSpawns = true;
+    public boolean teleportRouteLineVisible = true;
+    public boolean teleportDestinationMarkerVisible = true;
+    public boolean teleportArrivalMarkerVisible = true;
+    /** 0 clipboard, 1 prefill chat, 2 execute immediately (Standard mode only). */
+    public int teleportCommandAction = 0;
     public int teleportAdvancedMaxJoinHops = 1;
     public boolean teleportRememberPrimaryHome = true;
     public String teleportPrimaryHomeTown = "";
+    public int teleportWindowX = 118;
+    public int teleportWindowY = 34;
     public java.util.Map<String,String> teleportSpawnReports = new java.util.HashMap<>();
     public enum HunterHudPosition { RIGHT_OF_MINIMAP, LEFT_OF_MINIMAP, BELOW_MINIMAP }
     public List<Long> chunkCounterSelection = new ArrayList<>();

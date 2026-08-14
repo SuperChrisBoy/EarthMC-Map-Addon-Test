@@ -149,7 +149,7 @@ public class DetailScreen extends Screen {
         discordButton = null;
         wikiButton = null;
         if (page != null && page.discordUrl() != null && !page.discordUrl().isBlank()) {
-            discordButton = Button.builder(Component.literal("Discord"),
+            discordButton = Button.builder(Component.translatable("townymapaddon.common.discord"),
                             x -> TownInfoOverlay.openDiscord(page.discordUrl()))
                     .bounds(bx, footerButtonY(), 64, 20).build();
             discordButton.setTooltip(Tooltip.create(Component.literal(page.discordUrl())));
@@ -157,13 +157,13 @@ public class DetailScreen extends Screen {
             bx += 64 + GAP;
         }
         if (page != null && page.wikiUrl() != null && !page.wikiUrl().isBlank()) {
-            wikiButton = Button.builder(Component.literal("Wiki"),
+            wikiButton = Button.builder(Component.translatable("townymapaddon.common.wiki"),
                             x -> TownInfoOverlay.openDiscord(page.wikiUrl()))
                     .bounds(bx, footerButtonY(), 52, 20).build();
             this.addRenderableWidget(wikiButton);
         }
         backButton = Button.builder(
-                        Component.literal(parent == null ? "Close" : "Back"), x -> this.onClose())
+                        Component.translatable(parent == null ? "townymapaddon.common.close" : "townymapaddon.common.back"), x -> this.onClose())
                 .bounds(cRight - 64, footerButtonY(), 64, 20).build();
         this.addRenderableWidget(backButton);
 
@@ -174,12 +174,12 @@ public class DetailScreen extends Screen {
     private static final int TAB_GAP = 4;
     private static final int TAB_ACTIVE_BG = 0x664FA37A;
     private static final int TAB_HOVER_BG = 0x33FFFFFF;
-    private static final String[] TABS = { "Dashboard", "Statistics" };
+    private static final String[] TABS = { "townymapaddon.details.tab.dashboard", "townymapaddon.details.tab.statistics" };
     // "Players" is deliberately absent: its leaderboards need a ~600-request sweep of the whole roster
     // for data no index exposes, which was never fast enough to justify. Everything behind it is intact
     // -- DetailPages.stats(2, ...), filtersFor(2), allPlayerStats(), outlawTrustedCounts() -- so putting
     // it back is this one string plus the warm call in TownyMapMod.warmInfoPanelData().
-    private static final String[] SUBTABS = { "Towns", "Nations" };
+    private static final String[] SUBTABS = { "townymapaddon.details.tab.towns", "townymapaddon.details.tab.nations" };
     private final int[][] subRects = new int[SUBTABS.length][4];
     /** Hit rects for the sort options. Sized to the longest filter row (Nations has seven) -- the render
      *  loop is bounded by this array, so anything beyond it silently never drew or responded. */
@@ -266,7 +266,7 @@ public class DetailScreen extends Screen {
             ctx.fill(cLeft - 1, fy - 1, cRight + 1, fy + 19, searchFocused ? ACCENT : PANEL_BORDER);
             ctx.fill(cLeft, fy, cRight, fy + 18, 0xFF101216);
             boolean empty = searchQuery.isEmpty();
-            String shown = empty ? "Search towns, nations, players" : searchQuery;
+            String shown = empty ? Component.translatable("townymapaddon.details.search_hint").getString() : searchQuery;
             ctx.text(this.font, this.font.plainSubstrByWidth(shown, cRight - cLeft - 12),
                     cLeft + 6, fy + 5, empty ? 0xFF7A7A7A : 0xFFFFFFFF, false);
             if (searchFocused && (System.currentTimeMillis() / 500) % 2 == 0) {
@@ -385,7 +385,7 @@ public class DetailScreen extends Screen {
             net.townymap.render.PlayerHeadRenderer.drawMenuHead(ctx, page.title(),
                     right - 10 - hs / 2, PANEL_TOP + 2 + hs / 2, hs);
         }
-        String sub = page != null ? page.subtitle() : (failed ? "not found" : "loading…");
+        String sub = page != null ? page.subtitle() : Component.translatable(failed ? "townymapaddon.details.not_found" : "townymapaddon.details.loading").getString();
         if (sub != null && !sub.isBlank()) {
             ctx.text(this.font, sub,
                     cLeft + this.font.width(title) + 6, PANEL_TOP + 9, MUTED, false);
@@ -395,13 +395,14 @@ public class DetailScreen extends Screen {
         int tx = cLeft;
         int ty = tabTop();
         for (int i = 0; i < TABS.length; i++) {
-            int w = this.font.width(TABS[i]) + 12;
+            String tabText = Component.translatable(TABS[i]).getString();
+            int w = this.font.width(tabText) + 12;
             boolean active = i == activeTab;
             boolean hover = mouseX >= tx && mouseX <= tx + w && mouseY >= ty && mouseY <= ty + TAB_H;
             if (active) ctx.fill(tx, ty, tx + w, ty + TAB_H, TAB_ACTIVE_BG);
             else if (hover) ctx.fill(tx, ty, tx + w, ty + TAB_H, TAB_HOVER_BG);
             if (active) ctx.fill(tx, ty + TAB_H - 1, tx + w, ty + TAB_H, ACCENT);
-            ctx.text(this.font, TABS[i], tx + 6, ty + 4, active ? 0xFFFFFFFF : MUTED, false);
+            ctx.text(this.font, tabText, tx + 6, ty + 4, active ? 0xFFFFFFFF : MUTED, false);
             tabRects[i][0] = tx; tabRects[i][1] = ty; tabRects[i][2] = tx + w; tabRects[i][3] = ty + TAB_H;
             tx += w + TAB_GAP;
         }
@@ -421,11 +422,12 @@ public class DetailScreen extends Screen {
             int sx = cLeft;
             int sy = subTop();
             for (int i = 0; i < SUBTABS.length; i++) {
-                int w = this.font.width(SUBTABS[i]) + 10;
+                String subtabText = Component.translatable(SUBTABS[i]).getString();
+                int w = this.font.width(subtabText) + 10;
                 boolean act = i == activeSub;
                 boolean hov = mouseX >= sx && mouseX <= sx + w && mouseY >= sy && mouseY <= sy + TAB_H;
                 if (act || hov) ctx.fill(sx, sy, sx + w, sy + TAB_H, act ? TAB_ACTIVE_BG : TAB_HOVER_BG);
-                ctx.text(this.font, SUBTABS[i], sx + 5, sy + 4, act ? 0xFFFFFFFF : MUTED, false);
+                ctx.text(this.font, subtabText, sx + 5, sy + 4, act ? 0xFFFFFFFF : MUTED, false);
                 subRects[i][0] = sx; subRects[i][1] = sy;
                 subRects[i][2] = sx + w; subRects[i][3] = sy + TAB_H;
                 sx += w + TAB_GAP;
@@ -486,7 +488,8 @@ public class DetailScreen extends Screen {
 
         hits.clear();
         if (page == null) {
-            String msg = failed ? "Nothing found for \"" + pendingTitle + "\"." : "Loading…";
+            String msg = Component.translatable(failed ? "townymapaddon.details.nothing_found" : "townymapaddon.details.loading",
+                    pendingTitle).getString();
             ctx.text(this.font, msg, cLeft, bodyTop() + 10, MUTED, false);
             contentHeight = 30;
         } else {

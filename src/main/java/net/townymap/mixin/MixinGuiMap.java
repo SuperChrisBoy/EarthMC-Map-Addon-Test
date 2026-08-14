@@ -55,6 +55,8 @@ public abstract class MixinGuiMap {
     // within this window of a right-click so it can't dismiss the town popup the right-click just opened.
     private static final long SPURIOUS_LEFT_CLICK_NANOS = 70_000_000L;   // 70ms
     private long lastRightClickNanos = 0L;
+    @org.spongepowered.asm.mixin.Unique private long townymap$lastTeleportClickNanos=0L;
+    @org.spongepowered.asm.mixin.Unique private double townymap$lastTeleportClickX,townymap$lastTeleportClickY;
     @org.spongepowered.asm.mixin.Unique
     private boolean townymap$widgetsHidden = false;
     /** Widgets wider or taller than this share of the screen are never hidden — that's map surface, not UI. */
@@ -124,14 +126,14 @@ public abstract class MixinGuiMap {
     @ModifyConstant(method = "changeZoom", constant = @Constant(doubleValue = 0.0625), require = 0, remap = false)
     private double townymap$extendWorldMapZoomOut(double original) {
         return (TownyMapMod.getConfig() != null && TownyMapMod.getConfig().worldMapOverview)
-                ? original / 8.0
+                ? original / WORLD_MAP_OVERVIEW_FACTOR
                 : original;
     }
 
     @ModifyConstant(method = "applyZoomLimits", constant = @Constant(doubleValue = 0.0625), require = 0, remap = false)
     private double townymap$extendWorldMapZoomOutModern(double original) {
         return (TownyMapMod.getConfig() != null && TownyMapMod.getConfig().worldMapOverview)
-                ? original / 8.0
+                ? original / WORLD_MAP_OVERVIEW_FACTOR
                 : original;
     }
 
@@ -172,6 +174,7 @@ public abstract class MixinGuiMap {
                 double guiScale = (screenScale > 0) ? scale / screenScale : scale;
                 double mapScale = guiScale / dimMul;
                 TownyMapMod.renderWorldMapLatePass(ctx, cameraX * dimMul, cameraZ * dimMul, mapScale, w, h);
+                TownyMapMod.renderTeleportViewer(ctx,cameraX*dimMul,cameraZ*dimMul,mapScale,w,h);
             }
             // A clean map screenshot skips our own chrome for the frame, so the capture is just the map.
             if (!TownyMapMod.hideChromeForScreenshot()) {
@@ -185,6 +188,7 @@ public abstract class MixinGuiMap {
                 TownyMapMod.renderTownSearch(ctx, w, h);
                 TownyMapMod.renderArchiveBanner(ctx, w);
                 TownyMapMod.renderHunterActivity(ctx, w, h);
+                TownyMapMod.renderVotePartyWorldMap(ctx,w,h);
             }
             TownyMapMod.captureMapScreenshotIfArmed();
         } catch (Exception e) {
@@ -326,6 +330,7 @@ public abstract class MixinGuiMap {
                     cir.setReturnValue(true);
                     return;
                 }
+                if(TownyMapMod.clickTeleportViewer(click.x(),click.y(),sw,sh)){cir.setReturnValue(true);return;}
                 TownSearchOverlay.ClickResult result =
                         TownyMapMod.onTownSearchClick(click.x(), click.y(), sw, sh);
                 if (result.consumed()) {
@@ -362,8 +367,6 @@ public abstract class MixinGuiMap {
                 cir.setReturnValue(true);
                 return;
             }
-            if(button==0&&TownyMapMod.teleportTargetArmed()){double[] world=overlayWorldFromScreen(click.x(),click.y(),sw,sh);if(world!=null&&TownyMapMod.consumeTeleportTarget(world[0],world[1])){cir.setReturnValue(true);return;}}
-
             // Planning counter chips ("+" arms placement, T# removes that planned town).
             if (button == 0 && TownyMapMod.onPlanningCounterClick(click.x(), click.y())) {
                 cir.setReturnValue(true);
@@ -435,6 +438,10 @@ public abstract class MixinGuiMap {
             }
 
             if (button == 0) {
+                long now=System.nanoTime();double dx=click.x()-townymap$lastTeleportClickX,dz=click.y()-townymap$lastTeleportClickY;
+                boolean doubleClick=now-townymap$lastTeleportClickNanos<=350_000_000L&&dx*dx+dz*dz<=64;
+                townymap$lastTeleportClickNanos=now;townymap$lastTeleportClickX=click.x();townymap$lastTeleportClickY=click.y();
+                if(doubleClick&&TownyMapMod.getConfig().teleportViewerEnabled&&TownyMapMod.getConfig().teleportMapClickAction){double[] world=overlayWorldFromScreen(click.x(),click.y(),sw,sh);if(world!=null){TownyMapMod.consumeTeleportTarget(world[0],world[1]);cir.setReturnValue(true);return;}}
                 TownyMapMod.armMapClickDismiss(cameraX, cameraZ);   // dismiss the search/popup unless this
                 return;                                             // click turns into a pan-drag (keeps it)
             }
@@ -450,11 +457,16 @@ public abstract class MixinGuiMap {
         }
     }
 
+    @Inject(require = 0, method = "mouseReleased", at = @At("HEAD"), remap = false, cancellable = true)
+    private void townymap$releaseTeleportWindow(MouseButtonEvent click,CallbackInfoReturnable<Boolean> cir){
+        if(click.buttonInfo().button()==0&&(TownyMapMod.releaseTeleportViewer()||TownyMapMod.releaseHunterActivity()))cir.setReturnValue(true);
+    }
+
     @Inject(require = 0, method = "mouseScrolled", at = @At("HEAD"), remap = false, cancellable = true)
     private void townymap$scrollHunterActivity(double mouseX,double mouseY,double horizontal,double vertical,
                                                 CallbackInfoReturnable<Boolean> cir){
         Minecraft mc=Minecraft.getInstance();
-        if(TownyMapMod.scrollHunterActivity(mouseX,mouseY,vertical,mc.getWindow().getGuiScaledWidth(),mc.getWindow().getGuiScaledHeight()))cir.setReturnValue(true);
+        if(TownyMapMod.scrollTeleportViewer(mouseX,mouseY,vertical,mc.getWindow().getGuiScaledWidth(),mc.getWindow().getGuiScaledHeight())||TownyMapMod.scrollHunterActivity(mouseX,mouseY,vertical,mc.getWindow().getGuiScaledWidth(),mc.getWindow().getGuiScaledHeight()))cir.setReturnValue(true);
     }
 
     @Inject(require = 0, method = "keyPressed", at = @At("HEAD"), remap = false, cancellable = true)
