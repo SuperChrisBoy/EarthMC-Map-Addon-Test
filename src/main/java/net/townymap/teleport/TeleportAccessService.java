@@ -20,21 +20,26 @@ public final class TeleportAccessService {
     private volatile Snapshot snapshot=new Snapshot(Map.of(),Map.of(),null,0,null);
     private volatile List<TownData> mapTownCache=List.of(),lastMapTownSource;private volatile long lastAttemptAt;
     private volatile long dataRevision;private volatile CachedPlan cachedPlan;
+    private volatile double queryX,queryZ;private volatile int candidateLimit=10;
     public TeleportAccessService(EarthMcApiClient api,TownyMapConfig config){this.api=api;this.config=config;}
     public List<net.townymap.hunter.teleport.TeleportCapabilityEngine.TeleportOption> fromOfficialDetails(TownFullData town,NationFullData nation,double x,double z){return hunterCapabilities.fromOfficialDetails(town,nation,x,z);}
 
     public void ensure(List<TownData> mapTowns,String player){
         int previousTownCount=mapTownCache.size();boolean cacheChanged=mapTowns!=null&&!mapTowns.isEmpty()&&mapTowns!=lastMapTownSource;if(cacheChanged){lastMapTownSource=mapTowns;mapTownCache=List.copyOf(mapTowns);dataRevision++;cachedPlan=null;}boolean cacheExpanded=mapTownCache.size()>previousTownCount;long now=System.currentTimeMillis();Snapshot old=snapshot;if(old.at>0&&now-old.at<TTL_MS||old.error!=null&&!cacheExpanded&&now-lastAttemptAt<FAILED_RETRY_MS||!loading.compareAndSet(false,true))return;lastAttemptAt=now;
-        List<String> townNames=mapTownCache.stream().map(TownData::name).toList();
-        CompletableFuture<Map<String,TownFullData>> towns=api.fetchTownsFull(townNames);
-        CompletableFuture<Map<String,NationFullData>> nations=api.fetchNationIndex().thenCompose(index->api.fetchNationsFull(index.stream().map(EarthMcNationData::name).toList()));
         CompletableFuture<PlayerFullData> self=api.fetchPlayerFull(player);
+        List<String> nearbyTownNames=mapTownCache.stream().sorted(Comparator.comparingDouble(t->Math.hypot(t.centerX()-queryX,t.centerZ()-queryZ))).limit(candidateLimit).map(TownData::name).toList();
+        CompletableFuture<List<String>> townNames=self.thenApply(p->{LinkedHashSet<String> names=new LinkedHashSet<>();if(p!=null&&p.town()!=null&&!p.town().isBlank())names.add(p.town());names.addAll(nearbyTownNames);return List.copyOf(names);});
+        CompletableFuture<Map<String,TownFullData>> towns=townNames.thenCompose(api::fetchTownsFull);
+        CompletableFuture<Map<String,NationFullData>> nations=towns.thenCombine(self,(loaded,p)->{LinkedHashSet<String>names=new LinkedHashSet<>();if(p!=null&&p.nation()!=null&&!p.nation().isBlank())names.add(p.nation());loaded.values().stream().map(TownFullData::nation).filter(n->n!=null&&!n.isBlank()).forEach(names::add);return List.copyOf(names);}).thenCompose(api::fetchNationsFull);
         towns.thenCombine(nations,Pair::new).thenCombine(self,(pair,p)->new Snapshot(pair.towns,pair.nations,p,System.currentTimeMillis(),null)).whenComplete((next,error)->{
-            Minecraft mc=Minecraft.getInstance();if(mc==null){loading.set(false);return;}mc.execute(()->{boolean usable=error==null&&usable(next,townNames.size());if(usable)snapshot=next;else{String message=error!=null&&error.getMessage()!=null?error.getMessage():"Incomplete EarthMC teleport snapshot";snapshot=new Snapshot(old.towns,old.nations,old.player,old.at,message);TownyMapMod.LOGGER.warn("[HunterAlert/Teleport] Rejected incomplete API snapshot: requestedTowns={} receivedTowns={} nations={} player={}",townNames.size(),next==null?0:next.towns.size(),next==null?0:next.nations.size(),next!=null&&next.player!=null);}dataRevision++;cachedPlan=null;loading.set(false);});
+            Minecraft mc=Minecraft.getInstance();if(mc==null){loading.set(false);return;}mc.execute(()->{boolean usable=error==null&&usable(next,nearbyTownNames.size());if(usable)snapshot=next;else{String message=error!=null&&error.getMessage()!=null?error.getMessage():"Incomplete EarthMC teleport snapshot";snapshot=new Snapshot(old.towns,old.nations,old.player,old.at,message);TownyMapMod.LOGGER.warn("[HunterAlert/Teleport] Rejected incomplete API snapshot: requestedTowns={} receivedTowns={} nations={} player={}",nearbyTownNames.size(),next==null?0:next.towns.size(),next==null?0:next.nations.size(),next!=null&&next.player!=null);}dataRevision++;cachedPlan=null;loading.set(false);});
         });
     }
 
     public void refresh(List<TownData> mapTowns,String player){snapshot=new Snapshot(snapshot.towns,snapshot.nations,snapshot.player,0,snapshot.error);ensure(mapTowns,player);}
+    public void beginQuery(List<TownData> mapTowns,String player,double x,double z){queryX=x;queryZ=z;candidateLimit=10;snapshot=new Snapshot(Map.of(),Map.of(),snapshot.player,0,null);cachedPlan=null;ensure(mapTowns,player);}
+    public void loadMore(List<TownData> mapTowns,String player){if(loading.get())return;candidateLimit=Math.min(candidateLimit+10,Math.max(10,mapTownCache.size()));snapshot=new Snapshot(snapshot.towns,snapshot.nations,snapshot.player,0,snapshot.error);cachedPlan=null;ensure(mapTowns,player);}
+    public boolean hasMore(){return candidateLimit<mapTownCache.size();}
 
     public Plan plan(double targetX,double targetZ){TeleportPlanCacheKey key=TeleportPlanCacheKey.of(targetX,targetZ,dataRevision,config.teleportPrimaryHomeTown);CachedPlan cached=cachedPlan;if(cached!=null&&cached.key.equals(key))return cached.plan;Snapshot s=snapshot;Plan result;if(s.player==null||s.towns.isEmpty()){List<TeleportRoute>fallback=TeleportFallbackRoutes.nearest(mapTownCache,targetX,targetZ);result=new Plan(fallback,List.of(),s.player,loading.get(),s.error);}else{PlayerTeleportContext current=context(s,s.player);List<TeleportRoute> standard=routesForState(s,current,targetX,targetZ,TeleportRoute.Mode.STANDARD,TeleportRoute.MembershipRisk.LOW,List.of(),0);double best=standard.isEmpty()?Double.POSITIVE_INFINITY:standard.getFirst().walkingDistance();List<TeleportRoute> advanced=advanced(s,current,targetX,targetZ,best,risk(current));result=new Plan(standard,advanced,s.player,loading.get(),s.error);}cachedPlan=new CachedPlan(key,result);return result;}
 

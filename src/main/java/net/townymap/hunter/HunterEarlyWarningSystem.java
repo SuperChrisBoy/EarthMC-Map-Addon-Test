@@ -36,6 +36,8 @@ public final class HunterEarlyWarningSystem {
     private final HunterCandidateService candidates;
     private final Map<String,NearbyCandidate> nearbyCandidates = new HashMap<>();
     private long lastTick, lastIdentityPoll;
+    private long lastClaimDistanceCheck;
+    private double nearestClaimDistance;
     private volatile List<TownData> towns = List.of();
     private volatile Map<String,PlayerMarker> visible = Map.of();
     private ExposureRoutePlanner.Route route;
@@ -53,6 +55,7 @@ public final class HunterEarlyWarningSystem {
         if(syncWatchlist()) lastIdentityPoll=0; double scale=net.townymap.TownyMapMod.dimensionCoordinateScale(); double px=mc.player.getX()*scale,pz=mc.player.getZ()*scale;
         updateNearbyCandidates(players,px,pz,scale,now,mc.getUser().getName());
         TownData userTown=TownHoverOverlay.townAt(px,pz,towns); boolean selfVisible=map.containsKey(key(mc.getUser().getName())); exposure.update(selfVisible,userTown==null,now);
+        if(userTown!=null)nearestClaimDistance=0;else if(now-lastClaimDistanceCheck>=1_000){lastClaimDistanceCheck=now;nearestClaimDistance=distanceToNearestClaim(px,pz,towns);}
         if(userTown==null && exposure.visible()) route=routes.recommend(px,pz,towns); else route=null;
         for(HunterState h:states.values()) updateHunter(h,map.get(key(h.name)),px,pz,now);
         if(now-lastIdentityPoll>=60_000){lastIdentityPoll=now; for(HunterState h:states.values()) pollIdentity(mc,h,px,pz,now);}
@@ -81,7 +84,7 @@ public final class HunterEarlyWarningSystem {
         if(nearbyCandidates.size()>32)nearbyCandidates.entrySet().stream().sorted(Comparator.comparingLong(e->e.getValue().lastSeenAt)).limit(nearbyCandidates.size()-32).map(Map.Entry::getKey).toList().forEach(nearbyCandidates::remove);
     }
     private void pollIdentity(Minecraft mc,HunterState h,double px,double pz,long now){earth.fetchPlayer(h.name).thenAccept(data->{if(data==null)return;mc.execute(()->{String oldTown=h.residenceTown;String oldNation=h.nation;HunterState.OnlineStatus oldOnline=h.online;boolean initial=h.residenceCheckedAt==0;h.applyIdentity(data);h.residenceCheckedAt=now;if(!initial&&oldOnline!=h.online)onlineChanged(h,px,pz,now);if(!oldTown.equalsIgnoreCase(h.residenceTown)||!oldNation.equalsIgnoreCase(h.nation)){if(!initial)notifications.publish(HunterEvent.normal(h.configuredName+":mobility",tr("event.residence_changed",h.name),now,tr("event.from_to",townOrNone(oldTown),townOrNone(h.residenceTown))));recomputeTeleports(mc,h,px,pz,oldTown);}});});}
-    private void onlineChanged(HunterState h,double px,double pz,long now){if(h.online==HunterState.OnlineStatus.OFFLINE){h.offlineSinceMs=now;var o=h.bestObservation();double d=o==null?Double.POSITIVE_INFINITY:Math.hypot(o.x()-px,o.z()-pz);var before=h.threat.level();h.threat=threats.assess(h,d,exposure.visible(),TownHoverOverlay.townAt(px,pz,towns)==null,now);notifications.publish(HunterEvent.normal(h.configuredName+":offline",tr("event.offline",h.name),now,tr("event.offline_residual",risk(before),risk(h.threat.level()))));}else{h.offlineSinceMs=0;notifications.publish(HunterEvent.normal(h.configuredName+":online",tr("event.online",h.name),now,tr("event.checking_location")));}}
+    private void onlineChanged(HunterState h,double px,double pz,long now){if(h.online==HunterState.OnlineStatus.OFFLINE){h.offlineSinceMs=now;var o=h.bestObservation();double d=o==null?Double.POSITIVE_INFINITY:Math.hypot(o.x()-px,o.z()-pz);var before=h.threat.level();h.threat=threats.assess(h,d,exposure.visible(),exposure.wildernessExposed(),exposure.wildernessExposureDurationMs(now),nearestClaimDistance,now);notifications.publish(HunterEvent.normal(h.configuredName+":offline",tr("event.offline",h.name),now,tr("event.offline_residual",risk(before),risk(h.threat.level()))));}else{h.offlineSinceMs=0;notifications.publish(HunterEvent.normal(h.configuredName+":online",tr("event.online",h.name),now,tr("event.checking_location")));}}
     private void recomputeTeleports(Minecraft mc,HunterState h,double px,double pz,String oldTown){
         var townFuture=h.residenceTown.isBlank()?java.util.concurrent.CompletableFuture.<TownFullData>completedFuture(null):earth.fetchTownFull(h.residenceTown);
         var nationFuture=h.nation.isBlank()?java.util.concurrent.CompletableFuture.<NationFullData>completedFuture(null):earth.fetchNationFull(h.nation);
@@ -110,7 +113,7 @@ public final class HunterEarlyWarningSystem {
         int zone=zone(d); if(zone<h.proximityZone&&d<=threshold(h.proximityZone)*1.10)zone=h.proximityZone;
         if(zone>h.proximityZone) notifications.publish(HunterEvent.warning(h.configuredName+":zone:"+zone,tr("event.entered_radius",h.name,threshold(zone)),now,tr("event.distance_direction",(int)Math.round(d),config.hunterDirectionEnabled?direction(px,pz,o.x(),o.z()):"")));
         h.proximityZone=zone; HunterState.ThreatAssessment oldThreat=h.threat;
-        h.threat=threats.assess(h,d,exposure.visible(),TownHoverOverlay.townAt(px,pz,towns)==null,now);
+        h.threat=threats.assess(h,d,exposure.visible(),exposure.wildernessExposed(),exposure.wildernessExposureDurationMs(now),nearestClaimDistance,now);
         if(h.threat.level().ordinal()>oldThreat.level().ordinal()) notifications.publish(h.threat.level().ordinal()>=HunterState.ThreatLevel.HIGH.ordinal()
                 ? HunterEvent.warning(h.configuredName+":risk:"+h.threat.level(),tr("event.risk_became",risk(h.threat.level()),h.name),now,Component.literal(String.join(", ",h.threat.reasons())))
                 : HunterEvent.normal(h.configuredName+":risk:"+h.threat.level(),tr("event.risk_became",risk(h.threat.level()),h.name),now,Component.literal(String.join(", ",h.threat.reasons()))));
@@ -124,13 +127,22 @@ public final class HunterEarlyWarningSystem {
         return List.of(dynmapColor+tr("hud.dynmap",tr(exposure.visible()?"common.visible":"common.hidden"),format(exposure.stateDurationMs(now))).getString(),
                 "§b"+tr("hud.exposure",exposure.exposurePercent()).getString());
     }
+
+    public String wildernessRiskHudLine(){if(!config.hunterWarningEnabled||!config.hunterShowHud||!config.hunterExposureHud||!exposure.wildernessExposed())return "";long now=System.currentTimeMillis();int bonus=ThreatEngine.wildernessExposureBonus(exposure.wildernessExposureDurationMs(now),nearestClaimDistance);return (bonus>=14?"§c":"§6")+tr("hud.wilderness_exposure",format(exposure.wildernessExposureDurationMs(now)),(int)Math.round(nearestClaimDistance),bonus).getString();}
+
+    private static double distanceToNearestClaim(double x,double z,List<TownData> towns){
+        double best=Double.POSITIVE_INFINITY;
+        for(TownData town:towns){double boxDx=x<town.minX()?town.minX()-x:x>town.maxX()?x-town.maxX():0,boxDz=z<town.minZ()?town.minZ()-z:z>town.maxZ()?z-town.maxZ():0;if(Math.hypot(boxDx,boxDz)>=best)continue;for(int[][] ring:town.polygonRings())for(int i=0;i<ring.length;i++){int[] a=ring[i],b=ring[(i+1)%ring.length];if(a.length<2||b.length<2)continue;best=Math.min(best,pointSegmentDistance(x,z,a[0],a[1],b[0],b[1]));}}
+        return Double.isFinite(best)?best:0;
+    }
+    private static double pointSegmentDistance(double px,double pz,double ax,double az,double bx,double bz){double dx=bx-ax,dz=bz-az,len2=dx*dx+dz*dz;if(len2==0)return Math.hypot(px-ax,pz-az);double t=Math.clamp(((px-ax)*dx+(pz-az)*dz)/len2,0,1);return Math.hypot(px-(ax+t*dx),pz-(az+t*dz));}
     public List<String> hunterHudLines(Minecraft mc){
         if(!config.hunterWarningEnabled||!config.hunterShowHud||mc.player==null)return List.of();
         double s=net.townymap.TownyMapMod.dimensionCoordinateScale(),px=mc.player.getX()*s,pz=mc.player.getZ()*s;long now=System.currentTimeMillis();
         record Row(HunterState h,double d,int priority){} ArrayList<Row>rows=new ArrayList<>();
         if(config.hunterShowNearby)for(HunterState h:states.values()){var o=h.bestObservation();if(o!=null&&(h.online!=HunterState.OnlineStatus.OFFLINE||h.offlineResidualActive(now))){double d=Math.hypot(o.x()-px,o.z()-pz)/s;if(d<=config.hunterNearbyRadius){int priority=(h.online==HunterState.OnlineStatus.ONLINE?10_000:0)+Math.max(0,5_000-(int)Math.round(d))+h.threat.level().ordinal()*100;rows.add(new Row(h,d,priority));}}}
         rows.sort(Comparator.comparingInt(Row::priority).reversed().thenComparingDouble(Row::d)); ArrayList<String>out=new ArrayList<>();
-        List<String> eventLines=notifications.hudLines(now); boolean warningEvent=!eventLines.isEmpty()&&!eventLines.getFirst().contains(Component.translatable("townymapaddon.hunter.hud.recent_event").getString()); if(warningEvent)out.addAll(eventLines.subList(0,Math.min(2,eventLines.size())));
+        List<String> eventLines=notifications.hudLines(now); boolean warningEvent=!eventLines.isEmpty()&&!eventLines.getFirst().contains(Component.translatable("townymapaddon.hunter.hud.recent_event").getString());
         if(!rows.isEmpty()){out.add("§c§l"+Component.translatable("townymapaddon.hunter.watch.title").getString());for(int i=0;i<Math.min(config.hunterMaxHudEntries,rows.size());i++){Row r=rows.get(i);var o=r.h.bestObservation();String approx=r.h.visibility==HunterState.Visibility.VISIBLE?"":"~",bearing=config.hunterDirectionEnabled?direction(px,pz,o.x(),o.z()):"";out.add("§f"+Component.translatable("townymapaddon.hunter.hud.tracked",r.h.name,approx+(int)Math.round(r.d),bearing).getString());out.add(r.h.visibility==HunterState.Visibility.VISIBLE?"§7"+Component.translatable("townymapaddon.hunter.hud.visible_claim",o.claim()).getString():"§c"+Component.translatable("townymapaddon.hunter.hud.lost_claim",format(now-o.atMs()),o.claim()).getString());String detail=config.hunterShowRisk&&r.h.threat.level().ordinal()>=HunterState.ThreatLevel.ELEVATED.ordinal()?Component.translatable("townymapaddon.hunter.hud.risk_score",r.h.threat.level(),r.h.threat.score()).getString():"";if(!r.h.teleportOptions.isEmpty()){var tp=r.h.teleportOptions.getFirst();if(tp.distanceToLocalPlayer()/s<=config.hunterTeleportThreatRadius)detail+=(detail.isBlank()?"":" · ")+Component.translatable("townymapaddon.hunter.hud.tp_threat",(int)Math.round(tp.distanceToLocalPlayer()/s),tp.destinationName()).getString();}if(!detail.isBlank())out.add("§c"+detail);}if(rows.size()>config.hunterMaxHudEntries)out.add("§7"+Component.translatable("townymapaddon.hunter.hud.more",rows.size()-config.hunterMaxHudEntries).getString());}
         if(route!=null)out.add("§a"+tr("hud.safe_route",config.hunterDirectionEnabled?direction(px,pz,route.x(),route.z()):"",(int)Math.round(route.distance()/s),route.destination()).getString());
         if(config.hunterCandidateWarningsEnabled){
@@ -141,6 +153,7 @@ public final class HunterEarlyWarningSystem {
         }
         if(!eventLines.isEmpty()&&!warningEvent)out.addAll(eventLines); return out;
     }
+    public List<String> warningHudLines(){if(!config.hunterWarningEnabled||!config.hunterShowHud)return List.of();List<String> lines=notifications.hudLines(System.currentTimeMillis());boolean warning=!lines.isEmpty()&&!lines.getFirst().contains(Component.translatable("townymapaddon.hunter.hud.recent_event").getString());return warning?List.copyOf(lines.subList(0,Math.min(3,lines.size()))):List.of();}
     public void onSystemMessage(String text){
         if(!config.hunterWarningEnabled||text==null)return; Matcher m=DEATH.matcher(text.replaceAll("§.","").trim()); if(!m.matches())return;
         String victim=m.group(1),killer=m.group(3); long now=System.currentTimeMillis(); HunterState hk=states.get(key(killer)),hv=states.get(key(victim));

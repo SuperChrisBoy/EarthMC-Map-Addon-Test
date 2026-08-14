@@ -8,6 +8,7 @@
     "MixinBossHealthOverlay",
     "MixinCommonMinimapRenderer",
     "MixinGuiMap",
+    "MixinHud",
     "MixinInfoDisplayRenderer",
     "MixinMinimapModuleRenderer",
     "MixinScreen",

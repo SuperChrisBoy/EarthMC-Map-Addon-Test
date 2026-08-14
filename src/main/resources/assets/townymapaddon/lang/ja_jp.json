@@ -598,5 +598,9 @@
     "townymapaddon.teleport.quality.not_comparable":  "比較できる標準ルートがありません",
     "townymapaddon.safety.hunter_override": "EarthMC 以外でハンター監視を許可（動作しない場合があります）",
     "townymapaddon.safety.teleport_override": "EarthMC 以外でテレポートビューアーを許可（コマンド失敗の可能性）",
-    "townymapaddon.safety.non_earthmc_warning": "警告：このサーバーは EarthMC ではありません。EarthMC のデータやコマンドは動作しない場合があります。"
+    "townymapaddon.safety.non_earthmc_warning": "警告：このサーバーは EarthMC ではありません。EarthMC のデータやコマンドは動作しない場合があります。",
+    "townymapaddon.hunter.reason.wilderness_exposure_time": "荒野で %1$s 分間公開中",
+    "townymapaddon.hunter.reason.far_from_claim": "最寄りの領地から %1$s ブロック",
+    "townymapaddon.hunter.hud.wilderness_exposure": "標的リスク：%1$s 公開 · 領地から %2$s ブロック · +%3$s",
+    "townymapaddon.teleport.load_more": "さらに結果を読み込む"
 }

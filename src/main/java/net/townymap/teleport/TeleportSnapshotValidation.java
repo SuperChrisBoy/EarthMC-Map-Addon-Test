@@ -4,7 +4,7 @@ package net.townymap.teleport;
 public final class TeleportSnapshotValidation {
     private TeleportSnapshotValidation(){}
     public static boolean usable(boolean playerPresent,int receivedTowns,int receivedNations,int requestedTowns){
-        if(!playerPresent||receivedTowns<=0||receivedNations<=0)return false;
+        if(!playerPresent||receivedTowns<=0)return false;
         int minimum=Math.max(1,(int)Math.floor(requestedTowns*0.80));
         return receivedTowns>=minimum;
     }

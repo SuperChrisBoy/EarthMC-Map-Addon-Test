@@ -598,5 +598,9 @@
     "townymapaddon.teleport.quality.not_comparable":  "没有可供比较的标准模式路线",
     "townymapaddon.safety.hunter_override": "允许在非 EarthMC 服务器使用猎人监视（可能无法工作）",
     "townymapaddon.safety.teleport_override": "允许在非 EarthMC 服务器使用传送查看器（命令可能无效）",
-    "townymapaddon.safety.non_earthmc_warning": "警告：当前服务器不是 EarthMC，EarthMC 数据和命令可能无法使用。"
+    "townymapaddon.safety.non_earthmc_warning": "警告：当前服务器不是 EarthMC，EarthMC 数据和命令可能无法使用。",
+    "townymapaddon.hunter.reason.wilderness_exposure_time": "在荒野中暴露了 %1$s 分钟",
+    "townymapaddon.hunter.reason.far_from_claim": "距离最近领地 %1$s 格",
+    "townymapaddon.hunter.hud.wilderness_exposure": "被盯上风险：已暴露 %1$s · 距领地 %2$s 格 · +%3$s",
+    "townymapaddon.teleport.load_more": "加载更多结果"
 }

@@ -598,5 +598,9 @@
     "townymapaddon.teleport.quality.not_comparable":  "No Standard route available for comparison",
     "townymapaddon.safety.hunter_override": "Allow Hunter Watch outside EarthMC (may not work)",
     "townymapaddon.safety.teleport_override": "Allow Teleport Viewer outside EarthMC (commands may fail)",
-    "townymapaddon.safety.non_earthmc_warning": "Warning: This server is not EarthMC. EarthMC data and commands may not work."
+    "townymapaddon.safety.non_earthmc_warning": "Warning: This server is not EarthMC. EarthMC data and commands may not work.",
+    "townymapaddon.hunter.reason.wilderness_exposure_time": "visible in wilderness for %1$s min",
+    "townymapaddon.hunter.reason.far_from_claim": "%1$s blocks from the nearest claim",
+    "townymapaddon.hunter.hud.wilderness_exposure": "Targeting risk: %1$s exposed · %2$s blocks from claims · +%3$s",
+    "townymapaddon.teleport.load_more": "Load More Results"
 }

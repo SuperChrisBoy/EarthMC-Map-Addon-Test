@@ -6,11 +6,11 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.Constant;
 import org.spongepowered.asm.mixin.injection.ModifyConstant;
 
-/** Keeps server boss-bar notices below the global Vote Party HUD row. */
+/** Keeps server boss-bar notices below the top-center wilderness warning. */
 @Mixin(BossHealthOverlay.class)
 public abstract class MixinBossHealthOverlay{
     @ModifyConstant(method="extractRenderState",constant=@Constant(intValue=12),require=0)
     private int townymap$moveBossBarsBelowVoteParty(int original){
-        return original+TownyMapMod.votePartyBossBarOffset();
+        return original+TownyMapMod.topWarningBossBarOffset();
     }
 }
