@@ -129,6 +129,8 @@ public class TownyMapConfig {
     public List<String> hunterWatchlist = new ArrayList<>();
     public List<String> disabledHunterNames = new ArrayList<>();
     public boolean hunterWarningEnabled = false;
+    /** Explicit safety override; Hunter Watch is otherwise unavailable off EarthMC. */
+    public boolean hunterAllowNonEarthMc = false;
     public boolean hunterShowHud = true;
     public HunterHudPosition hunterHudPosition = HunterHudPosition.RIGHT_OF_MINIMAP;
     public boolean hunterShowNearby = true;
@@ -156,6 +158,8 @@ public class TownyMapConfig {
     public boolean hunterCandidateWarningsEnabled = true;
     public int hunterCandidateWarningRadius = 1000;
     public boolean teleportViewerEnabled = true;
+    /** Explicit safety override; teleport commands are otherwise unavailable off EarthMC. */
+    public boolean teleportAllowNonEarthMc = false;
     public boolean teleportMapClickAction = true;
     public boolean teleportDefaultAdvanced = false;
     public boolean teleportAdvancedEnabled = false;

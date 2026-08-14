@@ -267,6 +267,7 @@ public class TownyMapConfigScreen extends Screen {
         option(hunterLabel("system"), onOff(cfg.hunterWarningEnabled, v -> cfg.hunterWarningEnabled = v),
                 () -> cfg.hunterWarningEnabled == DEFAULTS.hunterWarningEnabled,
                 () -> cfg.hunterWarningEnabled = DEFAULTS.hunterWarningEnabled);
+        option(Component.translatable("townymapaddon.safety.hunter_override").getString(),onOff(cfg.hunterAllowNonEarthMc,v->cfg.hunterAllowNonEarthMc=v),()->cfg.hunterAllowNonEarthMc==DEFAULTS.hunterAllowNonEarthMc,()->cfg.hunterAllowNonEarthMc=DEFAULTS.hunterAllowNonEarthMc);
         option(hunterLabel("show_hud"), onOff(cfg.hunterShowHud, v -> cfg.hunterShowHud = v),
                 () -> cfg.hunterShowHud == DEFAULTS.hunterShowHud,
                 () -> cfg.hunterShowHud = DEFAULTS.hunterShowHud);
@@ -346,6 +347,7 @@ public class TownyMapConfigScreen extends Screen {
 
         section(Component.translatable("townymapaddon.teleport.title").getString());
         option(Component.translatable("townymapaddon.teleport.settings.enabled").getString(), onOff(cfg.teleportViewerEnabled,v->cfg.teleportViewerEnabled=v),()->cfg.teleportViewerEnabled==DEFAULTS.teleportViewerEnabled,()->cfg.teleportViewerEnabled=DEFAULTS.teleportViewerEnabled);
+        option(Component.translatable("townymapaddon.safety.teleport_override").getString(),onOff(cfg.teleportAllowNonEarthMc,v->cfg.teleportAllowNonEarthMc=v),()->cfg.teleportAllowNonEarthMc==DEFAULTS.teleportAllowNonEarthMc,()->cfg.teleportAllowNonEarthMc=DEFAULTS.teleportAllowNonEarthMc);
         option(Component.translatable("townymapaddon.teleport.settings.map_click").getString(),onOff(cfg.teleportMapClickAction,v->cfg.teleportMapClickAction=v),()->cfg.teleportMapClickAction==DEFAULTS.teleportMapClickAction,()->cfg.teleportMapClickAction=DEFAULTS.teleportMapClickAction);
         option(Component.translatable("townymapaddon.teleport.settings.advanced_enabled").getString(),onOff(cfg.teleportAdvancedEnabled,v->{cfg.teleportAdvancedEnabled=v;if(!v)cfg.teleportDefaultAdvanced=false;}),()->cfg.teleportAdvancedEnabled==DEFAULTS.teleportAdvancedEnabled,()->cfg.teleportAdvancedEnabled=DEFAULTS.teleportAdvancedEnabled);
         option(Component.translatable("townymapaddon.teleport.settings.show_uncertain").getString(),onOff(cfg.teleportShowUncertain,v->cfg.teleportShowUncertain=v),()->cfg.teleportShowUncertain==DEFAULTS.teleportShowUncertain,()->cfg.teleportShowUncertain=DEFAULTS.teleportShowUncertain);

@@ -29,14 +29,14 @@ public final class MapToggleOverlay {
     private MapToggleOverlay() {}
 
     public static void render(GuiGraphicsExtractor ctx, int sh, TownyMapConfig config,
-                              boolean squaremapLoading, boolean bordersLoading) {
+                              boolean squaremapLoading, boolean bordersLoading, boolean earthMcActive) {
         boolean scaled = UiScale.active();
         if (scaled) UiScale.push(ctx, LEFT, togglesTop(sh));   // shrink the button column around its top-left
         try {
         Font tr = Minecraft.getInstance().font;
         int y = togglesTop(sh);
 
-        drawToggle(ctx, tr, 0, y, tr(squaremapLoading ? "squaremap_loading" : "squaremap"), config.squaremapOnWorldMap());
+        if(earthMcActive){drawToggle(ctx, tr, 0, y, tr(squaremapLoading ? "squaremap_loading" : "squaremap"), config.squaremapOnWorldMap());
         drawMode(ctx, tr, 1, y, tr(bordersLoading ? "borders_loading" : "borders"), borderModeLabel(config.borderOverlayMode),
                 config.borderOverlayMode != 0);
         drawMode(ctx, tr, 2, y, tr("map"), statusModeLabel(config.townStatusOverlayMode),
@@ -48,12 +48,12 @@ public final class MapToggleOverlay {
                 drawCounterGroupButtons(ctx, tr, config);
             }
             drawCounterResetButton(ctx, tr, y);
-        }
+        }}
 
         drawSettingsButton(ctx, tr, settingsTop(sh));
-        if(config.teleportViewerEnabled)drawTexturedButton(ctx,LEFT,teleportTop(sh),WIDTH,HEIGHT,Component.translatable("townymapaddon.teleport.title").getString(),true,0xFF7EE2B8);
-        drawTexturedButton(ctx, LEFT, hunterTop(sh), WIDTH, HEIGHT, net.minecraft.network.chat.Component.translatable("townymapaddon.hunter.watch.title").getString(), true, 0xFFFFB45C);
-        drawTexturedButton(ctx, LEFT+WIDTH+3, hunterTop(sh), 26, HEIGHT, tr("log"), true, 0xFF9FD7FF);
+        if(TownyMapMod.isTeleportFeatureAvailable())drawTexturedButton(ctx,LEFT,teleportTop(sh),WIDTH,HEIGHT,Component.translatable("townymapaddon.teleport.title").getString(),true,0xFF7EE2B8);
+        if(TownyMapMod.isHunterFeatureAvailable()){drawTexturedButton(ctx, LEFT, hunterTop(sh), WIDTH, HEIGHT, net.minecraft.network.chat.Component.translatable("townymapaddon.hunter.watch.title").getString(), true, 0xFFFFB45C);
+        drawTexturedButton(ctx, LEFT+WIDTH+3, hunterTop(sh), 26, HEIGHT, tr("log"), true, 0xFF9FD7FF);}
         } finally {
             if (scaled) UiScale.pop(ctx);
         }

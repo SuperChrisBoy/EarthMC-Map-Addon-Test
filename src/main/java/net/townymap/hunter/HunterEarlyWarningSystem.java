@@ -120,7 +120,8 @@ public final class HunterEarlyWarningSystem {
     public List<String> exposureHudLines() {
         if(!config.hunterWarningEnabled||!config.hunterShowHud||!config.hunterExposureHud)return List.of();
         long now=System.currentTimeMillis();
-        return List.of("§b"+tr("hud.dynmap",tr(exposure.visible()?"common.visible":"common.hidden"),format(exposure.stateDurationMs(now))).getString(),
+        String dynmapColor=exposure.visible()?"§e":"§a";
+        return List.of(dynmapColor+tr("hud.dynmap",tr(exposure.visible()?"common.visible":"common.hidden"),format(exposure.stateDurationMs(now))).getString(),
                 "§b"+tr("hud.exposure",exposure.exposurePercent()).getString());
     }
     public List<String> hunterHudLines(Minecraft mc){

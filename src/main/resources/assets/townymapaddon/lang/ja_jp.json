@@ -595,5 +595,8 @@
     "townymapaddon.teleport.quality.good":  "良い · 標準より %1$s ブロック短い",
     "townymapaddon.teleport.quality.longer":  "標準より遠い · %1$s ブロック長い",
     "townymapaddon.teleport.quality.slight_improvement":  "わずかに短縮 · 標準より %1$s ブロック短い",
-    "townymapaddon.teleport.quality.not_comparable":  "比較できる標準ルートがありません"
+    "townymapaddon.teleport.quality.not_comparable":  "比較できる標準ルートがありません",
+    "townymapaddon.safety.hunter_override": "EarthMC 以外でハンター監視を許可（動作しない場合があります）",
+    "townymapaddon.safety.teleport_override": "EarthMC 以外でテレポートビューアーを許可（コマンド失敗の可能性）",
+    "townymapaddon.safety.non_earthmc_warning": "警告：このサーバーは EarthMC ではありません。EarthMC のデータやコマンドは動作しない場合があります。"
 }

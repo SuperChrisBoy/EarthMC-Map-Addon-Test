@@ -441,7 +441,7 @@ public abstract class MixinGuiMap {
                 long now=System.nanoTime();double dx=click.x()-townymap$lastTeleportClickX,dz=click.y()-townymap$lastTeleportClickY;
                 boolean doubleClick=now-townymap$lastTeleportClickNanos<=350_000_000L&&dx*dx+dz*dz<=64;
                 townymap$lastTeleportClickNanos=now;townymap$lastTeleportClickX=click.x();townymap$lastTeleportClickY=click.y();
-                if(doubleClick&&TownyMapMod.getConfig().teleportViewerEnabled&&TownyMapMod.getConfig().teleportMapClickAction){double[] world=overlayWorldFromScreen(click.x(),click.y(),sw,sh);if(world!=null){TownyMapMod.consumeTeleportTarget(world[0],world[1]);cir.setReturnValue(true);return;}}
+                if(doubleClick&&TownyMapMod.isTeleportFeatureAvailable()&&TownyMapMod.getConfig().teleportMapClickAction){double[] world=overlayWorldFromScreen(click.x(),click.y(),sw,sh);if(world!=null&&TownyMapMod.consumeTeleportTarget(world[0],world[1])){cir.setReturnValue(true);return;}}
                 TownyMapMod.armMapClickDismiss(cameraX, cameraZ);   // dismiss the search/popup unless this
                 return;                                             // click turns into a pan-drag (keeps it)
             }

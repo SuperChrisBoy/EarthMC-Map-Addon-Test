@@ -595,5 +595,8 @@
     "townymapaddon.teleport.quality.good":  "良好 · 比標準模式少走 %1$s 格",
     "townymapaddon.teleport.quality.longer":  "比標準模式更遠 · 多走 %1$s 格",
     "townymapaddon.teleport.quality.slight_improvement":  "略有改善 · 比標準模式少走 %1$s 格",
-    "townymapaddon.teleport.quality.not_comparable":  "沒有可供比較的標準模式路線"
+    "townymapaddon.teleport.quality.not_comparable":  "沒有可供比較的標準模式路線",
+    "townymapaddon.safety.hunter_override": "允許在非 EarthMC 伺服器使用獵人監視（可能無法運作）",
+    "townymapaddon.safety.teleport_override": "允許在非 EarthMC 伺服器使用傳送檢視器（指令可能無效）",
+    "townymapaddon.safety.non_earthmc_warning": "警告：目前伺服器不是 EarthMC，EarthMC 資料和指令可能無法使用。"
 }

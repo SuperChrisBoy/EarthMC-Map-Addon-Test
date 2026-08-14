@@ -177,7 +177,7 @@ public class TownyMapMod implements ClientModInitializer {
         net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK.register(c -> {
             if(votePartyService!=null)votePartyService.tick();
             net.townymap.integration.ShopWaypoints.tick();
-            if (hunterSystem != null && apiClient != null && isActiveOnCurrentServer()) {
+            if (hunterSystem != null && apiClient != null && isHunterFeatureAvailable()) {
                 apiClient.tickPlayers();
                 hunterSystem.tick(c, apiClient.getPlayers(), apiClient.getTowns());
             }
@@ -1068,8 +1068,9 @@ public class TownyMapMod implements ClientModInitializer {
      *  "blinking" at zoom-out. Positions/details are the same live squaremap data used everywhere. */
     public static void renderWorldMapLatePass(GuiGraphicsExtractor ctx, double cameraX, double cameraZ,
                                              double scale, int screenW, int screenH) {
-        if (!isActiveOnCurrentServer() || renderer == null || config == null) return;
-        if (hunterSystem != null) hunterSystem.renderWorldMap(ctx, cameraX, cameraZ, scale, screenW, screenH);
+        if (renderer == null || config == null) return;
+        if (hunterSystem != null && isHunterFeatureAvailable()) hunterSystem.renderWorldMap(ctx, cameraX, cameraZ, scale, screenW, screenH);
+        if (!isActiveOnCurrentServer()) return;
         // Join-range zone for the selected nation, under the player dots.
         if (config.nationRangeEnabled) {
             // Planning always shows its own nation's zone — that's the whole point of the mode — otherwise
@@ -1168,11 +1169,10 @@ public class TownyMapMod implements ClientModInitializer {
     }
 
     public static void renderMapToggles(GuiGraphicsExtractor ctx, int screenH) {
-        if (!isActiveOnCurrentServer()) return;
         if (config != null) {
             MapToggleOverlay.render(ctx, screenH, config,
                     renderer != null && renderer.isSquaremapLoading(),
-                    renderer != null && renderer.isBorderLoading());
+                    renderer != null && renderer.isBorderLoading(), isActiveOnCurrentServer());
         }
     }
 
@@ -1995,13 +1995,13 @@ public class TownyMapMod implements ClientModInitializer {
     }
 
     public static boolean onHunterButtonClick(double mouseX, double mouseY, int screenH) {
-        return MapToggleOverlay.handleHunterClick(mouseX, mouseY, screenH);
+        return isHunterFeatureAvailable() && MapToggleOverlay.handleHunterClick(mouseX, mouseY, screenH);
     }
     public static boolean onHunterActivityButtonClick(double mouseX,double mouseY,int screenH){
-        if(config!=null&&MapToggleOverlay.handleActivityClick(mouseX,mouseY,screenH)){net.townymap.gui.HunterActivityOverlay.toggle(config);return true;}return false;
+        if(isHunterFeatureAvailable()&&config!=null&&MapToggleOverlay.handleActivityClick(mouseX,mouseY,screenH)){net.townymap.gui.HunterActivityOverlay.toggle(config);return true;}return false;
     }
     public static boolean onTeleportButtonClick(double x,double y,int sh){if(config!=null&&MapToggleOverlay.handleTeleportClick(x,y,sh,config)){Minecraft mc=Minecraft.getInstance();if(mc!=null)mc.gui.setScreen(new net.townymap.gui.TeleportViewerSettingsScreen(mc.gui.screen()));return true;}return false;}
-    public static void renderHunterActivity(GuiGraphicsExtractor ctx,int sw,int sh){if(config!=null)net.townymap.gui.HunterActivityOverlay.render(ctx,sw,sh,config);}
+    public static void renderHunterActivity(GuiGraphicsExtractor ctx,int sw,int sh){if(isHunterFeatureAvailable()&&config!=null)net.townymap.gui.HunterActivityOverlay.render(ctx,sw,sh,config);}
     public static void renderVotePartyGlobal(GuiGraphicsExtractor ctx,int sw,int sh,net.minecraft.client.gui.screens.Screen screen){if(config!=null&&config.votePartyEnabled&&config.votePartyShowGlobalScreens&&votePartyService!=null)net.townymap.gui.VotePartyOverlay.renderMenu(ctx,sw,sh,votePartyService.status(),votePartyService.loading(),screen);}
     public static void renderVotePartyWorldMap(GuiGraphicsExtractor ctx,int sw,int sh){if(config!=null&&config.votePartyEnabled&&config.votePartyShowWorldMap&&votePartyService!=null)net.townymap.gui.VotePartyOverlay.renderWorldMap(ctx,sw,votePartyService.status(),votePartyService.loading());}
     public static int votePartyBossBarOffset(){
@@ -2025,12 +2025,12 @@ public class TownyMapMod implements ClientModInitializer {
         return hunterSystem == null ? null : hunterSystem.candidateService();
     }
     public static java.util.List<TownData> currentTownSnapshot() { return apiClient == null ? java.util.List.of() : apiClient.getTowns(); }
-    public static boolean consumeTeleportTarget(double worldX,double worldZ){net.townymap.gui.TeleportViewerOverlay.open(worldX,worldZ);return true;}
+    public static boolean consumeTeleportTarget(double worldX,double worldZ){if(!isTeleportFeatureAvailable())return false;net.townymap.gui.TeleportViewerOverlay.open(worldX,worldZ);return true;}
     public static void ensureTeleportData(){Minecraft mc=Minecraft.getInstance();if(mc!=null&&mc.getUser()!=null&&teleportAccess!=null)teleportAccess.ensure(currentTownSnapshot(),mc.getUser().getName());}
     public static void refreshTeleportData(){Minecraft mc=Minecraft.getInstance();if(mc!=null&&mc.getUser()!=null&&teleportAccess!=null)teleportAccess.refresh(currentTownSnapshot(),mc.getUser().getName());}
     public static net.townymap.teleport.TeleportAccessService.Plan teleportPlan(double x,double z){if(teleportAccess==null)return new net.townymap.teleport.TeleportAccessService.Plan(java.util.List.of(),java.util.List.of(),null,false,"Unavailable");ensureTeleportData();return teleportAccess.plan(x,z);}
-    public static void renderTeleportViewer(GuiGraphicsExtractor g,double camX,double camZ,double scale,int sw,int sh){if(config!=null)net.townymap.gui.TeleportViewerOverlay.render(g,camX,camZ,scale,sw,sh,config);}
-    public static boolean clickTeleportViewer(double x,double y,int sw,int sh){return config!=null&&net.townymap.gui.TeleportViewerOverlay.click(x,y,sw,sh,config);}
+    public static void renderTeleportViewer(GuiGraphicsExtractor g,double camX,double camZ,double scale,int sw,int sh){if(isTeleportFeatureAvailable()&&config!=null)net.townymap.gui.TeleportViewerOverlay.render(g,camX,camZ,scale,sw,sh,config);}
+    public static boolean clickTeleportViewer(double x,double y,int sw,int sh){return isTeleportFeatureAvailable()&&config!=null&&net.townymap.gui.TeleportViewerOverlay.click(x,y,sw,sh,config);}
     public static boolean releaseTeleportViewer(){return config!=null&&net.townymap.gui.TeleportViewerOverlay.release(config);}
     public static boolean scrollTeleportViewer(double x,double y,double amount,int sw,int sh){return config!=null&&net.townymap.gui.TeleportViewerOverlay.scroll(x,y,amount,sw,sh,config);}
     public static void cycleTeleportSpawnReport(net.townymap.teleport.TeleportDestination destination){if(teleportAccess!=null)teleportAccess.cycleSpawnReport(destination);}
@@ -2706,10 +2706,17 @@ public class TownyMapMod implements ClientModInitializer {
         String address = server.ip;
         if (!address.equals(activeServerAddress)) {
             activeServerAddress = address;
-            activeServerResult = address.toLowerCase(Locale.ROOT).contains("earthmc.net");
+            String host=address.toLowerCase(Locale.ROOT).trim();
+            int scheme=host.indexOf("://");if(scheme>=0)host=host.substring(scheme+3);
+            int slash=host.indexOf('/');if(slash>=0)host=host.substring(0,slash);
+            int port=host.lastIndexOf(':');if(port>0&&host.indexOf(':')==port)host=host.substring(0,port);
+            activeServerResult = host.equals("earthmc.net") || host.endsWith(".earthmc.net");
         }
         return activeServerResult;
     }
+
+    public static boolean isHunterFeatureAvailable(){return !isAccessBlocked()&&config!=null&&(isOnEarthMcServer()||config.hunterAllowNonEarthMc);}
+    public static boolean isTeleportFeatureAvailable(){return !isAccessBlocked()&&config!=null&&config.teleportViewerEnabled&&(isOnEarthMcServer()||config.teleportAllowNonEarthMc);}
 
     private static void showLookupResult(TownPopupData data, int screenX, int screenY,
                                          double clickedWorldX, double clickedWorldZ,

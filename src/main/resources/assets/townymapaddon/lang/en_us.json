@@ -595,5 +595,8 @@
     "townymapaddon.teleport.quality.good":  "Good · saves %1$s blocks",
     "townymapaddon.teleport.quality.longer":  "Longer than Standard · +%1$s blocks",
     "townymapaddon.teleport.quality.slight_improvement":  "Slight improvement · saves %1$s blocks",
-    "townymapaddon.teleport.quality.not_comparable":  "No Standard route available for comparison"
+    "townymapaddon.teleport.quality.not_comparable":  "No Standard route available for comparison",
+    "townymapaddon.safety.hunter_override": "Allow Hunter Watch outside EarthMC (may not work)",
+    "townymapaddon.safety.teleport_override": "Allow Teleport Viewer outside EarthMC (commands may fail)",
+    "townymapaddon.safety.non_earthmc_warning": "Warning: This server is not EarthMC. EarthMC data and commands may not work."
 }
