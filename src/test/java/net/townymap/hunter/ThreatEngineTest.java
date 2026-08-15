@@ -1,14 +1,20 @@
 package net.townymap.hunter;
 
-import net.townymap.hunter.model.HunterState;
+import net.townymap.hunter.front.HiddenThreatFrontEngine;
+import net.townymap.hunter.model.*;
 import net.townymap.hunter.threat.ThreatEngine;
 import org.junit.jupiter.api.Test;
+import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ThreatEngineTest {
     private final ThreatEngine engine=new ThreatEngine();
-    @Test void offlineThreatDropsButPersistsForThirtyMinutes(){long now=2_000_000L;HunterState h=hunter(now);var online=engine.assess(h,80,false,false,now);h.online=HunterState.OnlineStatus.OFFLINE;h.offlineSinceMs=now;var offline=engine.assess(h,80,false,false,now);assertTrue(offline.score()<online.score());assertTrue(offline.level().ordinal()<online.level().ordinal());assertNotEquals(HunterState.ThreatLevel.SAFE,offline.level());assertEquals(HunterState.ThreatLevel.SAFE,engine.assess(h,80,false,false,now+30*60_000L+1).level());}
-    @Test void returningOnlineRestoresLocationBasedAssessment(){long now=2_000_000L;HunterState h=hunter(now);h.online=HunterState.OnlineStatus.OFFLINE;h.offlineSinceMs=now;int reduced=engine.assess(h,80,false,false,now).score();h.online=HunterState.OnlineStatus.ONLINE;h.offlineSinceMs=0;assertTrue(engine.assess(h,80,false,false,now).score()>reduced);}
-    @Test void exposedWildernessRiskIncreasesWithTimeAndClaimDistance(){long now=2_000_000L;HunterState h=hunter(now);int initial=engine.assess(h,1500,true,true,0,0,now).score();int oneMinute=engine.assess(h,1500,true,true,60_000,0,now).score();int remote=engine.assess(h,1500,true,true,300_000,300,now).score();assertTrue(oneMinute>initial);assertTrue(remote>oneMinute);}
-    private static HunterState hunter(long now){HunterState h=new HunterState("Hunter");h.online=HunterState.OnlineStatus.ONLINE;h.visibility=HunterState.Visibility.VISIBLE;h.direct=new HunterState.Observation(0,0,now,HunterState.ObservationType.DIRECT_DYNMAP,"Town","Nation",HunterState.Confidence.HIGH);return h;}
+    private static HiddenThreatFrontEngine.Summary fronts(int warning,int plausible){return new HiddenThreatFrontEngine.Summary(warning,plausible,warning+plausible,null,0);}
+    @Test void visibleNearHunterUsesExactPosition(){assertEquals(HunterState.ThreatLevel.CRITICAL,engine.assess(new ThreatEngine.Input(true,80,999_999,List.of(),false,0)).level());}
+    @Test void hiddenDurationDoesNotDriveRisk(){var a=engine.assess(new ThreatEngine.Input(false,5000,1_000,List.of(),false,0));var b=engine.assess(new ThreatEngine.Input(false,5000,9_000_000,List.of(),false,0));assertEquals(a.level(),b.level());}
+    @Test void outsideAllFrontsIsLow(){assertEquals(HunterState.ThreatLevel.LOW,engine.assessHidden(fronts(0,0),true,1,false,0).level());}
+    @Test void warningFrontRaisesKnownHunterMoreThanPotential(){assertTrue(engine.assessHidden(fronts(1,0),true,0,false,0).level().ordinal()>engine.assessHidden(fronts(1,0),false,0,false,0).level().ordinal());}
+    @Test void plausibleFrontIsCriticalForKnownHunter(){assertEquals(HunterState.ThreatLevel.CRITICAL,engine.assessHidden(fronts(1,1),true,0,false,0).level());}
+    @Test void wildernessExposureOnlyAmplifiesIntersectingGeometry(){assertEquals(engine.assessHidden(fronts(0,0),true,0,false,0).level(),engine.assessHidden(fronts(0,0),true,1,false,0).level());assertTrue(engine.assessHidden(fronts(1,0),false,1,false,0).level().ordinal()>engine.assessHidden(fronts(1,0),false,0,false,0).level().ordinal());}
+    @Test void distantReappearanceDoesNotWarn(){assertTrue(engine.assess(new ThreatEngine.Input(true,8000,0,List.of(),false,0)).level().ordinal()<=HunterState.ThreatLevel.LOW.ordinal());}
 }

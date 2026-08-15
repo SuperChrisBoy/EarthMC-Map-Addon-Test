@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.*;
 
 /**
@@ -56,6 +57,10 @@ public class EarthMcApiClient {
     /** Batches that exhausted their retries; surfaced after a sweep so silent loss cannot hide. */
     private final java.util.concurrent.atomic.AtomicInteger droppedPlayerBatches =
             new java.util.concurrent.atomic.AtomicInteger();
+    private static final long BULK_ROUTE_CACHE_MS=10L*60*1000;
+    private final Object bulkRouteLock=new Object();
+    private volatile BulkTownSnapshot bulkTownSnapshot;
+    private volatile BulkNationSnapshot bulkNationSnapshot;
 
     // Per-resident activity cache (id → {removalDate, fetchedAt}), so a huge nation like France (1000+
     // residents = ~11 /players calls) is fetched once, then repeat views and other nations that share
@@ -184,18 +189,23 @@ public class EarthMcApiClient {
 
     /** Bulk full-town snapshot for route planning. Callers must cache it; this is never a render-loop API. */
     public CompletableFuture<java.util.Map<String,TownFullData>> fetchTownsFull(List<String> names) {
-        return CompletableFuture.supplyAsync(() -> {
+        List<String> normalized=normalizedNames(names);String signature=String.join("\n",normalized);long now=System.currentTimeMillis();
+        synchronized(bulkRouteLock){BulkTownSnapshot cached=bulkTownSnapshot;if(cached!=null&&cached.signature.equals(signature)&&(cached.future.isDone()||now-cached.createdAt<BULK_ROUTE_CACHE_MS)){if(!cached.future.isDone()||now-cached.createdAt<BULK_ROUTE_CACHE_MS)return cached.future;}
+        CompletableFuture<java.util.Map<String,TownFullData>> future=CompletableFuture.supplyAsync(() -> {
             java.util.Map<String,TownFullData> out=new ConcurrentHashMap<>();
-            if(names==null||names.isEmpty())return out;
-            java.util.List<String> list=new ArrayList<>(new java.util.LinkedHashSet<>(names));
+            if(normalized.isEmpty())return out;
+            java.util.List<String> list=normalized;
             java.util.List<CompletableFuture<Void>> futures=new ArrayList<>();
             for(int i=0;i<list.size();i+=TOWN_QUERY_BATCH){var batch=new ArrayList<>(list.subList(i,Math.min(list.size(),i+TOWN_QUERY_BATCH)));futures.add(CompletableFuture.runAsync(()->fetchTownsFullBatch(batch,out),executor));}
             futures.forEach(f->{try{f.join();}catch(RuntimeException ignored){}});return java.util.Map.copyOf(out);
-        },executor);
+        },executor);bulkTownSnapshot=new BulkTownSnapshot(signature,now,future);future.whenComplete((loaded,error)->{if(error!=null||loaded==null||(!normalized.isEmpty()&&loaded.size()<Math.max(1,(int)(normalized.size()*.9))))synchronized(bulkRouteLock){if(bulkTownSnapshot!=null&&bulkTownSnapshot.future==future)bulkTownSnapshot=null;}});return future;}
     }
     public CompletableFuture<java.util.Map<String,NationFullData>> fetchNationsFull(List<String> names){
-        return CompletableFuture.supplyAsync(()->{Map<String,NationFullData>out=new ConcurrentHashMap<>();if(names==null)return out;List<String>list=new ArrayList<>(new LinkedHashSet<>(names));List<CompletableFuture<Void>>fs=new ArrayList<>();for(int i=0;i<list.size();i+=TOWN_QUERY_BATCH){var batch=new ArrayList<>(list.subList(i,Math.min(list.size(),i+TOWN_QUERY_BATCH)));fs.add(CompletableFuture.runAsync(()->fetchNationsFullBatch(batch,out),executor));}fs.forEach(f->{try{f.join();}catch(RuntimeException ignored){}});return Map.copyOf(out);},executor);
+        List<String> normalized=normalizedNames(names);String signature=String.join("\n",normalized);long now=System.currentTimeMillis();synchronized(bulkRouteLock){BulkNationSnapshot cached=bulkNationSnapshot;if(cached!=null&&cached.signature.equals(signature)&&(!cached.future.isDone()||now-cached.createdAt<BULK_ROUTE_CACHE_MS))return cached.future;CompletableFuture<java.util.Map<String,NationFullData>> future=CompletableFuture.supplyAsync(()->{Map<String,NationFullData>out=new ConcurrentHashMap<>();if(normalized.isEmpty())return out;List<String>list=normalized;List<CompletableFuture<Void>>fs=new ArrayList<>();for(int i=0;i<list.size();i+=TOWN_QUERY_BATCH){var batch=new ArrayList<>(list.subList(i,Math.min(list.size(),i+TOWN_QUERY_BATCH)));fs.add(CompletableFuture.runAsync(()->fetchNationsFullBatch(batch,out),executor));}fs.forEach(f->{try{f.join();}catch(RuntimeException ignored){}});return Map.copyOf(out);},executor);bulkNationSnapshot=new BulkNationSnapshot(signature,now,future);future.whenComplete((loaded,error)->{if(error!=null||loaded==null||(!normalized.isEmpty()&&loaded.size()<Math.max(1,(int)(normalized.size()*.9))))synchronized(bulkRouteLock){if(bulkNationSnapshot!=null&&bulkNationSnapshot.future==future)bulkNationSnapshot=null;}});return future;}
     }
+    private static List<String> normalizedNames(List<String> names){if(names==null||names.isEmpty())return List.of();TreeMap<String,String> unique=new TreeMap<>();for(String name:names)if(name!=null&&!name.isBlank())unique.putIfAbsent(name.trim().toLowerCase(Locale.ROOT),name.trim());return List.copyOf(unique.values());}
+    private record BulkTownSnapshot(String signature,long createdAt,CompletableFuture<Map<String,TownFullData>> future){}
+    private record BulkNationSnapshot(String signature,long createdAt,CompletableFuture<Map<String,NationFullData>> future){}
     private void fetchNationsFullBatch(List<String>names,Map<String,NationFullData>out){JsonObject body=new JsonObject();JsonArray query=new JsonArray();names.forEach(query::add);body.add("query",query);String json=postGated(BASE+"/nations",body.toString());if(json==null)return;for(JsonElement el:JsonParser.parseString(json).getAsJsonArray())if(el.isJsonObject()){try{NationFullData d=parseNationFull(el.getAsJsonObject());if(d!=null)out.put(d.name().toLowerCase(Locale.ROOT),d);}catch(RuntimeException e){LOGGER.debug("[TownyMap] Skipped nation route record",e);}}}
     private void fetchTownsFullBatch(List<String> names,java.util.Map<String,TownFullData> out){
         JsonObject body=new JsonObject();JsonArray query=new JsonArray();names.forEach(query::add);body.add("query",query);
