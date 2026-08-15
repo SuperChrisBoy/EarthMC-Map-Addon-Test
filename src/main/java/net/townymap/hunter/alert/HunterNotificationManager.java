@@ -32,6 +32,8 @@ public final class HunterNotificationManager {
                     .getString() + (event.lines().isEmpty() ? "" : ": " + event.lines().getFirst().getString().replaceAll("§.", "")));
         }
     }
+    /** Records a meaningful background transition without surfacing it in chat or the temporary HUD queue. */
+    public void activityOnly(HunterEvent event){Long previous=last.get(event.key());if(previous!=null&&event.atMs()-previous<DUPLICATE_COOLDOWN_MS)return;last.put(event.key(),event.atMs());history.addFirst(event);while(history.size()>config.hunterActivityMaxEvents)history.removeLast();}
     public List<String> hudLines(long now) {
         long duration = Math.max(2, config.hunterNormalEventDurationSecs) * 1000L;
         queue.removeIf(e -> now - e.atMs() > (e.severity().ordinal() < HunterEvent.Severity.WARNING.ordinal() ? duration : Math.max(duration, 10_000L)));

@@ -19,5 +19,6 @@ public abstract class MixinHud{
     private void townymap$renderWildernessRisk(GuiGraphicsExtractor graphics,DeltaTracker delta,CallbackInfo ci){
         TownyMapMod.renderHunterWarningHud(graphics);
         TownyMapMod.renderWildernessRiskHud(graphics,overlayMessageTime>0);
+        TownyMapMod.renderHunterActivityHud(graphics);
     }
 }

@@ -11,8 +11,10 @@ public final class TeleportAccessEvaluator {
         if(player==null||target==null)return uncertain(TeleportDestination.Reason.API_DATA_MISSING);
         if(player.enemy(target.nation()))return unavailable(TeleportDestination.Reason.ENEMY_NATION);
         if(target.name().equalsIgnoreCase(player.town()))return accessible(TeleportDestination.Reason.OWN_TOWN);
+        // The public flag is the primary gate for every non-resident route.
+        // canOutsidersSpawn cannot make a private town spawn callable by itself.
+        if(!target.isPublic())return unavailable(TeleportDestination.Reason.PUBLIC_SPAWN_DISABLED);
         if(player.sameNation(target.nation())){
-            if(!target.isPublic())return unavailable(TeleportDestination.Reason.PUBLIC_SPAWN_DISABLED);
             // Nation members use the public same-nation spawn path; the outsider 5g
             // upkeep uncertainty does not apply to this relationship.
             return accessible(TeleportDestination.Reason.SAME_NATION_ACCESS);

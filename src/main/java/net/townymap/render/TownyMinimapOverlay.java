@@ -201,6 +201,7 @@ public final class TownyMinimapOverlay {
             }
             renderChunkCounterSelection(ctx, client, config, mapX, mapY, size, centerX, centerY,
                     playerX, playerZ, pixelsPerBlock, angle, sin, cos, clip);
+            if(config.hunterWarningEnabled&&config.hunterRadiusOnMinimap&&!TownyMapMod.isArchiveMode())XaeroRadiusOverlayRenderer.minimap(ctx,TownyMapMod.hunterMinimapRadiusOverlays(),centerX,centerY,playerX,playerZ,pixelsPerBlock,sin,cos,clip.left(),clip.top(),clip.right(),clip.bottom());
             if (squaremapRendered) ctx.extractDeferredElements(0, 0, 0.0F);
             return;
         }
@@ -305,6 +306,7 @@ public final class TownyMinimapOverlay {
             ctx.disableScissor();
         }
 
+        if(config.hunterWarningEnabled&&config.hunterRadiusOnMinimap&&!TownyMapMod.isArchiveMode())XaeroRadiusOverlayRenderer.minimap(ctx,TownyMapMod.hunterMinimapRadiusOverlays(),centerX,centerY,playerX,playerZ,pixelsPerBlock,sin,cos,clip.left(),clip.top(),clip.right(),clip.bottom());
         if (config.playersEnabled && config.minimapPlayersEnabled
                 && !TownyMapMod.isArchiveMode()) {   // archived snapshots have no live players
             renderPlayerDots(ctx, api.getPlayers(), player.getName().getString(),

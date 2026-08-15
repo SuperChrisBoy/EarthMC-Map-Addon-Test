@@ -177,9 +177,10 @@ public class TownyMapMod implements ClientModInitializer {
         net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK.register(c -> {
             if(votePartyService!=null)votePartyService.tick();
             net.townymap.integration.ShopWaypoints.tick();
+            if(teleportAccess!=null&&isTeleportFeatureAvailable()&&c.level!=null&&c.getUser()!=null){String server=c.getCurrentServer()==null?"":c.getCurrentServer().ip;String session=server+":"+System.identityHashCode(c.getConnection());teleportAccess.tick(currentTownSnapshot(),c.getUser().getName(),session);}
             if (hunterSystem != null && apiClient != null && isHunterFeatureAvailable()) {
                 apiClient.tickPlayers();
-                hunterSystem.tick(c, apiClient.getPlayers(), apiClient.getTowns());
+                hunterSystem.tickSafely(c, apiClient.getPlayers(), apiClient.getTowns());
             }
         });
 
@@ -188,6 +189,7 @@ public class TownyMapMod implements ClientModInitializer {
 
     private static void onCommandSent(String command) {
         if (apiClient == null || !isActiveOnCurrentServer()) return;
+        if (hunterSystem != null) hunterSystem.onCommandSent(command);
         String normalized = command.trim().toLowerCase(Locale.ROOT);
         if (normalized.startsWith("/")) normalized = normalized.substring(1);
         if (isTownClaimCommand(normalized)) {
@@ -2002,22 +2004,33 @@ public class TownyMapMod implements ClientModInitializer {
         if(isHunterFeatureAvailable()&&config!=null&&MapToggleOverlay.handleActivityClick(mouseX,mouseY,screenH)){net.townymap.gui.HunterActivityOverlay.toggle(config);return true;}return false;
     }
     public static boolean onTeleportButtonClick(double x,double y,int sh){if(config!=null&&MapToggleOverlay.handleTeleportClick(x,y,sh,config)){Minecraft mc=Minecraft.getInstance();if(mc!=null)mc.gui.setScreen(new net.townymap.gui.TeleportViewerSettingsScreen(mc.gui.screen()));return true;}return false;}
-    public static void renderHunterActivity(GuiGraphicsExtractor ctx,int sw,int sh){if(isHunterFeatureAvailable()&&config!=null)net.townymap.gui.HunterActivityOverlay.render(ctx,sw,sh,config);}
+    public static void renderHunterActivity(GuiGraphicsExtractor ctx,int sw,int sh){if(isHunterFeatureAvailable()&&config!=null)net.townymap.gui.HunterActivityOverlay.render(ctx,sw,sh,config,true);}
+    public static void renderHunterActivityHud(GuiGraphicsExtractor ctx){Minecraft mc=Minecraft.getInstance();if(mc!=null&&mc.player!=null&&mc.gui.screen()==null&&isHunterFeatureAvailable()&&config!=null)net.townymap.gui.HunterActivityOverlay.render(ctx,mc.getWindow().getGuiScaledWidth(),mc.getWindow().getGuiScaledHeight(),config,false);}
+    public static void renderHunterActivityChat(GuiGraphicsExtractor ctx){Minecraft mc=Minecraft.getInstance();if(mc!=null&&mc.player!=null&&isHunterFeatureAvailable()&&config!=null)net.townymap.gui.HunterActivityOverlay.render(ctx,mc.getWindow().getGuiScaledWidth(),mc.getWindow().getGuiScaledHeight(),config,true);}
     public static void renderWildernessRiskHud(GuiGraphicsExtractor ctx,boolean actionBarVisible){
         if(!isHunterFeatureAvailable()||hunterSystem==null)return;Minecraft mc=Minecraft.getInstance();if(mc==null||mc.player==null||mc.gui.screen()!=null)return;String line=hunterSystem.wildernessRiskHudLine();if(line.isBlank())return;int sw=mc.getWindow().getGuiScaledWidth(),sh=mc.getWindow().getGuiScaledHeight(),w=mc.font.width(line),x=sw/2,y=Math.max(4,sh-(actionBarVisible?96:82));ctx.fill(x-w/2-6,y-3,x+w/2+6,y+12,0xD8101216);ctx.centeredText(mc.font,line,x,y,0xFFFFFFFF);
     }
     public static void renderHunterWarningHud(GuiGraphicsExtractor ctx){
-        if(!isHunterFeatureAvailable()||hunterSystem==null)return;Minecraft mc=Minecraft.getInstance();if(mc==null||mc.player==null||mc.gui.screen()!=null)return;java.util.List<String> lines=hunterSystem.warningHudLines();if(lines.isEmpty())return;int sw=mc.getWindow().getGuiScaledWidth(),lineH=11,maxW=Math.max(80,sw-24),w=0;java.util.ArrayList<String> fitted=new java.util.ArrayList<>();for(String raw:lines){String line=fitHudLine(raw,mc.font,maxW-16);fitted.add(line);w=Math.max(w,mc.font.width(line));}int x=sw/2,y=4,h=fitted.size()*lineH+8;ctx.fill(x-w/2-8,y-2,x+w/2+8,y+h,0xED101216);ctx.fill(x-w/2-8,y-2,x+w/2+8,y+1,0xFFFF5555);int cy=y+3;for(String line:fitted){ctx.centeredText(mc.font,line,x,cy,0xFFFFFFFF);cy+=lineH;}
+        if(!isHunterFeatureAvailable()||hunterSystem==null)return;
+        Minecraft mc=Minecraft.getInstance();if(mc==null||mc.player==null||mc.gui.screen()!=null)return;
+        java.util.List<String> lines=hunterSystem.warningHudLines();int sw=mc.getWindow().getGuiScaledWidth(),lineH=13,maxW=Math.max(100,sw-24),y=net.townymap.gui.HunterAlertLayout.TOP_MARGIN;
+        if(!lines.isEmpty()){
+            int textWidth=0;java.util.ArrayList<String> fitted=new java.util.ArrayList<>();for(String raw:lines){String line=fitHudLine(raw,mc.font,maxW-36);fitted.add(line);textWidth=Math.max(textWidth,mc.font.width(line));}
+            int h=fitted.size()*lineH+14,panelWidth=Math.min(maxW,Math.max(260,textWidth+36));var bounds=net.townymap.gui.HunterAlertLayout.centered(sw,panelWidth,y-2,h+2);int centerX=bounds.centerX();boolean routine=lines.getFirst().contains(Component.translatable("townymapaddon.hunter.hud.recent_event").getString());int accent=routine?0xFFFFFF55:0xFFFF5555;
+            ctx.fill(bounds.x(),bounds.y(),bounds.x()+bounds.width(),bounds.y()+bounds.height(),0xF2101216);ctx.fill(bounds.x(),bounds.y(),bounds.x()+bounds.width(),bounds.y()+4,accent);int cy=y+6;for(String line:fitted){ctx.centeredText(mc.font,line,centerX,cy,0xFFFFFFFF);cy+=lineH;}y+=h+6;
+        }
+        String safe=fitHudLine(hunterSystem.safeRouteHudLine(mc),mc.font,maxW-16);if(!safe.isBlank()){int w=mc.font.width(safe);var bounds=net.townymap.gui.HunterAlertLayout.centered(sw,w+16,y-2,15);int centerX=bounds.centerX();ctx.fill(bounds.x(),bounds.y(),bounds.x()+bounds.width(),bounds.y()+bounds.height(),0xED101216);ctx.fill(bounds.x(),bounds.y(),bounds.x()+bounds.width(),bounds.y()+3,0xFF55DD77);ctx.centeredText(mc.font,safe,centerX,y+2,0xFFFFFFFF);}
     }
     public static void renderVotePartyGlobal(GuiGraphicsExtractor ctx,int sw,int sh,net.minecraft.client.gui.screens.Screen screen){if(config!=null&&config.votePartyEnabled&&config.votePartyShowGlobalScreens&&votePartyService!=null)net.townymap.gui.VotePartyOverlay.renderMenu(ctx,sw,sh,votePartyService.status(),votePartyService.loading(),screen);}
     public static void renderVotePartyWorldMap(GuiGraphicsExtractor ctx,int sw,int sh){if(config!=null&&config.votePartyEnabled&&config.votePartyShowWorldMap&&votePartyService!=null)net.townymap.gui.VotePartyOverlay.renderWorldMap(ctx,sw,votePartyService.status(),votePartyService.loading());}
     private static boolean votePartyMinimapRowVisible(){return config!=null&&config.votePartyEnabled&&config.votePartyShowHud&&votePartyService!=null&&(votePartyService.status()!=null||votePartyService.loading());}
     public static int topWarningBossBarOffset(){
         if(!isHunterFeatureAvailable()||hunterSystem==null||Minecraft.getInstance().gui.screen()!=null)return 0;
-        int lines=hunterSystem.warningHudLines().size();return lines==0?0:lines*11+14;
+        Minecraft mc=Minecraft.getInstance();int lines=hunterSystem.warningHudLines().size();boolean route=mc!=null&&!hunterSystem.safeRouteHudLine(mc).isBlank();return (lines==0?0:lines*13+22)+(route?19:0);
     }
     public static boolean clickHunterActivity(double x,double y,int sw,int sh){return config!=null&&net.townymap.gui.HunterActivityOverlay.click(x,y,sw,sh,config);}
     public static boolean releaseHunterActivity(){return config!=null&&net.townymap.gui.HunterActivityOverlay.release(config);}
+    public static void cancelHunterActivityDrag(){net.townymap.gui.HunterActivityOverlay.cancelDrag();}
     public static boolean scrollHunterActivity(double x,double y,double amount,int sw,int sh){return config!=null&&net.townymap.gui.HunterActivityOverlay.scroll(x,y,amount,sw,sh,config);}
 
     public static void openHunterWatchScreen() {
@@ -2027,6 +2040,9 @@ public class TownyMapMod implements ClientModInitializer {
     public static java.util.List<net.townymap.hunter.alert.HunterEvent> hunterActivityHistory() {
         return hunterSystem == null ? java.util.List.of() : hunterSystem.activityHistory();
     }
+    public static net.townymap.hunter.HunterEarlyWarningSystem.TrackerHealth hunterTrackerHealth(){return hunterSystem==null?null:hunterSystem.health();}
+    public static java.util.List<net.townymap.integration.XaeroRadiusOverlayProvider.Overlay> hunterRadiusOverlays(){return hunterSystem==null?java.util.List.of():hunterSystem.radiusOverlaySnapshot();}
+    public static java.util.List<net.townymap.integration.XaeroRadiusOverlayProvider.Overlay> hunterMinimapRadiusOverlays(){return hunterSystem==null?java.util.List.of():hunterSystem.minimapRadiusOverlaySnapshot();}
     public static net.townymap.hunter.discovery.HunterCandidateService hunterCandidateService() {
         return hunterSystem == null ? null : hunterSystem.candidateService();
     }
@@ -2034,8 +2050,7 @@ public class TownyMapMod implements ClientModInitializer {
     public static boolean consumeTeleportTarget(double worldX,double worldZ){if(!isTeleportFeatureAvailable())return false;net.townymap.gui.TeleportViewerOverlay.open(worldX,worldZ);return true;}
     public static void ensureTeleportData(){Minecraft mc=Minecraft.getInstance();if(mc!=null&&mc.getUser()!=null&&teleportAccess!=null)teleportAccess.ensure(currentTownSnapshot(),mc.getUser().getName());}
     public static void refreshTeleportData(double x,double z){Minecraft mc=Minecraft.getInstance();if(mc!=null&&mc.getUser()!=null&&teleportAccess!=null)teleportAccess.beginQuery(currentTownSnapshot(),mc.getUser().getName(),x,z);}
-    public static void loadMoreTeleportData(){Minecraft mc=Minecraft.getInstance();if(mc!=null&&mc.getUser()!=null&&teleportAccess!=null)teleportAccess.loadMore(currentTownSnapshot(),mc.getUser().getName());}
-    public static boolean hasMoreTeleportData(){return teleportAccess!=null&&teleportAccess.hasMore();}
+    public static void forceRefreshTeleportData(double x,double z){Minecraft mc=Minecraft.getInstance();if(mc!=null&&mc.getUser()!=null&&teleportAccess!=null){teleportAccess.beginQuery(currentTownSnapshot(),mc.getUser().getName(),x,z);teleportAccess.refresh(currentTownSnapshot(),mc.getUser().getName());}}
     public static net.townymap.teleport.TeleportAccessService.Plan teleportPlan(double x,double z){if(teleportAccess==null)return new net.townymap.teleport.TeleportAccessService.Plan(java.util.List.of(),java.util.List.of(),null,false,"Unavailable");ensureTeleportData();return teleportAccess.plan(x,z);}
     public static void renderTeleportViewer(GuiGraphicsExtractor g,double camX,double camZ,double scale,int sw,int sh){if(isTeleportFeatureAvailable()&&config!=null)net.townymap.gui.TeleportViewerOverlay.render(g,camX,camZ,scale,sw,sh,config);}
     public static boolean clickTeleportViewer(double x,double y,int sw,int sh){return isTeleportFeatureAvailable()&&config!=null&&net.townymap.gui.TeleportViewerOverlay.click(x,y,sw,sh,config);}

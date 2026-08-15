@@ -17,7 +17,7 @@ public final class HunterWatchlist {
         return new AddResult(names.size()-before,rejected);
     }
     public static void remove(TownyMapConfig config,String name){String k=key(name);config.hunterWatchlist.removeIf(n->key(n).equals(k));config.disabledHunterNames.removeIf(n->key(n).equals(k));config.save();}
-    public static boolean enabled(TownyMapConfig config,String name){String k=key(name);return config.disabledHunterNames.stream().noneMatch(n->key(n).equals(k));}
+    public static boolean enabled(TownyMapConfig config,String name){String k=key(name);return config.disabledHunterNames==null||config.disabledHunterNames.stream().noneMatch(n->key(n).equals(k));}
     public static void setEnabled(TownyMapConfig config,String name,boolean enabled){String k=key(name);config.disabledHunterNames.removeIf(n->key(n).equals(k));if(!enabled)config.disabledHunterNames.add(name);config.save();}
     public static boolean valid(String name){return name!=null&&USERNAME.matcher(name.trim()).matches();}
     private static String key(String value){return value==null?"":value.trim().toLowerCase(Locale.ROOT);}
