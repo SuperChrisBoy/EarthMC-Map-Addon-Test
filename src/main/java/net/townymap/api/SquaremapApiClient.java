@@ -88,6 +88,10 @@ public class SquaremapApiClient {
     // screen" -- a run of failures keeps bumping it while the claims go stale. These two track the
     // outcome instead: the last time claims actually landed, and whether the newest attempt failed.
     private volatile long lastMarkerSuccessMs = 0;
+    /** Last ETag seen per URL, so we can ask the server to skip sending unchanged data. */
+    private final Map<String, String> etags = new ConcurrentHashMap<>();
+    /** Unique instance: get() returns this when the server said 304, so it is distinct from any body. */
+    private static final String NOT_MODIFIED = new String("__not_modified__");
     private volatile boolean markerFetchFailing = false;
     private volatile long lastMarkerTickCheckMs = 0;
     private volatile long lastPlayerFetchMs = 0;
@@ -198,6 +202,12 @@ public class SquaremapApiClient {
     private void fetchMarkers() {
         try {
             String json = get(config.markersUrl());
+            if (json == NOT_MODIFIED) {
+                // Unchanged is a success: the data on screen is current, there was just nothing to send.
+                lastMarkerSuccessMs = System.currentTimeMillis();
+                markerFetchFailing = false;
+                return;
+            }
             if (json == null) markerFetchFailing = true;
             if (json != null) {
                 List<TownData> parsed = parseMarkers(json);
@@ -255,6 +265,7 @@ public class SquaremapApiClient {
     private void fetchPlayers() {
         try {
             String json = get(config.playersUrl());
+            if (json == NOT_MODIFIED) return;   // same positions as last poll; nothing to re-parse
             if (json != null) {
                 List<PlayerMarker> parsed = List.copyOf(parsePlayers(json));
                 players = parsed;
@@ -329,15 +340,25 @@ public class SquaremapApiClient {
      */
     private String get(String url) {
         try {
-            HttpRequest req = HttpRequest.newBuilder()
+            HttpRequest.Builder reqB = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .timeout(Duration.ofSeconds(20))
                     .header("User-Agent", "TownyMapAddon/1.0 (Fabric Mod)")
                     .header("Accept-Encoding", "gzip")
-                    .GET()
-                .build();
+                    .GET();
+            // "Only send it if it changed since the copy I already have." markers.json regenerates every
+            // couple of minutes while we poll every 60s, so most polls come back 304 with an empty body
+            // instead of 1.4 MB. The ETag must be the one from a gzipped response -- the server issues a
+            // different tag per encoding, and mixing them silently defeats the whole thing.
+            String prior = etags.get(url);
+            if (prior != null) reqB.header("If-None-Match", prior);
+            HttpRequest req = reqB.build();
             HttpResponse<byte[]> resp = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
-            if (resp.statusCode() == 200) return decodeBody(resp);
+            if (resp.statusCode() == 304) return NOT_MODIFIED;
+            if (resp.statusCode() == 200) {
+                resp.headers().firstValue("ETag").ifPresent(tag -> etags.put(url, tag));
+                return decodeBody(resp);
+            }
             LOGGER.warn("[TownyMap] HTTP {} from {}", resp.statusCode(), url);
         } catch (Exception e) {
             LOGGER.warn("[TownyMap] Request failed for {}: {}", url, e.getMessage());
