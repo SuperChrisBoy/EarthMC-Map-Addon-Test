@@ -319,21 +319,42 @@ public class SquaremapApiClient {
         }
     }
 
+    /**
+     * Fetches a squaremap document, asking for gzip.
+     *
+     * <p>markers.json is ~10.7 MB uncompressed and ~1.4 MB gzipped, and we pull it every 60 seconds.
+     * Without this header every client was moving roughly 640 MB an hour instead of 84 MB, which on a
+     * marginal connection shows up as "Connection reset" or a timed-out tile part way through -- the
+     * transfer simply does not finish. squaremap has always offered gzip; we just never asked.
+     */
     private String get(String url) {
         try {
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .timeout(Duration.ofSeconds(20))
                     .header("User-Agent", "TownyMapAddon/1.0 (Fabric Mod)")
+                    .header("Accept-Encoding", "gzip")
                     .GET()
                 .build();
-            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() == 200) return resp.body();
+            HttpResponse<byte[]> resp = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
+            if (resp.statusCode() == 200) return decodeBody(resp);
             LOGGER.warn("[TownyMap] HTTP {} from {}", resp.statusCode(), url);
         } catch (Exception e) {
             LOGGER.warn("[TownyMap] Request failed for {}: {}", url, e.getMessage());
         }
         return null;
+    }
+
+    /** Inflates the body when the server honoured our gzip request; returns plain text otherwise. */
+    private static String decodeBody(HttpResponse<byte[]> resp) throws java.io.IOException {
+        boolean gzip = resp.headers().firstValue("Content-Encoding")
+                .map(v -> v.toLowerCase(java.util.Locale.ROOT).contains("gzip")).orElse(false);
+        byte[] body = resp.body();
+        if (!gzip) return new String(body, java.nio.charset.StandardCharsets.UTF_8);
+        try (java.util.zip.GZIPInputStream in =
+                     new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(body))) {
+            return new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
     }
 
     // ── Parsers ──────────────────────────────────────────────────────────────
