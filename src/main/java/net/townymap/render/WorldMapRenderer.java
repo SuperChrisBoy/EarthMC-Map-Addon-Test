@@ -2307,7 +2307,7 @@ public class WorldMapRenderer {
                     // Ghosts never go through playerDotColor (fixed red), so nothing else fetches their
                     // town/nation — ask for it here, or the affiliation line stays permanently blank.
                     if (affil && d == null) TownyMapMod.requestPlayerLabelDetails(g.name());
-                    String aff = affil ? affiliation(d) : "";
+                    String aff = affil ? affiliation(d, g.name()) : "";
                     drawPlayerLabel(ctx, client, g.name(), aff, gx, gy, heads,
                             (g.alpha() << 24) | 0xFFB0B0, (g.alpha() << 24) | 0xE7B0B0);
                 }
@@ -2339,7 +2339,7 @@ public class WorldMapRenderer {
                 // playerDotColor above already requests this, but ask again if it is still missing so the
                 // label populates even when the colour path deferred (e.g. self details not loaded yet).
                 if (affil && details == null) TownyMapMod.requestPlayerLabelDetails(p.name());
-                String affiliation = affil ? affiliation(details) : "";
+                String affiliation = affil ? affiliation(details, p.name()) : "";
                 drawPlayerLabel(ctx, client, p.name(), affiliation, dotX, dotY, drewHead,
                         config.playerLabelColor, 0xFFB8D7FF);
             }
@@ -2372,8 +2372,16 @@ public class WorldMapRenderer {
         }
     }
 
-    private static String affiliation(EarthMcPlayerData details) {
-        if (details == null) return "";
+    private static String affiliation(EarthMcPlayerData details, String playerName) {
+        if (details == null) {
+            // Opted out of the API: their town's public roster still lists them, so label them from that
+            // rather than leaving a bare name floating over the map.
+            net.townymap.api.SquaremapApiClient api = TownyMapMod.getApiClient();
+            String town = api == null ? null : api.townOfResident(playerName);
+            if (town == null) return "";
+            String nation = api.getTownNation(town.toLowerCase(Locale.ROOT));
+            return nation == null || nation.isBlank() ? town : town + " / " + nation;
+        }
         if (!details.townName().isBlank() && !details.nationName().isBlank()) {
             return details.townName() + " / " + details.nationName();
         }
