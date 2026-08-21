@@ -78,6 +78,14 @@ public class SquaremapApiClient {
     private volatile Map<String, PlayerHistoryEntry> playerHistory = Map.of();
     private volatile Map<String, String> townMayors  = Map.of();   // townKey → mayor, parsed from popups
     private volatile Map<String, Integer> townResidents = Map.of(); // townKey → resident count, from popups
+    /**
+     * Lower-cased player name → the town whose roster lists them, built from the same popups.
+     *
+     * <p>This is TOWN data, so unlike the EarthMC API it has no opt-out: a player who has opted out of
+     * the API still appears on their town's resident list. It is the only way to say anything about
+     * those players, and it costs nothing -- we already download and parse these popups.
+     */
+    private volatile Map<String, String> residentTowns = Map.of();
     private volatile Map<String, String> townNations = Map.of();   // townKey → nation, parsed from tooltips
 
     private final AtomicBoolean markerFetchRunning = new AtomicBoolean(false);
@@ -388,6 +396,7 @@ public class SquaremapApiClient {
         List<TownData> towns = new ArrayList<>();
         Map<String, String> mayors = new HashMap<>();
         Map<String, Integer> residents = new HashMap<>();
+        Map<String, String> residentTown = new HashMap<>();
         int markerFailures = 0;
         Map<String, String> nations = new HashMap<>();
         try {
@@ -424,6 +433,12 @@ public class SquaremapApiClient {
                     int res = extractPopupResidents(getString(m, "popup"));
                     if (res >= 0 && !name.equals("?")) {
                         residents.put(name.toLowerCase(Locale.ROOT), res);
+                    }
+
+                    if (!name.equals("?")) {
+                        for (String r : extractPopupResidentNames(getString(m, "popup"))) {
+                            residentTown.putIfAbsent(r.toLowerCase(Locale.ROOT), name);
+                        }
                     }
 
                     String nation = extractNation(tooltip);
@@ -471,6 +486,7 @@ public class SquaremapApiClient {
         townMayors = Map.copyOf(mayors);
         townNations = Map.copyOf(nations);
         townResidents = Map.copyOf(residents);
+        residentTowns = Map.copyOf(residentTown);
         return towns;
     }
 
@@ -561,6 +577,37 @@ public class SquaremapApiClient {
         } catch (Exception e) {
             return fallback;
         }
+    }
+
+    /** The town whose roster lists this player, or null. Works for API opt-outs. */
+    public String townOfResident(String playerName) {
+        if (playerName == null || playerName.isBlank()) return null;
+        return residentTowns.get(playerName.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Resident names from a town popup. They follow the "Residents: <b>N</b></summary>" line as a plain
+     * comma-separated run, so we take everything up to the next tag and split it.
+     */
+    private static List<String> extractPopupResidentNames(String popupHtml) {
+        if (popupHtml == null) return List.of();
+        int marker = popupHtml.indexOf("Residents:");
+        if (marker < 0) return List.of();
+        int end = popupHtml.indexOf("</summary>", marker);
+        if (end < 0) return List.of();
+        int from = end + "</summary>".length();
+        int stop = popupHtml.indexOf('<', from);
+        String block = stop < 0 ? popupHtml.substring(from) : popupHtml.substring(from, stop);
+        List<String> out = new ArrayList<>();
+        for (String part : block.split(",")) {
+            String n = part.trim();
+            // Names are 3-16 characters of the usual Minecraft alphabet; anything else is stray markup.
+            if (n.length() >= 3 && n.length() <= 16 && n.chars().allMatch(
+                    c -> Character.isLetterOrDigit(c) || c == '_')) {
+                out.add(n);
+            }
+        }
+        return out;
     }
 
     private static int extractPopupResidents(String popupHtml) {
