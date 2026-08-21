@@ -3237,7 +3237,18 @@ public class TownyMapMod implements ClientModInitializer {
     private static boolean playerDetailNeeded(String key, long now) {
         if (playerDetailsCache.containsKey(key) || playerDetailsLoading.contains(key)) return false;
         Long failedAt = playerDetailsFailedAt.get(key);
-        if (failedAt != null && now - failedAt < 30_000) return false;
+        if (failedAt != null) {
+            // A player the API has nothing for is almost always an opt-out, which never resolves. Retrying
+            // every 30s meant each one was re-queried twice a minute forever; with several on screen at up
+            // to 4 requests a second that was enough to earn a 429, and once rate-limited EVERY lookup
+            // fails - which is how opening any town or nation panel started returning "not found".
+            //
+            // Their town roster already gives us town and nation, so there is nothing left to fetch:
+            // back those off hard. Anything else is likely transient, so it keeps a short retry.
+            boolean haveRoster = apiClient != null && apiClient.townOfResident(key) != null;
+            long backoff = haveRoster ? 1_800_000L : 300_000L;
+            if (now - failedAt < backoff) return false;
+        }
         return !requestDeferred(playerDetailsDeferredAt, key, now);
     }
 
