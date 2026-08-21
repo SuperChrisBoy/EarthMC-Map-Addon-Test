@@ -60,7 +60,9 @@ final class SquaremapTileRenderer {
     private final ExecutorService executor;
     private final Set<TileKey> loading = ConcurrentHashMap.newKeySet();
     private final Map<TileKey, Long> failedAt = new ConcurrentHashMap<>();
-    /** HTTP status codes already reported, so a bulk refusal logs one line, not one per tile. */
+    /** Last ETag per tile, so a stale-check can ask the server to skip sending unchanged imagery. */
+    private final Map<TileKey, String> tileEtags = new ConcurrentHashMap<>();
+    /** HTTP status codes already reported, so a bulk refusal logs one line and not one per tile. */
     private final Set<Integer> loggedTileStatuses = ConcurrentHashMap.newKeySet();
     /** Newest refusal status and when it happened, so the map can say why the imagery is blank. */
     private volatile int lastRefusedStatus = 0;
@@ -526,15 +528,26 @@ final class SquaremapTileRenderer {
     }
 
     private void fetchTile(TileKey key) {
-        HttpRequest request = HttpRequest.newBuilder()
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(tileUrl(key)))
                 .timeout(Duration.ofSeconds(20))
                 .header("User-Agent", "TownyMapAddon/1.0 (Fabric Mod)")
-                .GET()
-                .build();
+                .GET();
+        // Stale-checks re-downloaded ~180 KB per tile even when the imagery had not changed. With the
+        // previous ETag attached the server answers 304 and sends nothing; a screen full of tiles that
+        // are merely old now costs a few hundred bytes instead of several megabytes.
+        String priorTag = tileEtags.get(key);
+        if (priorTag != null) builder.header("If-None-Match", priorTag);
+        HttpRequest request = builder.build();
 
         try {
             HttpResponse<byte[]> response = http.send(request, HttpResponse.BodyHandlers.ofByteArray());
+            if (response.statusCode() == 304) {
+                // Unchanged: keep the texture we already uploaded and reset its age so the next
+                // stale-check waits a full interval instead of asking again immediately.
+                textureLoadedAt.put(key, System.currentTimeMillis());
+                return;
+            }
             if (response.statusCode() != 200) {
                 failedAt.put(key, System.currentTimeMillis());
                 // This used to return in silence, which made a server-side refusal (rate limit, 403,
@@ -556,6 +569,7 @@ final class SquaremapTileRenderer {
                 }
                 return;
             }
+            response.headers().firstValue("ETag").ifPresent(tag -> tileEtags.put(key, tag));
             byte[] bytes = response.body();
             LoadedTile previous = completedTiles.put(key, new LoadedTile(key, NativeImage.read(bytes)));
             if (previous != null) previous.image().close();
@@ -584,6 +598,7 @@ final class SquaremapTileRenderer {
             client.getTextureManager().destroyTexture(victim.getValue());
             textures.remove(victim.getKey());
             textureLoadedAt.remove(victim.getKey());
+            tileEtags.remove(victim.getKey());   // evicted texture: its ETag would validate nothing
         }
     }
 
