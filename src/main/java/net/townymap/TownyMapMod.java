@@ -2097,9 +2097,26 @@ public class TownyMapMod implements ClientModInitializer {
         client.setScreen(screen);
         future.thenAccept(page -> client.execute(() -> {
             if (client.currentScreen != screen) return;   // navigated away while the fetch was in flight
-            if (page == null) screen.markFailed();
-            else screen.setPage(page);
+            if (page == null) {
+                // API opt-outs never resolve. Town rosters have no opt-out, so show what they do carry
+                // rather than a bare "not found" -- same fallback the map popup uses.
+                net.townymap.gui.DetailScreen.Page fallback = rosterPlayerPage(kind, name);
+                if (fallback != null) screen.setPage(fallback);
+                else screen.markFailed();
+            } else {
+                screen.setPage(page);
+            }
         }));
+    }
+
+    /** Roster-derived page for a player the API has nothing for, or null if they are on no roster. */
+    private static net.townymap.gui.DetailScreen.Page rosterPlayerPage(
+            net.townymap.gui.DetailScreen.Kind kind, String name) {
+        if (kind != net.townymap.gui.DetailScreen.Kind.PLAYER || apiClient == null) return null;
+        String town = apiClient.townOfResident(name);
+        if (town == null) return null;
+        String nation = apiClient.getTownNation(town.toLowerCase(Locale.ROOT));
+        return net.townymap.gui.DetailPages.playerFromRoster(name, town, nation);
     }
 
     /** Convenience for the map popup's Expand button. */
