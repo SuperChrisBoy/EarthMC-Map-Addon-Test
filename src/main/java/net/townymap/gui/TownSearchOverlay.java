@@ -1275,7 +1275,24 @@ public final class TownSearchOverlay {
             lines.add(InfoRow.text("§7On map: §f" + dateWithAgo(history.lastSeenMs())));
         }
         if (details == null) {
-            lines.add(InfoRow.text("§7Details: §fChecking..."));
+            // The EarthMC API has an opt-out, and for those players the lookup never returns -- the card
+            // used to sit on "Checking..." forever. Town rosters in markers.json are TOWN data with no
+            // opt-out, so fall back to those: it gives the town, and the nation through it. Labelled as
+            // map data, because someone who opted out deserves to see where this came from.
+            String rosterTown = null;
+            net.townymap.api.SquaremapApiClient api = TownyMapMod.getApiClient();
+            if (api != null) rosterTown = api.townOfResident(selectedName);
+            if (rosterTown != null) {
+                lines.add(InfoRow.link("§7Town: §f", rosterTown, "town"));
+                String rosterNation = api.getTownNation(rosterTown.toLowerCase(Locale.ROOT));
+                if (rosterNation != null && !rosterNation.isBlank()) {
+                    lines.add(InfoRow.link("§7Nation: §f", rosterNation, "nation"));
+                }
+                lines.add(InfoRow.text("§8From map data (not on the API)"));
+            } else {
+                // Still say something terminal. An endless "Checking..." reads as broken.
+                lines.add(InfoRow.text("§7Details: §fNot available"));
+            }
             return List.copyOf(lines);
         }
         if (!details.townName().isBlank()) lines.add(InfoRow.link("§7Town: §f", details.townName(), "town"));
