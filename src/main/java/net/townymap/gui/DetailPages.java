@@ -715,6 +715,26 @@ public final class DetailPages {
 
     // ── Player ────────────────────────────────────────────────────────────────
 
+    /**
+     * A player page built from town rosters, for players who have opted out of the EarthMC API.
+     *
+     * <p>Rosters are town data and carry no opt-out, so this is all we can honestly show: their town,
+     * and the nation through it. Labelled as map-derived rather than presented as a full profile.
+     */
+    public static Page playerFromRoster(String name, String town, String nation) {
+        List<DetailScreen.Block> b = new ArrayList<>();
+        b.add(new Cols(List.of(
+                new Col("Town", town == null || town.isBlank() ? "-" : town,
+                        town == null || town.isBlank() ? null : new Ref(Kind.TOWN, town)),
+                new Col("Nation", nation == null || nation.isBlank() ? "-" : nation,
+                        nation == null || nation.isBlank() ? null : new Ref(Kind.NATION, nation)))));
+        b.add(new Rule());
+        b.add(new DetailScreen.Wide("Note",
+                "This player is not on the EarthMC API, so only what their town's public resident list "
+                + "shows is available here. Balance, join date and rank cannot be read."));
+        return new Page(Kind.PLAYER, name, "from map data", b, null, null);
+    }
+
     public static Page player(PlayerFullData p) {
         List<DetailScreen.Block> b = new ArrayList<>();
 
