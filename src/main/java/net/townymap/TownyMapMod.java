@@ -1970,13 +1970,16 @@ public class TownyMapMod implements ClientModInitializer {
         if(config!=null&&MapToggleOverlay.handleActivityClick(mouseX,mouseY,screenH)){net.townymap.gui.HunterActivityOverlay.toggle(config);return true;}return false;
     }
     public static boolean onTeleportButtonClick(double x,double y,int sh){if(config!=null&&MapToggleOverlay.handleTeleportClick(x,y,sh,config)){toggleTeleportTarget();return true;}return false;}
-    public static void renderHunterActivity(GuiGraphicsExtractor ctx,int sw,int sh){if(config!=null)net.townymap.gui.HunterActivityOverlay.render(ctx,sw,sh,config);}
+    public static void renderHunterActivity(DrawContext ctx,int sw,int sh){if(config!=null)net.townymap.gui.HunterActivityOverlay.render(ctx,sw,sh,config,true);}
+    public static void renderHunterActivityHud(DrawContext ctx){MinecraftClient mc=MinecraftClient.getInstance();if(mc.player!=null&&mc.currentScreen==null&&config!=null&&config.hunterWarningEnabled)net.townymap.gui.HunterActivityOverlay.render(ctx,mc.getWindow().getScaledWidth(),mc.getWindow().getScaledHeight(),config,false);}
+    public static void renderWildernessRiskHud(DrawContext ctx,boolean actionBarVisible){if(config==null||!config.hunterWarningEnabled||hunterSystem==null)return;MinecraftClient mc=MinecraftClient.getInstance();if(mc.player==null||mc.currentScreen!=null)return;String line=hunterSystem.wildernessRiskHudLine();if(line.isBlank())return;int sw=mc.getWindow().getScaledWidth(),sh=mc.getWindow().getScaledHeight(),w=mc.textRenderer.getWidth(line),x=sw/2,y=Math.max(4,sh-(actionBarVisible?96:82));ctx.fill(x-w/2-6,y-3,x+w/2+6,y+12,0xD8101216);ctx.drawCenteredTextWithShadow(mc.textRenderer,line,x,y,0xFFFFFFFF);}
+    public static void renderHunterWarningHud(DrawContext ctx){if(config==null||!config.hunterWarningEnabled||hunterSystem==null)return;MinecraftClient mc=MinecraftClient.getInstance();if(mc.player==null||mc.currentScreen!=null)return;java.util.List<String> lines=hunterSystem.warningHudLines();int sw=mc.getWindow().getScaledWidth(),y=8;for(String line:lines){ctx.drawCenteredTextWithShadow(mc.textRenderer,line,sw/2,y,0xFFFFFFFF);y+=13;}}
     public static boolean clickHunterActivity(double x,double y,int sw,int sh){return config!=null&&net.townymap.gui.HunterActivityOverlay.click(x,y,sw,sh,config);}
     public static boolean scrollHunterActivity(double x,double y,double amount,int sw,int sh){return config!=null&&net.townymap.gui.HunterActivityOverlay.scroll(x,y,amount,sw,sh,config);}
 
     public static void openHunterWatchScreen() {
-        Minecraft client = Minecraft.getInstance();
-        if (client != null) client.gui.setScreen(new net.townymap.gui.HunterWatchScreen(client.gui.screen()));
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client != null) client.setScreen(new net.townymap.gui.HunterWatchScreen(client.currentScreen));
     }
     public static java.util.List<net.townymap.hunter.alert.HunterEvent> hunterActivityHistory() {
         return hunterSystem == null ? java.util.List.of() : hunterSystem.activityHistory();
@@ -1987,10 +1990,10 @@ public class TownyMapMod implements ClientModInitializer {
     public static java.util.List<TownData> currentTownSnapshot() { return apiClient == null ? java.util.List.of() : apiClient.getTowns(); }
     public static boolean teleportTargetArmed(){return teleportTargetArmed;}
     public static void toggleTeleportTarget(){if(config!=null&&config.teleportViewerEnabled&&config.teleportMapClickAction)teleportTargetArmed=!teleportTargetArmed;}
-    public static boolean consumeTeleportTarget(double worldX,double worldZ){if(!teleportTargetArmed)return false;Minecraft mc=Minecraft.getInstance();if(mc==null||teleportAccess==null)return true;String name=mc.getUser()==null?"":mc.getUser().getName();teleportAccess.ensure(currentTownSnapshot(),name);mc.gui.setScreen(new net.townymap.gui.TeleportViewerScreen(mc.gui.screen(),worldX,worldZ));return true;}
-    public static net.townymap.teleport.TeleportAccessService.Plan teleportPlan(double x,double z){if(teleportAccess==null)return new net.townymap.teleport.TeleportAccessService.Plan(java.util.List.of(),java.util.List.of(),null,false,"Unavailable");Minecraft mc=Minecraft.getInstance();if(mc!=null&&mc.getUser()!=null)teleportAccess.ensure(currentTownSnapshot(),mc.getUser().getName());var plan=teleportAccess.plan(x,z);if(config!=null&&config.teleportRememberPrimaryHome&&plan.player()!=null&&!plan.player().town().isBlank()&&!plan.player().town().equals(config.teleportPrimaryHomeTown)){config.teleportPrimaryHomeTown=plan.player().town();config.save();}if(config!=null&&!config.teleportShowUncertain){java.util.function.Predicate<net.townymap.teleport.TeleportRoute> known=r->r.destination().eligibility()!=net.townymap.teleport.TeleportDestination.Eligibility.UNCERTAIN;plan=new net.townymap.teleport.TeleportAccessService.Plan(plan.standard().stream().filter(known).toList(),plan.advanced().stream().filter(known).toList(),plan.player(),plan.loading(),plan.error());}return plan;}
+    public static boolean consumeTeleportTarget(double worldX,double worldZ){if(!teleportTargetArmed)return false;MinecraftClient mc=MinecraftClient.getInstance();if(mc==null||teleportAccess==null)return true;String name=mc.getSession()==null?"":mc.getSession().getUsername();teleportAccess.ensure(currentTownSnapshot(),name);mc.setScreen(new net.townymap.gui.TeleportViewerScreen(mc.currentScreen,worldX,worldZ));return true;}
+    public static net.townymap.teleport.TeleportAccessService.Plan teleportPlan(double x,double z){if(teleportAccess==null)return new net.townymap.teleport.TeleportAccessService.Plan(java.util.List.of(),java.util.List.of(),null,false,"Unavailable");MinecraftClient mc=MinecraftClient.getInstance();if(mc!=null&&mc.getSession()!=null)teleportAccess.ensure(currentTownSnapshot(),mc.getSession().getUsername());var plan=teleportAccess.plan(x,z);if(config!=null&&config.teleportRememberPrimaryHome&&plan.player()!=null&&!plan.player().town().isBlank()&&!plan.player().town().equals(config.teleportPrimaryHomeTown)){config.teleportPrimaryHomeTown=plan.player().town();config.save();}if(config!=null&&!config.teleportShowUncertain){java.util.function.Predicate<net.townymap.teleport.TeleportRoute> known=r->r.destination().eligibility()!=net.townymap.teleport.TeleportDestination.Eligibility.UNCERTAIN;plan=new net.townymap.teleport.TeleportAccessService.Plan(plan.standard().stream().filter(known).toList(),plan.advanced().stream().filter(known).toList(),plan.player(),plan.loading(),plan.error());}return plan;}
     public static void cycleTeleportSpawnReport(net.townymap.teleport.TeleportDestination destination){if(teleportAccess!=null)teleportAccess.cycleSpawnReport(destination);}
-    public static String teleportTargetContext(double x,double z){TownData t=TownHoverOverlay.townAt(x,z,currentTownSnapshot());return t==null?Component.translatable("townymapaddon.teleport.wilderness").getString():t.name();}
+    public static String teleportTargetContext(double x,double z){TownData t=TownHoverOverlay.townAt(x,z,currentTownSnapshot());return t==null?Text.translatable("townymapaddon.teleport.wilderness").getString():t.name();}
 
     public static boolean onChunkCounterClick(double worldX, double worldZ) {
         if (!isActiveOnCurrentServer()) return false;
@@ -2742,7 +2745,7 @@ public class TownyMapMod implements ClientModInitializer {
                 .formatted(Formatting.GOLD)
                 .append(Text.literal(message).formatted(color)), false);
     }
-    private static void sendHunterFeedback(String message){Minecraft client=Minecraft.getInstance();if(client==null||client.player==null)return;client.player.sendSystemMessage(Component.literal(message));}
+    private static void sendHunterFeedback(String message){MinecraftClient client=MinecraftClient.getInstance();if(client==null||client.player==null)return;client.player.sendMessage(Text.literal(message),false);}
 
     // Single-town fetch for the hovered/clicked town. Visible-map and search details go through the bulk
     // path (requestTownDetailsBulk); this is only ever called for one town at a time, so it needs no

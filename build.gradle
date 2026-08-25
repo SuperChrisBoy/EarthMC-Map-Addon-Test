@@ -32,7 +32,12 @@ dependencies {
     // manual libs/ JARs are needed (CI can build cleanly).
     modCompileOnly "xaero.minimap:xaerominimap-fabric-${project.minecraft_version}:${project.xaerominimap_version}"
     modCompileOnly "xaero.map:xaeroworldmap-fabric-${project.minecraft_version}:${project.xaeroworldmap_version}"
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.11.4'
 }
+
+tasks.withType(Test).configureEach { useJUnitPlatform() }
 
 // The border source JSONs live in tools/border-source and are NOT shipped: they are build inputs only.
 // encodeBorders turns them into one compact binary blob (~0.9 MB vs 11.3 MB of text) that the mod reads.

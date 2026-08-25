@@ -133,6 +133,9 @@ public class TownyMapConfig {
     public boolean hunterWarningsInChat = true;
     public boolean hunterNotificationsInChat = true;
     public boolean hunterActivityWindowShown = true;
+    public boolean hunterActivityWindowMinimized = false;
+    public int hunterActivityWindowX = -1;
+    public int hunterActivityWindowY = 34;
     public boolean hunterShowRisk = true;
     public boolean hunterExposureHud = true;
     public boolean hunterRadiusOnWorldMap = true;
@@ -206,8 +209,10 @@ public class TownyMapConfig {
     public boolean teleportShowObstructed = true;
     public int teleportAdvancedMaxJoinHops = 1;
     public boolean teleportRememberPrimaryHome = true;
-    public String teleportPrimaryHomeTown = "";
+    public int teleportWindowX = 118;
+    public int teleportWindowY = 34;
     public java.util.Map<String,String> teleportSpawnReports = new java.util.HashMap<>();
+    public String teleportPrimaryHomeTown = "";
     public enum HunterHudPosition { RIGHT_OF_MINIMAP, LEFT_OF_MINIMAP, BELOW_MINIMAP }
     public List<Long> chunkCounterSelection = new ArrayList<>();
     public List<List<Long>> chunkCounterGroups = new ArrayList<>();

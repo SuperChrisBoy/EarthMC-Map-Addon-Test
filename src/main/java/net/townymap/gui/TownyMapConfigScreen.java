@@ -342,6 +342,7 @@ public class TownyMapConfigScreen extends Screen {
                 () -> cfg.playerAffiliationMinScale = DEFAULTS.playerAffiliationMinScale);
 
         if (SHOW_HUNTER_ALERT_SETTINGS) {
+        /* Hunter Alert is intentionally hidden from the public settings screen.
         section(hunterLabel("section"));
         option(hunterLabel("system"), onOff(cfg.hunterWarningEnabled, v -> cfg.hunterWarningEnabled = v),
                 () -> cfg.hunterWarningEnabled == DEFAULTS.hunterWarningEnabled,
@@ -467,15 +468,16 @@ public class TownyMapConfigScreen extends Screen {
         option(hunterLabel("show_teleport_clusters"),onOff(cfg.hunterShowTeleportThreatClusters,v->cfg.hunterShowTeleportThreatClusters=v),()->cfg.hunterShowTeleportThreatClusters==DEFAULTS.hunterShowTeleportThreatClusters,()->cfg.hunterShowTeleportThreatClusters=DEFAULTS.hunterShowTeleportThreatClusters);
         option(hunterLabel("show_latent_teleports"),onOff(cfg.hunterShowLatentTeleportOriginsWorldMap,v->cfg.hunterShowLatentTeleportOriginsWorldMap=v),()->cfg.hunterShowLatentTeleportOriginsWorldMap==DEFAULTS.hunterShowLatentTeleportOriginsWorldMap,()->cfg.hunterShowLatentTeleportOriginsWorldMap=DEFAULTS.hunterShowLatentTeleportOriginsWorldMap);
         option(hunterLabel("aggregate_teleport_warnings"),onOff(cfg.hunterAggregateTeleportWarnings,v->cfg.hunterAggregateTeleportWarnings=v),()->cfg.hunterAggregateTeleportWarnings==DEFAULTS.hunterAggregateTeleportWarnings,()->cfg.hunterAggregateTeleportWarnings=DEFAULTS.hunterAggregateTeleportWarnings);
+        */
         }
 
-        section(Component.translatable("townymapaddon.teleport.title").getString());
-        option(Component.translatable("townymapaddon.teleport.settings.enabled").getString(), onOff(cfg.teleportViewerEnabled,v->cfg.teleportViewerEnabled=v),()->cfg.teleportViewerEnabled==DEFAULTS.teleportViewerEnabled,()->cfg.teleportViewerEnabled=DEFAULTS.teleportViewerEnabled);
-        option(Component.translatable("townymapaddon.teleport.settings.map_click").getString(),onOff(cfg.teleportMapClickAction,v->cfg.teleportMapClickAction=v),()->cfg.teleportMapClickAction==DEFAULTS.teleportMapClickAction,()->cfg.teleportMapClickAction=DEFAULTS.teleportMapClickAction);
-        option(Component.translatable("townymapaddon.teleport.settings.default_mode").getString(),Button.builder(Component.translatable(cfg.teleportDefaultAdvanced?"townymapaddon.teleport.mode.advanced":"townymapaddon.teleport.mode.standard"),b->{cfg.teleportDefaultAdvanced=!cfg.teleportDefaultAdvanced;cfg.save();rebuildWidgets();}).bounds(0,0,120,20).build(),()->cfg.teleportDefaultAdvanced==DEFAULTS.teleportDefaultAdvanced,()->cfg.teleportDefaultAdvanced=DEFAULTS.teleportDefaultAdvanced);
-        option(Component.translatable("townymapaddon.teleport.settings.show_uncertain").getString(),onOff(cfg.teleportShowUncertain,v->cfg.teleportShowUncertain=v),()->cfg.teleportShowUncertain==DEFAULTS.teleportShowUncertain,()->cfg.teleportShowUncertain=DEFAULTS.teleportShowUncertain);
-        option(Component.translatable("townymapaddon.teleport.settings.show_obstructed").getString(),onOff(cfg.teleportShowObstructed,v->cfg.teleportShowObstructed=v),()->cfg.teleportShowObstructed==DEFAULTS.teleportShowObstructed,()->cfg.teleportShowObstructed=DEFAULTS.teleportShowObstructed);
-        option(Component.translatable("townymapaddon.teleport.settings.remember_home").getString(),onOff(cfg.teleportRememberPrimaryHome,v->cfg.teleportRememberPrimaryHome=v),()->cfg.teleportRememberPrimaryHome==DEFAULTS.teleportRememberPrimaryHome,()->cfg.teleportRememberPrimaryHome=DEFAULTS.teleportRememberPrimaryHome);
+        section(Text.translatable("townymapaddon.teleport.title").getString());
+        option(Text.translatable("townymapaddon.teleport.settings.enabled").getString(), onOff(cfg.teleportViewerEnabled,v->cfg.teleportViewerEnabled=v),()->cfg.teleportViewerEnabled==DEFAULTS.teleportViewerEnabled,()->cfg.teleportViewerEnabled=DEFAULTS.teleportViewerEnabled);
+        option(Text.translatable("townymapaddon.teleport.settings.map_click").getString(),onOff(cfg.teleportMapClickAction,v->cfg.teleportMapClickAction=v),()->cfg.teleportMapClickAction==DEFAULTS.teleportMapClickAction,()->cfg.teleportMapClickAction=DEFAULTS.teleportMapClickAction);
+        option(Text.translatable("townymapaddon.teleport.settings.default_mode").getString(),ButtonWidget.builder(Text.translatable(cfg.teleportDefaultAdvanced?"townymapaddon.teleport.mode.advanced":"townymapaddon.teleport.mode.standard"),b->{cfg.teleportDefaultAdvanced=!cfg.teleportDefaultAdvanced;cfg.save();clearAndInit();}).dimensions(0,0,120,20).build(),()->cfg.teleportDefaultAdvanced==DEFAULTS.teleportDefaultAdvanced,()->cfg.teleportDefaultAdvanced=DEFAULTS.teleportDefaultAdvanced);
+        option(Text.translatable("townymapaddon.teleport.settings.show_uncertain").getString(),onOff(cfg.teleportShowUncertain,v->cfg.teleportShowUncertain=v),()->cfg.teleportShowUncertain==DEFAULTS.teleportShowUncertain,()->cfg.teleportShowUncertain=DEFAULTS.teleportShowUncertain);
+        option(Text.translatable("townymapaddon.teleport.settings.show_obstructed").getString(),onOff(cfg.teleportShowObstructed,v->cfg.teleportShowObstructed=v),()->cfg.teleportShowObstructed==DEFAULTS.teleportShowObstructed,()->cfg.teleportShowObstructed=DEFAULTS.teleportShowObstructed);
+        option(Text.translatable("townymapaddon.teleport.settings.remember_home").getString(),onOff(cfg.teleportRememberPrimaryHome,v->cfg.teleportRememberPrimaryHome=v),()->cfg.teleportRememberPrimaryHome==DEFAULTS.teleportRememberPrimaryHome,()->cfg.teleportRememberPrimaryHome=DEFAULTS.teleportRememberPrimaryHome);
 
         section("Info Display");
         option("Current Town & Nation", onOff(cfg.infoDisplayTownEnabled, v -> cfg.infoDisplayTownEnabled = v),

@@ -3,7 +3,7 @@ package net.townymap.hunter.alert;
 import net.townymap.TownyMapConfig;
 import java.util.*;
 import java.util.function.Consumer;
-import net.minecraft.network.chat.Component;
+import net.minecraft.text.Text;
 
 /** Routes routine events to a short HUD queue and warnings to HUD plus optional chat. */
 public final class HunterNotificationManager {
@@ -28,7 +28,7 @@ public final class HunterNotificationManager {
         while (history.size() > config.hunterActivityMaxEvents) history.removeLast();
         boolean warning = event.severity().ordinal() >= HunterEvent.Severity.WARNING.ordinal();
         if ((warning && config.hunterWarningsInChat) || (!warning && config.hunterNotificationsInChat)) {
-            chat.accept((warning ? "§c"+Component.translatable("townymapaddon.hunter.chat.warning_prefix").getString()+" §f" : "§e"+Component.translatable("townymapaddon.hunter.chat.notification_prefix").getString()+" §f") + event.title()
+            chat.accept((warning ? "§c"+Text.translatable("townymapaddon.hunter.chat.warning_prefix").getString()+" §f" : "§e"+Text.translatable("townymapaddon.hunter.chat.notification_prefix").getString()+" §f") + event.title()
                     .getString() + (event.lines().isEmpty() ? "" : ": " + event.lines().getFirst().getString().replaceAll("§.", "")));
         }
     }
@@ -43,7 +43,7 @@ public final class HunterNotificationManager {
         if (event == null) return List.of();
         ArrayList<String> out = new ArrayList<>();
         out.add(event.severity() == HunterEvent.Severity.CRITICAL ? "§c§l⚠ " + event.title().getString()
-                : event.severity() == HunterEvent.Severity.WARNING ? "§c§l"+Component.translatable("townymapaddon.hunter.hud.warning").getString() : "§e§l"+Component.translatable("townymapaddon.hunter.hud.recent_event").getString());
+                : event.severity() == HunterEvent.Severity.WARNING ? "§c§l"+Text.translatable("townymapaddon.hunter.hud.warning").getString() : "§e§l"+Text.translatable("townymapaddon.hunter.hud.recent_event").getString());
         if (event.severity() != HunterEvent.Severity.CRITICAL) out.add("§f" + event.title().getString());
         for (var line : event.lines()) out.add("§7" + line.getString());
         return out;
