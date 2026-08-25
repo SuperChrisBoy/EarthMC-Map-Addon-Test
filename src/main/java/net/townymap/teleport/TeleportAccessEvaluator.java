@@ -9,6 +9,7 @@ public final class TeleportAccessEvaluator {
 
     public Result town(PlayerTeleportContext player,TownFullData target){
         if(player==null||target==null)return uncertain(TeleportDestination.Reason.API_DATA_MISSING);
+        if(PlayerTeleportContext.contains(target.outlaws(),player.player()))return unavailable(TeleportDestination.Reason.OUTLAWED);
         if(player.enemy(target.nation()))return unavailable(TeleportDestination.Reason.ENEMY_NATION);
         if(target.name().equalsIgnoreCase(player.town()))return accessible(TeleportDestination.Reason.OWN_TOWN);
         // The public flag is the primary gate for every non-resident route.
@@ -25,6 +26,7 @@ public final class TeleportAccessEvaluator {
 
     public Result nation(PlayerTeleportContext player,NationFullData target){
         if(player==null||target==null)return uncertain(TeleportDestination.Reason.API_DATA_MISSING);
+        if(PlayerTeleportContext.contains(target.outlaws(),player.player()))return unavailable(TeleportDestination.Reason.OUTLAWED);
         if(player.enemy(target.name()))return unavailable(TeleportDestination.Reason.ENEMY_NATION);
         if(player.sameNation(target.name()))return accessible(TeleportDestination.Reason.OWN_NATION);
         if(player.allied(target.name()))return accessible(TeleportDestination.Reason.ALLIED_NATION);

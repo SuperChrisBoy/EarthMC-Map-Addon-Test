@@ -34,6 +34,8 @@ import java.util.function.IntConsumer;
  */
 public class TownyMapConfigScreen extends Screen {
 
+    /** Hunter Alert is intentionally not exposed in the public settings UI. */
+    private static final boolean SHOW_HUNTER_ALERT_SETTINGS = false;
 
     // ── Layout metrics ────────────────────────────────────────────────────────
     private static final int ROW_H = 24;
@@ -339,8 +341,9 @@ public class TownyMapConfigScreen extends Screen {
                 () -> cfg.playerAffiliationMinScale == DEFAULTS.playerAffiliationMinScale,
                 () -> cfg.playerAffiliationMinScale = DEFAULTS.playerAffiliationMinScale);
 
-        section("Hunter Warning");
-        option("Hunter System", onOff(cfg.hunterWarningEnabled, v -> cfg.hunterWarningEnabled = v),
+        if (SHOW_HUNTER_ALERT_SETTINGS) {
+        section(hunterLabel("section"));
+        option(hunterLabel("system"), onOff(cfg.hunterWarningEnabled, v -> cfg.hunterWarningEnabled = v),
                 () -> cfg.hunterWarningEnabled == DEFAULTS.hunterWarningEnabled,
                 () -> cfg.hunterWarningEnabled = DEFAULTS.hunterWarningEnabled);
         option("Show Hunter HUD", onOff(cfg.hunterShowHud, v -> cfg.hunterShowHud = v),
@@ -464,6 +467,7 @@ public class TownyMapConfigScreen extends Screen {
         option(hunterLabel("show_teleport_clusters"),onOff(cfg.hunterShowTeleportThreatClusters,v->cfg.hunterShowTeleportThreatClusters=v),()->cfg.hunterShowTeleportThreatClusters==DEFAULTS.hunterShowTeleportThreatClusters,()->cfg.hunterShowTeleportThreatClusters=DEFAULTS.hunterShowTeleportThreatClusters);
         option(hunterLabel("show_latent_teleports"),onOff(cfg.hunterShowLatentTeleportOriginsWorldMap,v->cfg.hunterShowLatentTeleportOriginsWorldMap=v),()->cfg.hunterShowLatentTeleportOriginsWorldMap==DEFAULTS.hunterShowLatentTeleportOriginsWorldMap,()->cfg.hunterShowLatentTeleportOriginsWorldMap=DEFAULTS.hunterShowLatentTeleportOriginsWorldMap);
         option(hunterLabel("aggregate_teleport_warnings"),onOff(cfg.hunterAggregateTeleportWarnings,v->cfg.hunterAggregateTeleportWarnings=v),()->cfg.hunterAggregateTeleportWarnings==DEFAULTS.hunterAggregateTeleportWarnings,()->cfg.hunterAggregateTeleportWarnings=DEFAULTS.hunterAggregateTeleportWarnings);
+        }
 
         section(Component.translatable("townymapaddon.teleport.title").getString());
         option(Component.translatable("townymapaddon.teleport.settings.enabled").getString(), onOff(cfg.teleportViewerEnabled,v->cfg.teleportViewerEnabled=v),()->cfg.teleportViewerEnabled==DEFAULTS.teleportViewerEnabled,()->cfg.teleportViewerEnabled=DEFAULTS.teleportViewerEnabled);
