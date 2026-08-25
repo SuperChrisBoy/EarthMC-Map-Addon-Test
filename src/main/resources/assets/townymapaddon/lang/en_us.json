@@ -30,6 +30,7 @@
     "townymapaddon.teleport.eligibility_reason.same_nation_access":  "Accessible: same-nation membership",
     "townymapaddon.teleport.eligibility_reason.advanced_join_access":  "Accessible after joining",
     "townymapaddon.teleport.eligibility_reason.enemy_nation":  "Unavailable: enemy nation",
+    "townymapaddon.teleport.eligibility_reason.outlawed":  "Unavailable: you are outlawed here",
     "townymapaddon.teleport.eligibility_reason.outsider_spawn_disabled":  "Unavailable: outsider spawn disabled",
     "townymapaddon.teleport.eligibility_reason.not_member":  "Unavailable: not a member",
     "townymapaddon.teleport.eligibility_reason.unknown_data":  "Access data unavailable",

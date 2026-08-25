@@ -15,6 +15,8 @@ class TeleportAccessEvaluatorTest {
     @Test void openMembershipDoesNotGrantSpawn(){assertReason(TeleportDestination.Reason.OUTSIDER_SPAWN_DISABLED,evaluator.town(ctx("Home","Nation"),town("Target","Other",true,false,20)));}
     @Test void enemyOverridesOutsiderSpawn(){assertReason(TeleportDestination.Reason.ENEMY_NATION,evaluator.town(ctx("Home","Nation",Set.of(),Set.of("Enemy")),town("Target","Enemy",true,true,20)));}
     @Test void enemyNationSpawnUnavailable(){assertReason(TeleportDestination.Reason.ENEMY_NATION,evaluator.nation(ctx("Home","Nation",Set.of(),Set.of("Enemy")),nation("Enemy")));}
+    @Test void outlawedTownIsUnavailableEvenWhenPublic(){assertReason(TeleportDestination.Reason.OUTLAWED,evaluator.town(ctx("Home","Nation"),town("Target","Other",true,true,20,List.of("pLaYeR"))));}
+    @Test void outlawedNationIsUnavailableEvenWhenOwnAlliedOrPublic(){PlayerTeleportContext player=ctx("Home","Nation",Set.of("Ally"),Set.of());assertReason(TeleportDestination.Reason.OUTLAWED,evaluator.nation(player,nation("Nation",true,List.of("Player"))));assertReason(TeleportDestination.Reason.OUTLAWED,evaluator.nation(player,nation("Ally",true,List.of("Player"))));assertReason(TeleportDestination.Reason.OUTLAWED,evaluator.nation(player,nation("Public",true,List.of("Player"))));}
     @Test void ownAndAlliedNationSpawnsAccessible(){assertStatus(TeleportDestination.Eligibility.ACCESSIBLE,evaluator.nation(ctx("Home","Nation",Set.of("Ally"),Set.of()),nation("Nation")));assertReason(TeleportDestination.Reason.ALLIED_NATION,evaluator.nation(ctx("Home","Nation",Set.of("Ally"),Set.of()),nation("Ally")));}
     @Test void publicForeignNationSpawnIsAccessible(){assertReason(TeleportDestination.Reason.OUTSIDER_SPAWN_ENABLED,evaluator.nation(ctx("Home","Nation"),nation("Afghanistan",true)));}
     @Test void privateForeignNationSpawnRemainsUnavailable(){assertReason(TeleportDestination.Reason.NOT_MEMBER_OR_ALLY,evaluator.nation(ctx("Home","Nation"),nation("Private",false)));}
@@ -42,11 +44,20 @@ class TeleportAccessEvaluatorTest {
             pub,true,false,false,false,false,false,!nation.isBlank(),outsider,false,false,false,
             1,1,0,0,1,0,0,balance,-1.0,false,false,false,false,100,64,100,
             List.of(),List.of(),List.of(),List.of(),Map.of(),List.of());}
+    private static TownFullData town(String name,String nation,boolean pub,boolean outsider,double balance,List<String> outlaws){return new TownFullData(
+            name,"","","","","Mayor",nation,0L,0L,0L,
+            pub,true,false,false,false,false,false,!nation.isBlank(),outsider,false,false,false,
+            1,1,0,0,1,0,0,balance,-1.0,false,false,false,false,100,64,100,
+            List.of(),List.of(),outlaws,List.of(),Map.of(),List.of());}
     private static NationFullData nation(String name){return nation(name,true);}
     private static NationFullData nation(String name,boolean isPublic){return new NationFullData(
             name,"","","","King","Capital",0L,isPublic,false,false,
             0,0,0,1,0,0,0,20.0,100,64,100,
             List.of(),List.of(),List.of(),List.of(),List.of(),List.of(),Map.of(),List.of(),List.of(),List.of());}
+    private static NationFullData nation(String name,boolean isPublic,List<String> outlaws){return new NationFullData(
+            name,"","","","King","Capital",0L,isPublic,false,false,
+            0,0,0,1,0,0,0,20.0,100,64,100,
+            List.of(),List.of(),outlaws,List.of(),List.of(),List.of(),Map.of(),List.of(),List.of(),List.of());}
     private static TeleportRoute route(String name,double score,TeleportDestination.Eligibility eligibility){TeleportDestination d=new TeleportDestination(TeleportDestination.Type.TOWN_SPAWN,name,(int)score,64,0,"/t spawn "+name,eligibility,TeleportDestination.PhysicalAccess.UNKNOWN,TeleportDestination.Reason.OWN_TOWN);return new TeleportRoute(TeleportRoute.Mode.STANDARD,List.of(),d,score,TeleportRoute.MembershipRisk.LOW,TeleportRoute.Quality.GOOD,0,score,0);}
     private static TownData mapTown(String name,int x,int z){return new TownData(name,0xFFFFFF,List.<int[][]>of(new int[][]{{x-8,z-8},{x+8,z-8},{x+8,z+8},{x-8,z+8}}));}
     private static PlayerFullData player(boolean mayor,boolean king,List<String> townRanks,List<String> nationRanks){return new PlayerFullData("Player","","","Player","","","Home","Nation",0,0,0,true,false,mayor,king,true,true,0,0,List.of(),townRanks,nationRanks);}

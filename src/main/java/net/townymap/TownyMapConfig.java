@@ -128,6 +128,7 @@ public class TownyMapConfig {
     /** User-maintained hunter names. Identity UUIDs are resolved at runtime via the EarthMC API. */
     public List<String> hunterWatchlist = new ArrayList<>();
     public List<String> disabledHunterNames = new ArrayList<>();
+    /** Disabled by default; Hunter Alert is currently hidden from the public settings UI. */
     public boolean hunterWarningEnabled = false;
     /** Explicit safety override; Hunter Watch is otherwise unavailable off EarthMC. */
     public boolean hunterAllowNonEarthMc = false;
