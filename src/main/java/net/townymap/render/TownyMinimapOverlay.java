@@ -328,8 +328,13 @@ public final class TownyMinimapOverlay {
 
                     drawVisibleTownEdges(ctx, renderData.edges(), config);
                     drawOptimisticClaimChunks(ctx);
-                    if (!performanceShed && config.chunkCounterEnabled) {
-                        ChunkCounterOverlay.renderWorldSpace(ctx);
+                    if (config.chunkCounterEnabled) {
+                        // Pass the visible block rect so a large selection only draws what is on screen.
+                        // Rotation means the diagonal is the worst case, hence the 1.5x margin.
+                        double half = (size / 2.0) / Math.max(0.0001, pixelsPerBlock) * 1.5;
+                        ChunkCounterOverlay.renderWorldSpace(ctx,
+                                (int) (playerX - half), (int) (playerZ - half),
+                                (int) (playerX + half), (int) (playerZ + half));
                     }
                 } finally {
                     matrices.popMatrix();
@@ -594,7 +599,10 @@ public final class TownyMinimapOverlay {
             matrices.rotate((float) angle);
             matrices.scale((float) pixelsPerBlock, (float) pixelsPerBlock);
             matrices.translate((float) -playerX, (float) -playerZ);
-            ChunkCounterOverlay.renderWorldSpace(ctx);
+            double halfSel = (size / 2.0) / Math.max(0.0001, pixelsPerBlock) * 1.5;
+            ChunkCounterOverlay.renderWorldSpace(ctx,
+                    (int) (playerX - halfSel), (int) (playerZ - halfSel),
+                    (int) (playerX + halfSel), (int) (playerZ + halfSel));
         } finally {
             matrices.popMatrix();
             ctx.disableScissor();
