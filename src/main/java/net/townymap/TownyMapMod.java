@@ -1895,7 +1895,20 @@ public class TownyMapMod implements ClientModInitializer {
             if (client == null || client.world == null) return;
 
             var target = knownXaeroDimensionFor(mapWorld, activeWorldKey());
-            if (target == null) return;   // Xaero has no map data for that world; leave it where it is
+            if (target == null) {
+                // Xaero only lists dimensions it has created this session, so a world the player has
+                // been to before but not since logging in is absent -- and its own dimension button
+                // would not offer it either. getDimension() is a plain lookup that returns null (which
+                // GuiMap would then dereference), so the entry has to be created before it can be shown.
+                // Creating it makes Xaero load that dimension's saved regions from disk, which is the
+                // whole point: seeing where you have already been up there.
+                target = createXaeroDimension(mapWorld, activeWorldKey());
+                if (target == null) {
+                    LOGGER.info("[TownyMap] No Xaero dimension for {}; leaving its map where it is",
+                            activeWorldKey());
+                    return;
+                }
+            }
             var own = client.world.getRegistryKey();
             mapWorld.setCustomDimensionId(target.equals(own) ? null : target);
             proc.checkForWorldUpdate();
@@ -1910,6 +1923,42 @@ public class TownyMapMod implements ClientModInitializer {
      * none. EarthMC's two lunar dimensions share one squaremap world, so either satisfies the Moon --
      * preferring whichever the player is standing in, then the exact world-name match.
      */
+    /**
+     * Creates and registers the Xaero map dimension for a squaremap world it has not seen this session,
+     * returning its key, or null if we cannot name one.
+     */
+    private static net.minecraft.registry.RegistryKey<World> createXaeroDimension(
+            xaero.map.world.MapWorld mapWorld, String worldKey) {
+        net.minecraft.registry.RegistryKey<World> key = dimensionKeyFor(worldKey);
+        if (key == null) return null;
+        try {
+            var created = mapWorld.createDimensionUnsynced(key);
+            if (created == null) return null;
+            LOGGER.info("[TownyMap] Created Xaero map dimension {} for {}", key.getValue(), worldKey);
+            return key;
+        } catch (Throwable t) {
+            LOGGER.warn("[TownyMap] Could not create Xaero map dimension for {}: {}", worldKey, t.toString());
+            return null;
+        }
+    }
+
+    /** The Minecraft dimension a squaremap world corresponds to. */
+    private static net.minecraft.registry.RegistryKey<World> dimensionKeyFor(String worldKey) {
+        if (WORLD_OVERWORLD.equals(worldKey)) return World.OVERWORLD;
+        if (WORLD_MOON.equals(worldKey)) {
+            // Terrain the player walked is written under the dimension they were in. EarthMC has two
+            // lunar ones and squaremap publishes a single world for them, so prefer the surface.
+            return net.minecraft.registry.RegistryKey.of(
+                    net.minecraft.registry.RegistryKeys.WORLD,
+                    net.minecraft.util.Identifier.of("earthmc", "moon"));
+        }
+        int us = worldKey.indexOf('_');
+        if (us <= 0 || us >= worldKey.length() - 1) return null;
+        return net.minecraft.registry.RegistryKey.of(
+                net.minecraft.registry.RegistryKeys.WORLD,
+                net.minecraft.util.Identifier.of(worldKey.substring(0, us), worldKey.substring(us + 1)));
+    }
+
     private static net.minecraft.registry.RegistryKey<World> knownXaeroDimensionFor(
             xaero.map.world.MapWorld mapWorld, String worldKey) {
         MinecraftClient client = MinecraftClient.getInstance();
