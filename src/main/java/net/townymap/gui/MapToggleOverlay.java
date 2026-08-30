@@ -41,7 +41,8 @@ public final class MapToggleOverlay {
                 config.borderOverlayMode != 0);
         drawMode(ctx, tr, 2, y, "Map", statusModeLabel(config.townStatusOverlayMode),
                 config.townStatusOverlayMode != 0);
-        drawMode(ctx, tr, 3, y, "World", worldModeLabel(config), config.mapWorldMode != 0);
+        drawMode(ctx, tr, 3, y, "World", worldModeLabel(config),
+                !TownyMapMod.viewingEarth() || config.mapWorldMode != TownyMapMod.WORLD_MODE_AUTO);
         drawToggle(ctx, tr, 4, y, "Chunks", config.chunkGridEnabled);
         drawMode(ctx, tr, 5, y, "Counter", ChunkCounterOverlay.toolbarLabel(config), config.chunkCounterEnabled);
         if (config.chunkCounterEnabled) {
@@ -91,7 +92,9 @@ public final class MapToggleOverlay {
                     config.townStatusOverlayMode = TownyMapMod.nextStatusMode(before, backward);
                     TownSearchOverlay.onStatusModeChanged(before, config.townStatusOverlayMode);
                 }
-                case 3 -> config.mapWorldMode = config.mapWorldMode == 1 ? 0 : 1;
+                // Auto -> Terra Nostra -> Moon -> Auto. Clicking at all is the override; coming back
+                // round to Auto is how the following is resumed.
+                case 3 -> config.mapWorldMode = (config.mapWorldMode + (backward ? 2 : 1)) % 3;
                 case 4 -> config.chunkGridEnabled = !config.chunkGridEnabled;
                 case 5 -> {
                     if (config.chunkCounterEnabled) ChunkCounterOverlay.flushSelection();
@@ -275,7 +278,11 @@ public final class MapToggleOverlay {
 
     /** "Auto" follows the dimension you are in; the other two pin the map to one world. */
     private static String worldModeLabel(TownyMapConfig config) {
-        return config.mapWorldMode == 1 ? "Moon" : "Terra Nostra";
+        // In Auto the label has to show what it resolved to, or the button reads the same on both worlds.
+        if (config.mapWorldMode == TownyMapMod.WORLD_MODE_AUTO) {
+            return "Auto: " + TownyMapMod.activeWorldName();
+        }
+        return config.mapWorldMode == TownyMapMod.WORLD_MODE_MOON ? "Moon" : "Terra Nostra";
     }
 
     private static String borderModeLabel(int mode) {

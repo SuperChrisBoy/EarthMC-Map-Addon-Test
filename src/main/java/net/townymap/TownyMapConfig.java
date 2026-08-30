@@ -169,6 +169,13 @@ public class TownyMapConfig {
      * the map shows a world you are not standing in, player markers are hidden -- their coordinates
      * belong to the other world, and the two overlap numerically.
      */
+    /**
+      * 0 = Auto (follow the dimension you are in), 1 = Terra Nostra, 2 = Moon.
+      *
+      * <p>Auto is the default: EarthMC's earthmc:space and earthmc:moon both show the Moon, everything
+      * else shows Terra Nostra. Clicking the World button pins one world and stops the following;
+      * cycling back round to Auto resumes it.
+      */
     public int mapWorldMode = 0;
     public int squaremapMaxZoom    = 5;
 
@@ -250,6 +257,10 @@ public class TownyMapConfig {
             changed = true;
         } else if (squaremapMaxZoom > 8) {
             squaremapMaxZoom = 8;
+            changed = true;
+        }
+        if (mapWorldMode < 0 || mapWorldMode > 2) {
+            mapWorldMode = 0;
             changed = true;
         }
         if (borderOverlayMode < 0 || borderOverlayMode > 2) {
