@@ -115,14 +115,7 @@ public abstract class MixinGuiMap {
         TownyMapMod.onWorldMapFrame(this, cameraX, cameraZ);
         // A world switch leaves the camera at coordinates belonging to the world we left. Re-aim before
         // anything is drawn, and suppress the pan-clear so it does not read as the user panning.
-        double[] recentre = TownyMapMod.consumeWorldMapRecentre();
-        if (recentre != null) {
-            double dimScale = TownyMapMod.worldMapCoordinateScale();
-            TownyMapMod.suppressNextPanClear();
-            attachedCamera = false;   // or the next frame snaps straight back to the player
-            cameraX = recentre[0] / dimScale;
-            cameraZ = recentre[1] / dimScale;
-        }
+        applyPendingRecentre();
         if (TownyMapMod.isAccessBlocked()) return;
         // The EarthMC map is overworld-only. Outside the overworld our overlay is hidden, except in
         // "Overworld Coords" mode in the Nether, where we scale the overlay's camera x8 and its
@@ -157,6 +150,7 @@ public abstract class MixinGuiMap {
     private void onRenderPreDropdown(DrawContext ctx, int mouseX, int mouseY,
                                      float delta, CallbackInfo ci) {
         if (TownyMapMod.isAccessBlocked()) return;
+        applyPendingRecentre();
         // Freshness line goes HERE, not in the overlay inject: the squaremap tiles are drawn after that
         // one and painted straight over it, so the line vanished whenever the layer was switched on.
         // renderPreDropdown runs late enough to sit on top of everything. Screen-space at a fixed Y, so
@@ -221,8 +215,29 @@ public abstract class MixinGuiMap {
     //
     // (Previously this drew at method_25394 RETURN, which queued the arrow AFTER the
     // UI panels — making the arrow draw over the search box.)
+    /**
+     * Applies a pending world-switch recentre.
+     *
+     * <p>Called from both injects on purpose. onBeforePlayerArrow anchors on a field access late in
+     * extractRenderState, and that anchor has silently stopped matching across Xaero updates before;
+     * renderPreDropdown is the anchor the whole overlay already depends on, so if the map is drawing at
+     * all this one runs. consumeWorldMapRecentre() clears itself, so whichever fires first wins.
+     */
+    private void applyPendingRecentre() {
+        double[] recentre = TownyMapMod.consumeWorldMapRecentre();
+        if (recentre == null) return;
+        double dimScale = TownyMapMod.worldMapCoordinateScale();
+        TownyMapMod.suppressNextPanClear();
+        attachedCamera = false;   // a locked camera re-snaps to the player next frame
+        cameraX = recentre[0] / dimScale;
+        cameraZ = recentre[1] / dimScale;
+    }
+
     private void renderPlayerArrow(DrawContext ctx) {
         try {
+            // We redraw Xaero's arrow ourselves for layering, so suppressing Xaero's own copy was only
+            // half the job -- this one has to go too, or the player still appears standing on the Moon.
+            if (TownyMapMod.hideWorldMapPlayerArrow()) return;
             if (!TownyMapMod.shouldRenderWorldMapIndicatorOverlay()) return;
             MinecraftClient mc = MinecraftClient.getInstance();
             ClientPlayerEntity player = mc.player;
