@@ -69,6 +69,13 @@ public abstract class MixinGuiMap {
      */
     @Shadow(remap = false) private static boolean attachedCamera;
 
+    /**
+     * Xaero's one-shot "put the camera back on the player" flag, set when the map opens. Cleared every
+     * frame while the map shows a world the player is not in -- otherwise reopening the map planted the
+     * view at their Earth coordinates on the Moon, further off the lunar map the further out they stood.
+     */
+    @Shadow(remap = false) private boolean shouldResetCameraPos;
+
     @Shadow(remap = false) private double cameraX;
     @Shadow(remap = false) private double cameraZ;
     @Shadow(remap = false) private double scale;
@@ -149,6 +156,10 @@ public abstract class MixinGuiMap {
                                      float delta, CallbackInfo ci) {
         if (TownyMapMod.isAccessBlocked()) return;
         applyPendingRecentre();
+        // Remember where the camera is left in this world so switching back returns to it rather than
+        // to the claim centre every time.
+        double camScale = TownyMapMod.worldMapCoordinateScale();
+        TownyMapMod.noteWorldMapCamera(cameraX * camScale, cameraZ * camScale);
         // Freshness line goes HERE, not in the overlay inject: the squaremap tiles are drawn after that
         // one and painted straight over it, so the line vanished whenever the layer was switched on.
         // renderPreDropdown runs late enough to sit on top of everything. Screen-space at a fixed Y, so
@@ -222,6 +233,13 @@ public abstract class MixinGuiMap {
      * all this one runs. consumeWorldMapRecentre() clears itself, so whichever fires first wins.
      */
     private void applyPendingRecentre() {
+        // Both of Xaero's player-snap paths, every frame, for as long as the map is off-world: the
+        // attached-camera lock and the reset-on-open flag both assign the player's position at the top
+        // of extractRenderState, which is what kept dragging the Moon view back to Earth coordinates.
+        if (TownyMapMod.pinWorldMapCamera()) {
+            attachedCamera = false;
+            shouldResetCameraPos = false;
+        }
         double[] recentre = TownyMapMod.consumeWorldMapRecentre();
         if (recentre == null) return;
         double dimScale = TownyMapMod.worldMapCoordinateScale();
