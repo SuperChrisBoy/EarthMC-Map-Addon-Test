@@ -1637,6 +1637,117 @@ public class TownyMapMod implements ClientModInitializer {
      * own position or Xaero's camera (always current-dimension) has to go through this, or the two
      * sides end up a factor of 8 apart in the Nether.
      */
+    // ── Squaremap worlds (Terra Nostra / Moon) ───────────────────────────────
+    public static final String WORLD_OVERWORLD = "minecraft_overworld";
+    public static final String WORLD_MOON = "earthmc_moon";
+
+    /** squaremap world key -> display name, from /tiles/settings.json. Empty until fetched. */
+    private static volatile java.util.Map<String, String> squaremapWorlds = java.util.Map.of();
+    private static volatile boolean squaremapWorldsFetched = false;
+    private static volatile String lastActiveWorld = WORLD_OVERWORLD;
+    private static volatile String loggedUnknownWorld = null;
+
+    /**
+     * The worlds squaremap publishes, fetched once. Used to check that a dimension actually has map
+     * data before we try to show it, so an unknown dimension falls back instead of 404ing every tile.
+     */
+    public static java.util.Map<String, String> squaremapWorlds() {
+        if (!squaremapWorldsFetched && config != null && apiClient != null) {
+            squaremapWorldsFetched = true;
+            apiClient.fetchWorlds().thenAccept(m -> {
+                if (m != null && !m.isEmpty()) {
+                    squaremapWorlds = m;
+                    LOGGER.info("[TownyMap] squaremap worlds: {}", m);
+                }
+            });
+        }
+        return squaremapWorlds;
+    }
+
+    /**
+     * The squaremap world key for the dimension the player is standing in, or null if squaremap has no
+     * map for it.
+     *
+     * <p>squaremap names worlds "namespace_path", which is exactly the dimension id with the colon
+     * swapped -- minecraft:overworld is minecraft_overworld, earthmc:moon is earthmc_moon. Deriving it
+     * means a world EarthMC adds later works with no code change.
+     */
+    public static String playerWorldKey() {
+        Minecraft client = Minecraft.getInstance();
+        if (client == null || client.level == null) return null;
+        try {
+            var id = client.level.dimension().identifier();
+            String key = id.getNamespace() + "_" + id.getPath();
+            if (squaremapWorlds().containsKey(key)) return key;
+            // Say so once. The mapping from dimension id to squaremap world is derived, not hardcoded,
+            // so if EarthMC names the Moon dimension something unexpected this line is what reveals it.
+            if (!key.equals(loggedUnknownWorld) && !squaremapWorlds().isEmpty()) {
+                loggedUnknownWorld = key;
+                LOGGER.info("[TownyMap] Dimension {} has no squaremap world (known: {})",
+                        id, squaremapWorlds().keySet());
+            }
+            return null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** The squaremap world the map should currently show. */
+    public static String activeWorldKey() {
+        if (config == null) return WORLD_OVERWORLD;
+        // Explicit, never automatic: travelling to the Moon does not silently change what the map shows.
+        return config.mapWorldMode == 1 ? WORLD_MOON : WORLD_OVERWORLD;
+    }
+
+    /**
+     * True when the map is showing Terra Nostra.
+     *
+     * <p>Guards anything positioned from an EarthMC API coordinate -- nation spawns and the like are
+     * Earth coordinates, and the two worlds' coordinates overlap numerically, so using one off Earth
+     * plants a marker somewhere plausible-looking and wrong.
+     */
+    public static boolean viewingEarth() {
+        return WORLD_OVERWORLD.equals(activeWorldKey());
+    }
+
+    /** True when the map shows a world the player is not in -- markers there are not where they are. */
+    public static boolean viewingOtherWorld() {
+        String pk = playerWorldKey();
+        return pk != null && !pk.equals(activeWorldKey());
+    }
+
+    /** Display name for the active world, for labels. */
+    public static String activeWorldName() {
+        String key = activeWorldKey();
+        String name = squaremapWorlds().get(key);
+        return name != null ? name : key;
+    }
+
+    /**
+     * Detects a world switch and resets what belonged to the old one.
+     *
+     * <p>Driven from the client tick on purpose. activeWorldKey() is read from fetch threads (markers and
+     * every tile URL), and clearing the tile cache there could close a NativeImage another thread is
+     * still decoding. On the tick it happens once, on the main thread, between frames.
+     */
+    public static void tickWorldChange() {
+        String key = activeWorldKey();
+        if (key.equals(lastActiveWorld)) return;
+        lastActiveWorld = key;
+        onActiveWorldChanged(key);
+    }
+
+    private static void onActiveWorldChanged(String key) {
+        LOGGER.info("[TownyMap] Map world -> {}", key);
+        // Moon and Terra Nostra coordinates overlap numerically, so nothing cached for one world may be
+        // reused for the other: towns, tiles and outline caches all have to go.
+        if (apiClient != null) apiClient.onWorldChanged();
+        if (renderer != null) {
+            renderer.invalidateTownCaches();
+            renderer.clearSquaremapTiles();
+        }
+    }
+
     public static double dimensionCoordinateScale() {
         Minecraft client = Minecraft.getInstance();
         if (client == null || client.level == null) return 1.0;
@@ -1653,6 +1764,14 @@ public class TownyMapMod implements ClientModInitializer {
         var dim = client.level.dimension();
         if (dim == Level.OVERWORLD) return 1.0;
         if (config.netherMode == 2 && dim == Level.NETHER) return 8.0;   // Overworld Coords
+        // Standing in a world squaremap maps (the Moon) and looking at that world: 1:1, like Earth.
+        // This used to fall through to the hide below, so stepping onto the Moon blanked the overlay
+        // even though squaremap has full tiles and claims for it.
+        String pk = playerWorldKey();
+        if (pk != null && pk.equals(activeWorldKey())) return 1.0;
+        // Deliberately looking at a different world than the one you are in. Keep rendering -- that is
+        // the point of the switch - and the player markers are hidden separately.
+        if (viewingOtherWorld() || !viewingEarth()) return 1.0;
         // The overworld-only hide exists because EarthMC's map covers only its overworld, so raw X/Z
         // from another dimension would put the overlay in the wrong place relative to the player.
         // Off EarthMC there is no such correspondence to protect, and hiding would blank the whole
