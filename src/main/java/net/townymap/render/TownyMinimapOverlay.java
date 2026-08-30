@@ -143,6 +143,10 @@ public final class TownyMinimapOverlay {
         // The EarthMC map is overworld-only. Outside the overworld (e.g. the Nether) the raw X/Z
         // would place our overlay at the wrong spot, so apply the configured behaviour. Resolved
         // before the projection below, which needs it for both the coordinates and the block size.
+        // The minimap always shows where the player actually is, so it can only draw the world they are
+        // standing in. Only the active world's claims are held in memory, so with the map toggled
+        // elsewhere -- browsing the Moon from Earth -- this would paint lunar borders onto Terra Nostra.
+        if (TownyMapMod.viewingOtherWorld() && TownyMapMod.isOnEarthMcServer()) return;
         double dimScale = 1.0;
         if (client.world.getRegistryKey() != World.OVERWORLD) {
             if (config.netherMode == 2 && client.world.getRegistryKey() == World.NETHER) {
@@ -1546,6 +1550,10 @@ public final class TownyMinimapOverlay {
         // This is the fallback path used when the town overlay above didn't run, so it has to repeat
         // that method's dimension handling. It previously drew with raw X/Z, which put the squaremap
         // tiles 8x off from the town borders in the Nether and kept drawing them in "Hidden" mode.
+        // The minimap always shows where the player actually is, so it can only draw the world they are
+        // standing in. Only the active world's claims are held in memory, so with the map toggled
+        // elsewhere -- browsing the Moon from Earth -- this would paint lunar borders onto Terra Nostra.
+        if (TownyMapMod.viewingOtherWorld() && TownyMapMod.isOnEarthMcServer()) return;
         double dimScale = 1.0;
         if (client.world.getRegistryKey() != World.OVERWORLD) {
             if (config.netherMode == 2 && client.world.getRegistryKey() == World.NETHER) {
