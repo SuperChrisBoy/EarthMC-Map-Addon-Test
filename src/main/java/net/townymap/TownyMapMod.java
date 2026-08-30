@@ -1839,6 +1839,16 @@ public class TownyMapMod implements ClientModInitializer {
         return WORLD_OVERWORLD.equals(activeWorldKey());
     }
 
+    /**
+     * True when Xaero's own player arrow should be left undrawn on the world map.
+     *
+     * <p>The arrow marks the player's position, which means nothing on a world they are not standing in
+     * -- on the Moon it would plant them somewhere in the lunar landscape they have never been.
+     */
+    public static boolean hideWorldMapPlayerArrow() {
+        return isActiveOnCurrentServer() && viewingOtherWorld();
+    }
+
     /** True when the map shows a world the player is not in -- markers there are not where they are. */
     public static boolean viewingOtherWorld() {
         // Goes through playerMapWorld() rather than the raw dimension id: the lunar dimension is not
@@ -2104,7 +2114,8 @@ public class TownyMapMod implements ClientModInitializer {
             sendFeedback("Archive closed - it only covers Terra Nostra.", ChatFormatting.YELLOW);
         }
         // Moon and Terra Nostra coordinates overlap numerically, so nothing cached for one world may be
-        // reused for the other: towns, tiles and outline caches all have to go.
+        // reused for the other. Towns and tiles are keyed by world and so survive; what follows is the
+        // state that carries no world of its own.
         if (apiClient != null) apiClient.onWorldChanged();
         cachedGhosts = List.of();
         cachedGhostsAt = 0;
@@ -2121,7 +2132,9 @@ public class TownyMapMod implements ClientModInitializer {
         net.townymap.gui.TownSearchOverlay.invalidateResults();
         if (renderer != null) {
             renderer.invalidateTownCaches();
-            renderer.clearSquaremapTiles();
+            // Tiles are keyed by world now, so the world being switched away from keeps its cache
+            // instead of being thrown away -- the minimap is still drawing it. Wiping here meant
+            // pinning the world map to the Moon stripped the minimap's Terra Nostra imagery.
         }
         // Keep Xaero's own terrain on the same world we are drawing claims for.
         syncXaeroDimension();
