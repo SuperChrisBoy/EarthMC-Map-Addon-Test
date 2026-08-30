@@ -24,7 +24,7 @@ public final class MapToggleOverlay {
     private static final int ADD_WIDTH = 20;
     private static final int FILL_WIDTH = 34;
     private static final int SETTINGS_GAP = 7;   // extra gap above the settings button
-    private static final int TOGGLE_ROWS = 5;    // Squaremap | Borders | Map mode | Chunks | Counter
+    private static final int TOGGLE_ROWS = 6;    // Squaremap | Borders | Map mode | World | Chunks | Counter
 
     private MapToggleOverlay() {}
 
@@ -41,8 +41,9 @@ public final class MapToggleOverlay {
                 config.borderOverlayMode != 0);
         drawMode(ctx, tr, 2, y, "Map", statusModeLabel(config.townStatusOverlayMode),
                 config.townStatusOverlayMode != 0);
-        drawToggle(ctx, tr, 3, y, "Chunks", config.chunkGridEnabled);
-        drawMode(ctx, tr, 4, y, "Counter", ChunkCounterOverlay.toolbarLabel(config), config.chunkCounterEnabled);
+        drawMode(ctx, tr, 3, y, "World", worldModeLabel(config), config.mapWorldMode != 0);
+        drawToggle(ctx, tr, 4, y, "Chunks", config.chunkGridEnabled);
+        drawMode(ctx, tr, 5, y, "Counter", ChunkCounterOverlay.toolbarLabel(config), config.chunkCounterEnabled);
         if (config.chunkCounterEnabled) {
             if (ChunkCounterOverlay.isMultiMode(config)) {
                 drawCounterGroupButtons(ctx, tr, config);
@@ -90,8 +91,9 @@ public final class MapToggleOverlay {
                     config.townStatusOverlayMode = TownyMapMod.nextStatusMode(before, backward);
                     TownSearchOverlay.onStatusModeChanged(before, config.townStatusOverlayMode);
                 }
-                case 3 -> config.chunkGridEnabled = !config.chunkGridEnabled;
-                case 4 -> {
+                case 3 -> config.mapWorldMode = config.mapWorldMode == 1 ? 0 : 1;
+                case 4 -> config.chunkGridEnabled = !config.chunkGridEnabled;
+                case 5 -> {
                     if (config.chunkCounterEnabled) ChunkCounterOverlay.flushSelection();
                     if (!config.chunkCounterEnabled) {
                         config.chunkCounterEnabled = true;
@@ -269,6 +271,11 @@ public final class MapToggleOverlay {
         MinecraftClient mc = MinecraftClient.getInstance();
         double abs = mc.mouse.getY() * mc.getWindow().getScaledHeight() / mc.getWindow().getHeight();
         return (int) Math.round(UiScale.unscale(abs, togglesTop(mc.getWindow().getScaledHeight())));
+    }
+
+    /** "Auto" follows the dimension you are in; the other two pin the map to one world. */
+    private static String worldModeLabel(TownyMapConfig config) {
+        return config.mapWorldMode == 1 ? "Moon" : "Terra Nostra";
     }
 
     private static String borderModeLabel(int mode) {

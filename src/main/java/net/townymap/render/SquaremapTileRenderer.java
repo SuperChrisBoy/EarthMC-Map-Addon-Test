@@ -607,7 +607,7 @@ final class SquaremapTileRenderer {
     }
 
     private String tileUrl(TileKey key) {
-        return config.squaremapBaseUrl + "/tiles/" + config.worldKey + "/"
+        return config.squaremapBaseUrl + "/tiles/" + net.townymap.TownyMapMod.activeWorldKey() + "/"
                 + key.zoom + "/" + key.x + "_" + key.y + ".png";
     }
 
@@ -644,6 +644,23 @@ final class SquaremapTileRenderer {
         float v1 = (float) ((v + (t - tileY) * (double) regionH / drawH) / TILE_PIXELS);
         float v2 = (float) ((v + (b - tileY) * (double) regionH / drawH) / TILE_PIXELS);
         ctx.drawTexturedQuad(texture, l, t, r, b, u1, u2, v1, v2);
+    }
+
+    /**
+     * Releases every cached tile and its bookkeeping. Called when the map changes world: Moon and Terra
+     * Nostra use the same tile coordinates, so a kept texture would show the wrong world's ground.
+     */
+    void clearAll() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client != null) {
+            for (Identifier id : textures.values()) client.getTextureManager().destroyTexture(id);
+        }
+        textures.clear();
+        textureLoadedAt.clear();
+        tileEtags.clear();
+        failedAt.clear();
+        for (LoadedTile t : completedTiles.values()) t.image().close();
+        completedTiles.clear();
     }
 
     /** Status code of a tile refusal in the last 30s, or 0 if the imagery is loading normally. */

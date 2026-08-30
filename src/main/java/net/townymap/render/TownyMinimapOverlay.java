@@ -1370,6 +1370,9 @@ public final class TownyMinimapOverlay {
      */
     public static void renderPlayerIndicator(DrawContext ctx, MinimapSession session,
                                              int mapX, int mapY, int size) {
+        // Browsing a world you are not standing in: player positions belong to the other world,
+        // so drawing them here would put people in places they are not.
+        if (TownyMapMod.viewingOtherWorld()) return;
         TownyMapConfig config = TownyMapMod.getConfig();
         if (config == null || !config.minimapExtensionsEnabled) return;
         if (session.getProcessor().isCaveModeDisplayed()) return;
@@ -1626,6 +1629,9 @@ public final class TownyMinimapOverlay {
                                          double playerX, double playerZ, double pixelsPerBlock,
                                          double sin, double cos,
                                          MinimapClip clip) {
+        // Browsing a world you are not standing in: player positions belong to the other world,
+        // so drawing them here would put people in places they are not.
+        if (TownyMapMod.viewingOtherWorld()) return;
         double centerX = mapX + size / 2.0;
         double centerY = mapY + size / 2.0;
         int radius = 1;

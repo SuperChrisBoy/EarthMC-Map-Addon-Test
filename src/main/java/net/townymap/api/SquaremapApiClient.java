@@ -180,6 +180,47 @@ public class SquaremapApiClient {
         }
     }
 
+    /** squaremap's published world list: key -> display name. Empty map on any failure. */
+    public java.util.concurrent.CompletableFuture<Map<String, String>> fetchWorlds() {
+        return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            Map<String, String> out = new java.util.LinkedHashMap<>();
+            try {
+                String json = get(config.worldsUrl());
+                if (json == null || json == NOT_MODIFIED) return out;
+                JsonElement root = JsonParser.parseString(json);
+                if (!root.isJsonObject()) return out;
+                JsonElement worlds = root.getAsJsonObject().get("worlds");
+                if (worlds == null || !worlds.isJsonArray()) return out;
+                for (JsonElement el : worlds.getAsJsonArray()) {
+                    if (!el.isJsonObject()) continue;
+                    JsonObject w = el.getAsJsonObject();
+                    String name = getString(w, "name");
+                    if (name == null || name.isBlank()) continue;
+                    String display = getString(w, "display_name");
+                    out.put(name, display == null || display.isBlank() ? name : display);
+                }
+            } catch (Exception e) {
+                LOGGER.warn("[TownyMap] Could not read the squaremap world list: {}", e.getMessage());
+            }
+            return out;
+        }, fetchExecutor);
+    }
+
+    /**
+     * Drops everything tied to the previous world and refetches.
+     *
+     * <p>Moon and Terra Nostra coordinates overlap numerically, so a stale town from one would render
+     * as a real claim on the other. The ETags go too: they identify a document for a different world.
+     */
+    public void onWorldChanged() {
+        towns = List.of();
+        etags.clear();
+        townResidents = Map.of();
+        residentTowns = Map.of();
+        lastMarkerSuccessMs = 0;
+        forceTownMarkerRefresh();
+    }
+
     public void forceTownMarkerRefresh() {
         lastMarkerFetchMs = 0;
         if (markerFetchRunning.compareAndSet(false, true)) {
@@ -209,7 +250,7 @@ public class SquaremapApiClient {
 
     private void fetchMarkers() {
         try {
-            String json = get(config.markersUrl());
+            String json = get(config.markersUrl(TownyMapMod.activeWorldKey()));
             if (json == NOT_MODIFIED) {
                 // Unchanged is a success: the data on screen is current, there was just nothing to send.
                 lastMarkerSuccessMs = System.currentTimeMillis();
@@ -526,8 +567,11 @@ public class SquaremapApiClient {
                 if (!el.isJsonObject()) continue;
                 JsonObject p = el.getAsJsonObject();
 
+                // Filter to the world being shown, not a hardcoded "overworld" -- otherwise Moon players
+                // would be dropped while viewing the Moon, and Earth players would appear on it.
                 String world = getString(p, "world");
-                if (world != null && !world.contains("overworld")) continue;
+                String active = TownyMapMod.activeWorldKey();
+                if (world != null && !world.equals(active)) continue;
 
                 boolean hidden = p.has("hidden") && p.get("hidden").getAsBoolean();
                 if (hidden) continue;
