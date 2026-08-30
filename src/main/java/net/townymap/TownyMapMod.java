@@ -1919,13 +1919,14 @@ public class TownyMapMod implements ClientModInitializer {
     private static void syncXaeroDimension() {
         try {
             var session = xaero.map.core.XaeroWorldMapCore.currentSession;
-            if (session == null) return;
-            var proc = session.getMapProcessor();
-            if (proc == null) return;
-            var mapWorld = proc.getMapWorld();
-            if (mapWorld == null) return;
+            var proc = session == null ? null : session.getMapProcessor();
+            var mapWorld = proc == null ? null : proc.getMapWorld();
             Minecraft client = Minecraft.getInstance();
-            if (client == null || client.level == null) return;
+            if (mapWorld == null || client == null || client.level == null) {
+                LOGGER.info("[TownyMap] Xaero not ready for a dimension switch (session={}, world={})",
+                        session != null, mapWorld != null);
+                return;
+            }
 
             var target = knownXaeroDimensionFor(mapWorld, activeWorldKey());
             if (target == null) {
@@ -1950,9 +1951,16 @@ public class TownyMapMod implements ClientModInitializer {
                             .filter(d -> d != null && d.getDimId() != null)
                             .map(d -> d.getDimId().identifier().toString()).toList());
         } catch (Throwable t) {
-            LOGGER.debug("[TownyMap] Could not sync Xaero map dimension", t);
+            // Was DEBUG, which meant a failure here looked identical to the feature simply not running:
+            // the log showed a world switch and then nothing at all. Once per reason is enough.
+            if (loggedSyncFailure == null || !loggedSyncFailure.equals(t.toString())) {
+                loggedSyncFailure = t.toString();
+                LOGGER.warn("[TownyMap] Could not sync Xaero map dimension", t);
+            }
         }
     }
+
+    private static volatile String loggedSyncFailure = null;
 
     /**
      * A dimension Xaero already knows that belongs to the given squaremap world, or null if it knows
