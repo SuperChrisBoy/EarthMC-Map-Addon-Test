@@ -72,6 +72,8 @@ public final class ChunkCounterOverlay {
 
     public static String toolbarLabel(TownyMapConfig config) {
         if (config == null || !config.chunkCounterEnabled) return "OFF";
+        // Say where the selection went rather than showing a count for something that is not on screen.
+        if (!ownsActiveWorld(config)) return "on " + selectionWorldName(config);
         return activeGroupLabel(config) + " " + effectiveChunks(activeSelection(config)).size();
     }
 
@@ -306,6 +308,36 @@ public final class ChunkCounterOverlay {
         persistSelectionNow();
     }
 
+    /**
+     * True when the saved selection belongs to the world the map is showing.
+     *
+     * <p>An empty selection belongs to whichever world claims it first, so switching worlds and starting
+     * fresh just works. A selection that exists elsewhere is neither drawn nor edited here rather than
+     * being cleared -- these run to tens of thousands of chunks and are hard-won.
+     */
+    public static boolean ownsActiveWorld(TownyMapConfig config) {
+        if (config == null) return true;
+        if (!hasSelection()) return true;
+        String w = config.chunkCounterWorld;
+        return w == null || w.isBlank() || w.equals(TownyMapMod.activeWorldKey());
+    }
+
+    /** The world a selection is being started in, once the first chunk goes down. */
+    private static void claimActiveWorld(TownyMapConfig config) {
+        if (config == null || hasSelection()) return;
+        String active = TownyMapMod.activeWorldKey();
+        if (!active.equals(config.chunkCounterWorld)) {
+            config.chunkCounterWorld = active;
+            config.save();
+        }
+    }
+
+    /** The world the saved selection belongs to, for the "not here" notice. */
+    public static String selectionWorldName(TownyMapConfig config) {
+        String w = config == null ? null : config.chunkCounterWorld;
+        return TownyMapMod.worldDisplayName(w);
+    }
+
     public static boolean hasSelection() {
         for (SelectionState group : GROUPS) {
             if (!group.chunks.isEmpty()) return true;
@@ -315,6 +347,8 @@ public final class ChunkCounterOverlay {
 
     public static boolean handleRightClick(double worldX, double worldZ) {
         TownyMapConfig config = TownyMapMod.getConfig();
+        if (!ownsActiveWorld(config)) return false;   // belongs to another world; leave it untouched
+        claimActiveWorld(config);
         SelectionState selection = activeSelection(config);
         int cx = floorToChunk(worldX);
         int cz = floorToChunk(worldZ);
@@ -365,6 +399,7 @@ public final class ChunkCounterOverlay {
     }
 
     public static void tickDrag(double worldX, double worldZ) {
+        if (!ownsActiveWorld(TownyMapMod.getConfig())) return;
         Minecraft client = Minecraft.getInstance();
         if (client == null || client.getWindow() == null) return;
         long handle = client.getWindow().handle();
@@ -406,6 +441,7 @@ public final class ChunkCounterOverlay {
                               int sw, int sh, double mouseWorldX, double mouseWorldZ, boolean preview) {
         if (blockScale <= 0) return;
         TownyMapConfig config = TownyMapMod.getConfig();
+        if (!ownsActiveWorld(config)) return;
         int groupCount = visibleGroupCount(config);
         for (int i = 0; i < groupCount; i++) {
             if (i == normalizedActiveGroup(config)) continue;
@@ -464,6 +500,7 @@ public final class ChunkCounterOverlay {
                                         int minBlockX, int minBlockZ, int maxBlockX, int maxBlockZ) {
         TownyMapConfig config = TownyMapMod.getConfig();
         if (config == null || !config.chunkCounterEnabled) return;
+        if (!ownsActiveWorld(config)) return;
         int groupCount = visibleGroupCount(config);
         for (int i = 0; i < groupCount; i++) {
             SelectionState state = GROUPS.get(i);

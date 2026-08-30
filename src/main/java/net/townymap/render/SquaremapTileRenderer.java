@@ -65,6 +65,8 @@ final class SquaremapTileRenderer {
     private volatile int lastRefusedStatus = 0;
     private volatile long lastRefusedMs = 0;
     private final Map<TileKey, LoadedTile> completedTiles = new ConcurrentHashMap<>();
+    /** Bumped on every clearAll() so responses for the previous world can be told apart and dropped. */
+    private volatile int worldGeneration = 0;
     private final LinkedHashMap<TileKey, Identifier> textures =
             new LinkedHashMap<>(64, 0.75f, true);
     private final Map<TileKey, Long> textureLoadedAt = new ConcurrentHashMap<>();
@@ -535,6 +537,11 @@ final class SquaremapTileRenderer {
     }
 
     private void fetchTile(TileKey key) {
+        // TileKey is (zoom, x, y) with no world in it, and a switch clears the caches immediately while
+        // requests already in flight keep running. Without this stamp a Terra Nostra tile that landed
+        // after a switch to the Moon was filed under a key the Moon view then drew: Earth terrain on
+        // the Moon, until something happened to evict it.
+        final int generation = worldGeneration;
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(tileUrl(key)))
                 .timeout(Duration.ofSeconds(20))
@@ -552,6 +559,7 @@ final class SquaremapTileRenderer {
             if (response.statusCode() == 304) {
                 // Unchanged: keep the texture we already uploaded and reset its age so the next
                 // stale-check waits a full interval instead of asking again immediately.
+                if (generation != worldGeneration) return;
                 textureLoadedAt.put(key, System.currentTimeMillis());
                 return;
             }
@@ -576,8 +584,9 @@ final class SquaremapTileRenderer {
                 }
                 return;
             }
-            response.headers().firstValue("ETag").ifPresent(tag -> tileEtags.put(key, tag));
             byte[] bytes = response.body();
+            if (generation != worldGeneration) return;   // belongs to the world we just left
+            response.headers().firstValue("ETag").ifPresent(tag -> tileEtags.put(key, tag));
             LoadedTile previous = completedTiles.put(key, new LoadedTile(key, NativeImage.read(bytes)));
             if (previous != null) previous.image().close();
         } catch (Exception e) {
@@ -650,6 +659,7 @@ final class SquaremapTileRenderer {
      * Nostra use the same tile coordinates, so a kept texture would show the wrong world's ground.
      */
     void clearAll() {
+        worldGeneration++;   // anything already in flight now belongs to the world we are leaving
         Minecraft client = Minecraft.getInstance();
         if (client != null) {
             for (Identifier id : textures.values()) client.getTextureManager().release(id);

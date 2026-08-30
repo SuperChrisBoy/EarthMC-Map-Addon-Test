@@ -119,6 +119,12 @@ public class TownyMapConfig {
     /** Starred nations and players. Towns had this from the start; the other two kinds behave the same. */
     public List<String> favoriteNations = new ArrayList<>();
     public List<String> favoritePlayers = new ArrayList<>();
+    /**
+     * squaremap world the saved selection was drawn in. Chunk keys are raw coordinates with no world
+     * attached, so without this a selection made on Terra Nostra reappeared over the Moon. Defaults to
+     * the overworld so selections saved before the Moon existed keep working.
+     */
+    public String chunkCounterWorld = "minecraft_overworld";
     public List<Long> chunkCounterSelection = new ArrayList<>();
     public List<List<Long>> chunkCounterGroups = new ArrayList<>();
 
