@@ -316,10 +316,15 @@ public final class ChunkCounterOverlay {
      * being cleared -- these run to tens of thousands of chunks and are hard-won.
      */
     public static boolean ownsActiveWorld(TownyMapConfig config) {
+        return ownsWorld(config, TownyMapMod.activeWorldKey());
+    }
+
+    /** Same test against one specific world -- the minimap shows the world the player is standing in. */
+    public static boolean ownsWorld(TownyMapConfig config, String worldKey) {
         if (config == null) return true;
         if (!hasSelection()) return true;
         String w = config.chunkCounterWorld;
-        return w == null || w.isBlank() || w.equals(TownyMapMod.activeWorldKey());
+        return w == null || w.isBlank() || w.equals(worldKey);
     }
 
     /** The world a selection is being started in, once the first chunk goes down. */
@@ -500,7 +505,9 @@ public final class ChunkCounterOverlay {
                                         int minBlockX, int minBlockZ, int maxBlockX, int maxBlockZ) {
         TownyMapConfig config = TownyMapMod.getConfig();
         if (config == null || !config.chunkCounterEnabled) return;
-        if (!ownsActiveWorld(config)) return;
+        // Minimap-only path: it draws where the player is, so the selection shows there whenever it
+        // belongs to that world, whatever the world map happens to be pinned to.
+        if (!ownsWorld(config, TownyMapMod.playerWorldResolved())) return;
         int groupCount = visibleGroupCount(config);
         for (int i = 0; i < groupCount; i++) {
             SelectionState state = GROUPS.get(i);

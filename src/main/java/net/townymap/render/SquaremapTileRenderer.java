@@ -70,6 +70,11 @@ final class SquaremapTileRenderer {
     private final Map<TileKey, LoadedTile> completedTiles = new ConcurrentHashMap<>();
     /** Bumped on every clearAll() so responses for the previous world can be told apart and dropped. */
     private volatile int worldGeneration = 0;
+    /**
+     * World the current render pass is drawing. Set on the client thread at the top of each entry point;
+     * the async fetch never reads it, taking its world from the TileKey instead.
+     */
+    private String passWorld = net.townymap.TownyMapMod.WORLD_OVERWORLD;
     private final LinkedHashMap<TileKey, Identifier> textures =
             new LinkedHashMap<>(64, 0.75f, true);
     private final Map<TileKey, Long> textureLoadedAt = new ConcurrentHashMap<>();
@@ -90,6 +95,7 @@ final class SquaremapTileRenderer {
     void render(DrawContext ctx, double cameraX, double cameraZ, double blockScale, int sw, int sh,
                 double worldLeft, double worldRight, double worldTop, double worldBottom,
                 boolean moving) {
+        this.passWorld = net.townymap.TownyMapMod.activeWorldKey();
         render(ctx, cameraX, cameraZ, blockScale, sw, sh, worldLeft, worldRight, worldTop, worldBottom,
                 moving, NetworkPolicy.WORLD_MAP, null);
     }
@@ -104,6 +110,9 @@ final class SquaremapTileRenderer {
     void renderMinimap(DrawContext ctx, double cameraX, double cameraZ, double blockScale, int sw, int sh,
                        double worldLeft, double worldRight, double worldTop, double worldBottom,
                        boolean moving, double circularClipRadius) {
+        // The minimap shows where the player actually is, so its imagery is the player's world even when
+        // the map is pinned to the other one.
+        this.passWorld = net.townymap.TownyMapMod.playerWorldResolved();
         CircleClip circleClip = circularClipRadius > 0.0
                 ? new CircleClip(sw / 2.0, sh / 2.0, circularClipRadius,
                 circularClipRadius * circularClipRadius, circleClipStripHeight(circularClipRadius))
@@ -190,7 +199,7 @@ final class SquaremapTileRenderer {
                     if (tileX < minTileX || tileX > maxTileX || tileY < minTileY || tileY > maxTileY) continue;
                     if (Math.max(Math.abs(tileX - centerTileX), Math.abs(tileY - centerTileY)) != radius) continue;
 
-                    TileKey key = new TileKey(zoom, tileX, tileY);
+                    TileKey key = new TileKey(passWorld, zoom, tileX, tileY);
                     Identifier texture = textures.get(key);
                     if (texture == null) {
                         if (requested++ < requestBudget) requestTile(key, false, policy.maxConcurrentLoads());
@@ -273,7 +282,7 @@ final class SquaremapTileRenderer {
                 for (int tileX = centerTileX - radius; tileX <= centerTileX + radius && requested < maxRequests; tileX++) {
                     if (tileX < minTileX || tileX > maxTileX || tileY < minTileY || tileY > maxTileY) continue;
                     if (Math.max(Math.abs(tileX - centerTileX), Math.abs(tileY - centerTileY)) != radius) continue;
-                    TileKey key = new TileKey(zoom, tileX, tileY);
+                    TileKey key = new TileKey(passWorld, zoom, tileX, tileY);
                     if (!textures.containsKey(key)) {
                         requestTile(key);
                         requested++;
@@ -288,7 +297,7 @@ final class SquaremapTileRenderer {
                                          int sw, int sh, CircleClip circleClip) {
         for (int parentZoom = childKey.zoom() - 1; parentZoom >= 0; parentZoom--) {
             int factor = 1 << (childKey.zoom() - parentZoom);
-            TileKey parentKey = new TileKey(parentZoom,
+            TileKey parentKey = new TileKey(passWorld, parentZoom,
                     Math.floorDiv(childKey.x(), factor),
                     Math.floorDiv(childKey.y(), factor));
             Identifier parentTexture = textures.get(parentKey);
@@ -616,7 +625,8 @@ final class SquaremapTileRenderer {
     }
 
     private String tileUrl(TileKey key) {
-        return config.squaremapBaseUrl + "/tiles/" + net.townymap.TownyMapMod.activeWorldKey() + "/"
+        // From the key, not the active world: a request outlives the switch that started it.
+        return config.squaremapBaseUrl + "/tiles/" + key.world() + "/"
                 + key.zoom + "/" + key.x + "_" + key.y + ".png";
     }
 
@@ -694,7 +704,12 @@ final class SquaremapTileRenderer {
         return sh / 2 + (int) Math.round((worldZ - camZ) * scale);
     }
 
-    private record TileKey(int zoom, int x, int y) {}
+    /**
+     * A tile identity. The world is part of it: Terra Nostra and the Moon use the same tile coordinates,
+     * so without it one world's imagery was served for the other, and the two could not be cached at
+     * once -- which the minimap now needs, since it draws the player's world while the map draws another.
+     */
+    private record TileKey(String world, int zoom, int x, int y) {}
     private record LoadedTile(TileKey key, NativeImage image) {}
     private record PanDirection(double x, double z) {}
     private record CircleClip(double centerX, double centerY, double radius, double radiusSq,
