@@ -1752,6 +1752,48 @@ public class TownyMapMod implements ClientModInitializer {
         return null;
     }
 
+    /**
+     * The dimension Xaero's WORLD MAP is currently drawing, which is not always the one the player is in.
+     *
+     * <p>Xaero's map has its own dimension toggle (the button that cycles Overworld/Nether/End/...): it
+     * sets {@code MapWorld.customDimensionId} and {@code getCurrentDimension()} follows it, so someone
+     * standing on Earth can be looking at Nether or Moon terrain. Every decision about what to draw ON
+     * the world map belongs to this dimension, not {@code client.level.dimension()}. The minimap has no
+     * such toggle and always follows the player, which is why it still reads the level directly.
+     *
+     * <p>Null when Xaero is not loaded far enough to say. Wrapped because Xaero moves internals between
+     * versions and a hard failure here would take the whole overlay down (see the zoom-hook history).
+     */
+    public static net.minecraft.resources.ResourceKey<Level> xaeroViewedDimension() {
+        try {
+            var session = xaero.map.core.XaeroWorldMapCore.currentSession;
+            if (session == null) return null;
+            var proc = session.getMapProcessor();
+            if (proc == null) return null;
+            var mw = proc.getMapWorld();
+            if (mw == null) return null;
+            var dim = mw.getCurrentDimension();
+            return dim == null ? null : dim.getDimId();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * The squaremap world key matching the dimension Xaero's world map is drawing, or null if unknown.
+     * Same "namespace_path" derivation as {@link #playerWorldKey()}, but for the VIEWED dimension.
+     */
+    public static String xaeroViewedWorldKey() {
+        var key = xaeroViewedDimension();
+        if (key == null) return null;
+        try {
+            var id = key.identifier();
+            return id.getNamespace() + "_" + id.getPath();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
     /** True when the player is standing in the very world the map is showing (and it is not Earth). */
     public static boolean standingInActiveWorld() {
         String pk = rawWorldKey();
@@ -1811,6 +1853,10 @@ public class TownyMapMod implements ClientModInitializer {
         }
     }
 
+    /**
+     * Coordinate scale of the dimension the PLAYER is in. The minimap and waypoints live here: both are
+     * anchored to the player, and neither can be pointed at another dimension.
+     */
     public static double dimensionCoordinateScale() {
         Minecraft client = Minecraft.getInstance();
         if (client == null || client.level == null) return 1.0;
@@ -1820,18 +1866,37 @@ public class TownyMapMod implements ClientModInitializer {
         return scale > 0 ? scale : 1.0;
     }
 
+    /**
+     * Coordinate scale of the dimension Xaero's WORLD MAP is drawing, which its dimension toggle can
+     * point somewhere the player is not. Only the player's own dimension has a loaded DimensionType to
+     * read, so a dimension viewed from elsewhere falls back to the vanilla ratios.
+     */
+    public static double worldMapCoordinateScale() {
+        Minecraft client = Minecraft.getInstance();
+        if (client == null || client.level == null) return 1.0;
+        var viewed = xaeroViewedDimension();
+        if (viewed != null && viewed != client.level.dimension()) {
+            return viewed == Level.NETHER ? 8.0 : 1.0;
+        }
+        return dimensionCoordinateScale();
+    }
+
     public static double worldMapOverlayScale() {
         if (!isActiveOnCurrentServer() || config == null) return 1.0;
         Minecraft client = Minecraft.getInstance();
         if (client == null || client.level == null) return 1.0;
-        var dim = client.level.dimension();
+        // Xaero's world map has its own dimension toggle, so the terrain on screen is not always the
+        // dimension the player is standing in. What we draw over it has to follow the terrain. With the
+        // toggle untouched Xaero reports the player's own dimension, so this changes nothing by default.
+        var viewed = xaeroViewedDimension();
+        var dim = viewed != null ? viewed : client.level.dimension();
         if (dim == Level.OVERWORLD) return 1.0;
         if (config.netherMode == 2 && dim == Level.NETHER) return 8.0;   // Overworld Coords
-        // Standing in a world squaremap maps (the Moon) and looking at that world: 1:1, like Earth.
-        // This used to fall through to the hide below, so stepping onto the Moon blanked the overlay
-        // even though squaremap has full tiles and claims for it.
-        String pk = playerWorldKey();
-        if (pk != null && pk.equals(activeWorldKey())) return 1.0;
+        // Xaero is drawing a world squaremap maps and our toggle selects that same world: 1:1, like
+        // Earth. This used to fall through to the hide below, so stepping onto the Moon blanked the
+        // overlay even though squaremap has full tiles and claims for it.
+        String vk = xaeroViewedWorldKey();
+        if (vk != null && vk.equals(activeWorldKey())) return 1.0;
         // Deliberately looking at a different world than the one you are in. Keep rendering -- that is
         // the point of the switch - and the player markers are hidden separately.
         if (viewingOtherWorld() || !viewingEarth()) return 1.0;
@@ -2870,6 +2935,21 @@ public class TownyMapMod implements ClientModInitializer {
 
     public static boolean createXaeroRoute(MapJumpTarget target) {
         if (!isActiveOnCurrentServer() || target == null) return false;
+        // Xaero files waypoints under the dimension the PLAYER is in, so a route to a Moon town created
+        // from Earth would land in the Earth waypoint set at lunar coordinates -- an arrow pointing at
+        // nothing. Refuse it rather than plant a waypoint that quietly lies.
+        String vk = xaeroViewedWorldKey();
+        String pk = playerWorldKey();
+        if (!viewingEarth() && (pk == null || !pk.equals(activeWorldKey()))) {
+            sendFeedback("Routes to " + activeWorldName() + " towns only work while you are there.",
+                    ChatFormatting.RED);
+            return false;
+        }
+        if (vk != null && pk != null && !vk.equals(pk)) {
+            sendFeedback("Xaero is showing another dimension - routes are placed where you stand.",
+                    ChatFormatting.RED);
+            return false;
+        }
         try {
             boolean created = XaeroWaypointBridge.createRouteWaypoint(target);
             if (created) {
