@@ -2310,7 +2310,6 @@ public class WorldMapRenderer {
                                int sw, int sh, Map<String, EarthMcPlayerData> playerDetails) {
         // Browsing a world you are not standing in: player positions belong to the other world,
         // so drawing them here would put people in places they are not.
-        if (TownyMapMod.viewingOtherWorld()) return;
         if (TownyMapMod.isArchiveMode()) return;   // archived snapshots have no live players
         Minecraft client = Minecraft.getInstance();
         if (client == null) return;

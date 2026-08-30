@@ -141,19 +141,15 @@ public final class TownyMinimapOverlay {
         // The EarthMC map is overworld-only. Outside the overworld (e.g. the Nether) the raw X/Z
         // would place our overlay at the wrong spot, so apply the configured behaviour. Resolved
         // before the projection below, which needs it for both the coordinates and the block size.
-        // The minimap always shows where the player actually is, so it can only draw the world they are
-        // standing in. Only the active world's claims are held in memory, so with the map toggled
-        // elsewhere -- browsing the Moon from Earth -- this would paint lunar borders onto Terra Nostra.
-        if (TownyMapMod.viewingOtherWorld() && TownyMapMod.isOnEarthMcServer()) return;
         double dimScale = 1.0;
         if (client.level.dimension() != net.minecraft.world.level.Level.OVERWORLD) {
             if (config.netherMode == 2
                     && client.level.dimension() == net.minecraft.world.level.Level.NETHER) {
                 dimScale = TownyMapMod.dimensionCoordinateScale();   // Overworld Coords
-            } else if (TownyMapMod.standingInActiveWorld()) {
-                // A world squaremap maps and that the map is showing - the Moon. Claims there are at
-                // real 1:1 coordinates, so draw exactly as on Earth. This gate predates the Moon and
-                // hid the whole minimap overlay there, which is why outposts never appeared on it.
+            } else if (!TownyMapMod.WORLD_OVERWORLD.equals(TownyMapMod.playerWorldResolved())) {
+                // A world squaremap maps -- the Moon. Claims there are at real 1:1 coordinates, so draw
+                // exactly as on Earth. Deliberately NOT tied to the world the map is showing: the
+                // minimap draws where the player stands, whatever the world map is pinned to.
                 dimScale = 1.0;
             } else if (TownyMapMod.isOnEarthMcServer()) {
                 return;                                              // Hidden
@@ -202,7 +198,10 @@ public final class TownyMinimapOverlay {
                     pixelsPerBlock, angle, clip);
         }
 
-        if (api.getTowns().isEmpty()) {
+        // The minimap draws where the player IS, so it asks for that world's claims by name -- the world
+        // map may be pinned to the other one, and both are held now.
+        String minimapWorld = TownyMapMod.playerWorldResolved();
+        if (api.getTowns(minimapWorld).isEmpty()) {
             lastRenderCanCoverWaypoints = squaremapRendered || config.chunkCounterEnabled;
             if (squaremapRendered) {
                 renderMinimapChunkGrid(ctx, session, config, centerX, centerY, playerX, playerZ,
@@ -257,7 +256,7 @@ public final class TownyMinimapOverlay {
             }
         }
 
-        List<TownData> towns = api.getTowns();
+        List<TownData> towns = api.getTowns(minimapWorld);
         VisibleRenderData renderData = cachedVisibleRenderData(towns, minChunkX, minChunkZ, chunkWidth, chunkHeight);
         lastRenderCanCoverWaypoints = squaremapRendered || config.chunkCounterEnabled || !renderData.fillSpans().isEmpty();
 
@@ -321,7 +320,7 @@ public final class TownyMinimapOverlay {
 
         if (config.playersEnabled && config.minimapPlayersEnabled
                 && !TownyMapMod.isArchiveMode()) {   // archived snapshots have no live players
-            renderPlayerDots(ctx, api.getPlayers(), player.getName().getString(),
+            renderPlayerDots(ctx, api.getPlayers(minimapWorld), player.getName().getString(),
                     mapX, mapY, size, playerX, playerZ, pixelsPerBlock, sin, cos,
                     clip);
         }
@@ -1236,9 +1235,6 @@ public final class TownyMinimapOverlay {
      */
     public static void renderPlayerIndicator(GuiGraphicsExtractor ctx, MinimapSession session,
                                              int mapX, int mapY, int size) {
-        // Browsing a world you are not standing in: player positions belong to the other world,
-        // so drawing them here would put people in places they are not.
-        if (TownyMapMod.viewingOtherWorld()) return;
         TownyMapConfig config = TownyMapMod.getConfig();
         boolean cave;
         try { cave = session.getProcessor().isCaveModeDisplayed(); } catch (Throwable ignored) { cave = false; }
@@ -1404,17 +1400,16 @@ public final class TownyMinimapOverlay {
         // This is the fallback path used when the town overlay above didn't run, so it has to repeat
         // that method's dimension handling. It previously drew with raw X/Z, which put the squaremap
         // tiles 8x off from the town borders in the Nether and kept drawing them in "Hidden" mode.
-        // The minimap always shows where the player actually is, so it can only draw the world they are
-        // standing in. Only the active world's claims are held in memory, so with the map toggled
-        // elsewhere -- browsing the Moon from Earth -- this would paint lunar borders onto Terra Nostra.
-        if (TownyMapMod.viewingOtherWorld() && TownyMapMod.isOnEarthMcServer()) return;
         double dimScale = 1.0;
         if (client.level.dimension() != net.minecraft.world.level.Level.OVERWORLD) {
             if (config.netherMode == 2
                     && client.level.dimension() == net.minecraft.world.level.Level.NETHER) {
                 dimScale = TownyMapMod.dimensionCoordinateScale();
-            } else if (TownyMapMod.standingInActiveWorld()) {
-                dimScale = 1.0;   // the world the map is showing; 1:1, exactly like Earth
+            } else if (!TownyMapMod.WORLD_OVERWORLD.equals(TownyMapMod.playerWorldResolved())) {
+                // A world squaremap maps -- the Moon. Claims there are at real 1:1 coordinates, so draw
+                // exactly as on Earth. Deliberately NOT tied to the world the map is showing: the
+                // minimap draws where the player stands, whatever the world map is pinned to.
+                dimScale = 1.0;
             } else if (TownyMapMod.isOnEarthMcServer()) {
                 return;
             }
@@ -1490,16 +1485,14 @@ public final class TownyMinimapOverlay {
                                          double playerX, double playerZ, double pixelsPerBlock,
                                          double sin, double cos,
                                          MinimapClip clip) {
-        // Browsing a world you are not standing in: player positions belong to the other world,
-        // so drawing them here would put people in places they are not.
-        if (TownyMapMod.viewingOtherWorld()) return;
         double centerX = mapX + size / 2.0;
         double centerY = mapY + size / 2.0;
         int radius = 1;
         TownyMapConfig cfg = TownyMapMod.getConfig();
         boolean heads = cfg != null && (cfg.playerHeadMode & 2) != 0;   // bit 1 = minimap
         List<TownyMapMod.GhostMarker> ghosts =
-                (cfg != null && cfg.playerLastSeen) ? TownyMapMod.lastSeenGhosts() : java.util.List.of();
+                (cfg != null && cfg.playerLastSeen)
+                        ? TownyMapMod.lastSeenGhosts(TownyMapMod.playerWorldResolved()) : java.util.List.of();
         if (players.isEmpty() && ghosts.isEmpty()) return;
 
         ctx.enableScissor(clip.left(), clip.top(), clip.right() + 1, clip.bottom() + 1);
