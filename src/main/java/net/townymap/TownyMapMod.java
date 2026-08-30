@@ -1715,6 +1715,26 @@ public class TownyMapMod implements ClientModInitializer {
     private static volatile String autoResolvedWorld = WORLD_OVERWORLD;
     private static volatile String resolvedPlayerWorld = WORLD_OVERWORLD;
     private static volatile String pendingRecentreWorld = null;
+    /** Where the camera was last left in each world, so switching back returns to it. */
+    private static final Map<String, double[]> lastCameraByWorld = new ConcurrentHashMap<>();
+
+    /** Records the world-map camera for the world being shown. World coordinates, not Xaero's units. */
+    public static void noteWorldMapCamera(double worldX, double worldZ) {
+        // Not while a switch is still waiting to be applied: the camera is then still sitting at the
+        // PREVIOUS world's coordinates, and recording those against the new world would both poison its
+        // memory and satisfy the very lookup that is about to read it.
+        if (pendingRecentreWorld != null) return;
+        lastCameraByWorld.put(activeWorldKey(), new double[]{worldX, worldZ});
+    }
+
+    /**
+     * True while the world map shows somewhere the player is not, so Xaero must not drag the camera onto
+     * them. Their position is a coordinate in a different world; on the Moon it is simply a place they
+     * have never been, and the further from origin they stand the further off the map it pulls.
+     */
+    public static boolean pinWorldMapCamera() {
+        return isActiveOnCurrentServer() && viewingOtherWorld();
+    }
 
     /**
      * Where the world map should re-aim after a world switch, or null if it should stay put.
@@ -1730,6 +1750,13 @@ public class TownyMapMod implements ClientModInitializer {
             if (client == null || client.player == null) return null;
             pendingRecentreWorld = null;
             return new double[]{client.player.getX(), client.player.getZ()};
+        }
+        // Where they left it last, so switching back and forth does not keep yanking the view; the
+        // claim centre is only the opening position for a world not visited yet this session.
+        double[] remembered = lastCameraByWorld.get(world);
+        if (remembered != null) {
+            pendingRecentreWorld = null;
+            return remembered;
         }
         double[] centre = worldClaimCentre(world);
         if (centre == null) return null;   // markers not in yet; try again next frame
