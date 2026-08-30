@@ -174,6 +174,9 @@ public class SquaremapApiClient {
     /** Players on the world the map is showing. */
     public List<PlayerMarker> getPlayers() { return getPlayers(TownyMapMod.activeWorldKey()); }
 
+    /** Everyone online, whatever world they are in -- for server-wide counts and leaderboards. */
+    public List<PlayerMarker> getAllPlayers() { return players; }
+
     /** Players on one specific world -- the minimap asks for the world the player is standing in. */
     public List<PlayerMarker> getPlayers(String world) {
         List<PlayerMarker> all = players;

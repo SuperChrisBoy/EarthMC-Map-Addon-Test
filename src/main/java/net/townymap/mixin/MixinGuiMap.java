@@ -82,6 +82,15 @@ public abstract class MixinGuiMap {
         // raw camera every frame, regardless of dimension. jumpTo() suppresses the next pan-clear so that
         // centre-on-select doesn't wipe the bar.
         TownyMapMod.onWorldMapFrame(this, cameraX, cameraZ);
+        // A world switch leaves the camera at coordinates belonging to the world we left. Re-aim before
+        // anything is drawn, and suppress the pan-clear so it does not read as the user panning.
+        double[] recentre = TownyMapMod.consumeWorldMapRecentre();
+        if (recentre != null) {
+            double dimScale = TownyMapMod.worldMapCoordinateScale();
+            TownyMapMod.suppressNextPanClear();
+            cameraX = recentre[0] / dimScale;
+            cameraZ = recentre[1] / dimScale;
+        }
         if (TownyMapMod.isAccessBlocked()) return;
         // The EarthMC map is overworld-only. Outside the overworld our overlay is hidden, except in
         // "Overworld Coords" mode in the Nether, where we scale the overlay's camera x8 and its
