@@ -1922,7 +1922,10 @@ public class TownyMapMod implements ClientModInitializer {
             var own = client.world.getRegistryKey();
             mapWorld.setCustomDimensionId(target.equals(own) ? null : target);
             proc.checkForWorldUpdate();
-            LOGGER.info("[TownyMap] Xaero map dimension -> {}", target.getValue());
+            LOGGER.info("[TownyMap] Xaero map dimension -> {} (known: {})", target.getValue(),
+                    mapWorld.getDimensionsList().stream()
+                            .filter(d -> d != null && d.getDimId() != null)
+                            .map(d -> d.getDimId().getValue().toString()).toList());
         } catch (Throwable t) {
             LOGGER.debug("[TownyMap] Could not sync Xaero map dimension", t);
         }
@@ -1969,23 +1972,23 @@ public class TownyMapMod implements ClientModInitializer {
                 net.minecraft.util.Identifier.of(worldKey.substring(0, us), worldKey.substring(us + 1)));
     }
 
+    /**
+     * The dimension Xaero already lists for a squaremap world, or null if it does not have it yet.
+     *
+     * <p>Matched exactly against {@link #dimensionKeyFor}, never by namespace. A loose "any earthmc:
+     * dimension will do" match picked earthmc:space -- the rocket you sit in for ten minutes on the way
+     * up, which nobody explores and whose dimension type Xaero could not even resolve, so it reported
+     * "Currently unknown dimension type! The map functions are limited." over empty ground. The Moon
+     * means earthmc:moon and nothing else.
+     */
     private static net.minecraft.registry.RegistryKey<World> knownXaeroDimensionFor(
             xaero.map.world.MapWorld mapWorld, String worldKey) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        var own = client == null || client.world == null ? null : client.world.getRegistryKey();
-        net.minecraft.registry.RegistryKey<World> fallback = null;
+        net.minecraft.registry.RegistryKey<World> want = dimensionKeyFor(worldKey);
+        if (want == null) return null;
         for (var dim : mapWorld.getDimensionsList()) {
-            if (dim == null || dim.getDimId() == null) continue;
-            var id = dim.getDimId();
-            String key = id.getValue().getNamespace() + "_" + id.getValue().getPath();
-            boolean matches = WORLD_OVERWORLD.equals(worldKey)
-                    ? id.equals(World.OVERWORLD)
-                    : key.equals(worldKey) || id.getValue().getNamespace().equals("earthmc");
-            if (!matches) continue;
-            if (id.equals(own)) return id;                                 // already here: best answer
-            if (fallback == null || key.equals(worldKey)) fallback = id;   // prefer the exact world
+            if (dim != null && want.equals(dim.getDimId())) return want;
         }
-        return fallback;
+        return null;   // not listed yet; the caller creates it
     }
 
     public static String xaeroViewedWorldKey() {
