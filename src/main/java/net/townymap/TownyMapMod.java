@@ -1808,7 +1808,12 @@ public class TownyMapMod implements ClientModInitializer {
 
     /** Display name for the active world, for labels. */
     public static String activeWorldName() {
-        String key = activeWorldKey();
+        return worldDisplayName(activeWorldKey());
+    }
+
+    /** squaremap's display name for a world key ("Terra Nostra", "Moon"), falling back to the key. */
+    public static String worldDisplayName(String key) {
+        if (key == null || key.isBlank()) return "this world";
         String name = squaremapWorlds().get(key);
         return name != null ? name : key;
     }
@@ -1821,10 +1826,40 @@ public class TownyMapMod implements ClientModInitializer {
      * still decoding. On the tick it happens once, on the main thread, between frames.
      */
     public static void tickWorldChange() {
+        tickPlayerDimensionChange();
         String key = activeWorldKey();
         if (key.equals(lastActiveWorld)) return;
         lastActiveWorld = key;
         onActiveWorldChanged(key);
+    }
+
+    private static volatile String lastPlayerWorld = null;
+
+    /**
+     * Resets what belonged to the dimension the player just left.
+     *
+     * <p>Separate from the map-world toggle: travelling Earth -> Moon changes nothing about which world
+     * the MAP shows, but it does invalidate anything anchored to the player's own coordinates. Also the
+     * one place that can tell someone their map is still pointed at the world they came from.
+     */
+    private static void tickPlayerDimensionChange() {
+        String pk = rawWorldKey();
+        if (pk == null || pk.equals(lastPlayerWorld)) return;
+        boolean first = lastPlayerWorld == null;
+        lastPlayerWorld = pk;
+        if (first) return;   // joining a world is not a transition
+        // Chunk coordinates from the dimension just left; nothing marks which one they came from.
+        optimisticClaimChunks.clear();
+        minimapOutsideNationPlayers.clear();
+        cachedGhosts = List.of();
+        cachedGhostsAt = 0;
+        net.townymap.integration.ShopWaypoints.onDimensionChanged();
+        // The map world is deliberately explicit, so it does not follow the player -- but arriving in a
+        // world squaremap maps while the map still shows another one is worth one line, not silence.
+        if (isOnEarthMcServer() && squaremapWorlds().containsKey(pk) && !pk.equals(activeWorldKey())) {
+            sendFeedback("You are on " + worldDisplayName(pk) + " - the map is still showing "
+                    + activeWorldName() + ".", ChatFormatting.YELLOW);
+        }
     }
 
     private static void onActiveWorldChanged(String key) {
@@ -1841,6 +1876,13 @@ public class TownyMapMod implements ClientModInitializer {
         if (apiClient != null) apiClient.onWorldChanged();
         cachedGhosts = List.of();
         cachedGhostsAt = 0;
+        // Chunk coordinates with no world attached: a claim made on Earth would redraw on the Moon.
+        optimisticClaimChunks.clear();
+        minimapOutsideNationPlayers.clear();
+        townInfoRouteTarget = null;   // points into the world we just left
+        // The result cache is keyed on collection SIZES, and 5,500 Earth towns against 47 lunar ones will
+        // always differ - but nothing guarantees that, so retire the results explicitly.
+        net.townymap.gui.TownSearchOverlay.invalidateResults();
         if (renderer != null) {
             renderer.invalidateTownCaches();
             renderer.clearSquaremapTiles();

@@ -133,6 +133,8 @@ public class SquaremapApiClient {
     /** When non-null, archive mode is active: getTowns() serves this frozen snapshot and live refresh is
      *  paused, so the whole renderer shows the historical claims with no other changes. */
     private volatile List<TownData> archiveTowns = null;
+    /** Bumped by onWorldChanged() so responses for the world just left can be recognised and dropped. */
+    private volatile int worldGeneration = 0;
 
     public List<TownData>     getTowns()        { return archiveTowns != null ? archiveTowns : towns; }
     public boolean isArchiveActive()            { return archiveTowns != null; }
@@ -213,7 +215,11 @@ public class SquaremapApiClient {
      * as a real claim on the other. The ETags go too: they identify a document for a different world.
      */
     public void onWorldChanged() {
+        worldGeneration++;   // anything already in flight belongs to the world we are leaving
         towns = List.of();
+        // Positions are raw X/Z with no world attached, so the world we just left would keep drawing its
+        // players at those coordinates until the next 1s poll lands.
+        players = List.of();
         etags.clear();
         townResidents = Map.of();
         residentTowns = Map.of();
@@ -250,7 +256,13 @@ public class SquaremapApiClient {
 
     private void fetchMarkers() {
         try {
+            // A switch clears the caches at once, but a fetch already running keeps going. Without this
+            // the Terra Nostra response landed after the switch and filled `towns` with Earth polygons
+            // while the Moon was on screen -- and forceTownMarkerRefresh() could not fix it, because the
+            // running fetch made it a no-op.
+            final int generation = worldGeneration;
             String json = get(config.markersUrl(TownyMapMod.activeWorldKey()));
+            if (generation != worldGeneration) return;
             if (json == NOT_MODIFIED) {
                 // Unchanged is a success: the data on screen is current, there was just nothing to send.
                 lastMarkerSuccessMs = System.currentTimeMillis();
@@ -327,6 +339,10 @@ public class SquaremapApiClient {
 
     private void rememberPlayers(List<PlayerMarker> parsed) {
         if (parsed.isEmpty()) return;
+        // History is a flat name -> X/Z store with no world, and it is persisted to disk. Recording Moon
+        // positions into it would leave a player "last seen" at lunar coordinates that later get drawn
+        // on Terra Nostra, so only Earth positions go in.
+        if (!TownyMapMod.viewingEarth()) return;
         long now = System.currentTimeMillis();
         Map<String, PlayerHistoryEntry> updated = new HashMap<>(playerHistory);
         for (PlayerMarker marker : parsed) {
