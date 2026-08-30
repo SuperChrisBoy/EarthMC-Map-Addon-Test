@@ -888,6 +888,11 @@ public class TownyMapMod implements ClientModInitializer {
         if (config == null || !config.playerLastSeen || apiClient == null || !isActiveOnCurrentServer()) {
             return List.of();
         }
+        // Ghosts are "in the server player list but off the map feed". That reasoning only holds on Earth:
+        // switching the map to the Moon drops every Earth player from the feed at once while they stay in
+        // the player list, so all ~200 of them turned into red ghosts. The player list cannot say which
+        // world someone is in, so there is no way to tell a real Moon ghost from an Earth player.
+        if (!viewingEarth()) return List.of();
         // Recompute a few times a second, not every frame: the set of ghosts and their fixed positions
         // change slowly, so rebuilding the feed set and scanning history at 60fps was pure waste.
         long sinceRecompute = System.currentTimeMillis() - cachedGhostsAt;
@@ -1626,7 +1631,8 @@ public class TownyMapMod implements ClientModInitializer {
 
     /** squaremap world key -> display name, from /tiles/settings.json. Empty until fetched. */
     private static volatile java.util.Map<String, String> squaremapWorlds = java.util.Map.of();
-    private static volatile boolean squaremapWorldsFetched = false;
+    private static volatile boolean squaremapWorldsFetching = false;
+    private static volatile long lastWorldsAttemptMs = 0;
     private static volatile String lastActiveWorld = WORLD_OVERWORLD;
     private static volatile String loggedUnknownWorld = null;
 
@@ -1635,14 +1641,20 @@ public class TownyMapMod implements ClientModInitializer {
      * data before we try to show it, so an unknown dimension falls back instead of 404ing every tile.
      */
     public static java.util.Map<String, String> squaremapWorlds() {
-        if (!squaremapWorldsFetched && config != null && apiClient != null) {
-            squaremapWorldsFetched = true;
+        // Retry on failure rather than latching. Latching meant one failed fetch left the list empty for
+        // the session, and everything keyed off it silently misbehaved.
+        long now = System.currentTimeMillis();
+        if (squaremapWorlds.isEmpty() && !squaremapWorldsFetching
+                && now - lastWorldsAttemptMs > 60_000L && config != null && apiClient != null) {
+            squaremapWorldsFetching = true;
+            lastWorldsAttemptMs = now;
             apiClient.fetchWorlds().thenAccept(m -> {
                 if (m != null && !m.isEmpty()) {
                     squaremapWorlds = m;
                     LOGGER.info("[TownyMap] squaremap worlds: {}", m);
                 }
-            });
+                squaremapWorldsFetching = false;
+            }).exceptionally(t -> { squaremapWorldsFetching = false; return null; });
         }
         return squaremapWorlds;
     }
@@ -1695,8 +1707,44 @@ public class TownyMapMod implements ClientModInitializer {
 
     /** True when the map shows a world the player is not in -- markers there are not where they are. */
     public static boolean viewingOtherWorld() {
-        String pk = playerWorldKey();
-        return pk != null && !pk.equals(activeWorldKey());
+        // Derived from the dimension directly, NOT from playerWorldKey(): that one requires the world to
+        // be in squaremap's fetched list, so before the list arrives (or if the fetch ever failed) it
+        // returned null, this returned false, and overworld players were drawn on the Moon as red dots.
+        String pk = rawWorldKey();
+        if (pk == null) return false;
+        String active = activeWorldKey();
+        if (pk.equals(active)) return false;
+        // Nether/End showing the Earth overlay is a deliberate projection, not a different world.
+        if (WORLD_OVERWORLD.equals(active) && pk.startsWith("minecraft_")) return false;
+        return true;
+    }
+
+    /** The town's claim polygon in the world currently shown, or null if it has none there. */
+    public static net.townymap.model.TownData townPolygon(String townName) {
+        if (apiClient == null || townName == null || townName.isBlank()) return null;
+        String key = townKey(townName);
+        for (net.townymap.model.TownData t : apiClient.getTowns()) {
+            if (t.key().equals(key)) return t;
+        }
+        return null;
+    }
+
+    /** True when the player is standing in the very world the map is showing (and it is not Earth). */
+    public static boolean standingInActiveWorld() {
+        String pk = rawWorldKey();
+        return pk != null && pk.equals(activeWorldKey()) && !WORLD_OVERWORLD.equals(pk);
+    }
+
+    /** "namespace_path" for the dimension the player is in, with no validation against squaremap. */
+    private static String rawWorldKey() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.world == null) return null;
+        try {
+            var id = client.world.getRegistryKey().getValue();
+            return id.getNamespace() + "_" + id.getPath();
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     /** Display name for the active world, for labels. */
@@ -1722,9 +1770,18 @@ public class TownyMapMod implements ClientModInitializer {
 
     private static void onActiveWorldChanged(String key) {
         LOGGER.info("[TownyMap] Map world -> {}", key);
+        // The archive holds an Earth-only snapshot, and getTowns() hands it out no matter which world is
+        // shown - so leaving Earth with one loaded would paint Earth borders over Moon terrain. Every
+        // world switch funnels through here, so dropping it once covers the toggle and the settings screen.
+        if (!WORLD_OVERWORLD.equals(key) && isArchiveMode()) {
+            exitArchive();
+            sendFeedback("Archive closed - it only covers Terra Nostra.", Formatting.YELLOW);
+        }
         // Moon and Terra Nostra coordinates overlap numerically, so nothing cached for one world may be
         // reused for the other: towns, tiles and outline caches all have to go.
         if (apiClient != null) apiClient.onWorldChanged();
+        cachedGhosts = List.of();
+        cachedGhostsAt = 0;
         if (renderer != null) {
             renderer.invalidateTownCaches();
             renderer.clearSquaremapTiles();
@@ -2468,6 +2525,13 @@ public class TownyMapMod implements ClientModInitializer {
      */
     public static void enterArchive(int yyyymmdd) {
         if (apiClient == null || archiveLoading) return;
+        // The other half of the archive/Moon exclusion (see onActiveWorldChanged): snapshots are Terra
+        // Nostra only, so loading one from the Moon has to bring the map back to Earth first.
+        if (config != null && config.mapWorldMode != 0) {
+            config.mapWorldMode = 0;
+            tickWorldChange();
+            sendFeedback("Switched to Terra Nostra - archives only cover Earth.", Formatting.YELLOW);
+        }
         archiveLoading = true;
         archiveStatus = "Loading archive…";
         lastArchiveError = "";
