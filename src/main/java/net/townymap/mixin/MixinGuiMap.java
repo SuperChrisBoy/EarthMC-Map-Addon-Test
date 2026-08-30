@@ -500,7 +500,7 @@ public abstract class MixinGuiMap {
     private void jumpTo(TownData town) {
         if (town == null) return;
         TownyMapMod.suppressNextPanClear();   // centring on a selected result isn't a user pan
-        double dimScale = TownyMapMod.dimensionCoordinateScale();
+        double dimScale = TownyMapMod.worldMapCoordinateScale();
         cameraX = town.centerX() / dimScale;
         cameraZ = town.centerZ() / dimScale;
     }
@@ -508,7 +508,7 @@ public abstract class MixinGuiMap {
     private void jumpTo(MapJumpTarget target) {
         if (target == null) return;
         TownyMapMod.suppressNextPanClear();   // centring on a selected result isn't a user pan
-        double dimScale = TownyMapMod.dimensionCoordinateScale();
+        double dimScale = TownyMapMod.worldMapCoordinateScale();
         cameraX = target.x() / dimScale;
         cameraZ = target.z() / dimScale;
     }
