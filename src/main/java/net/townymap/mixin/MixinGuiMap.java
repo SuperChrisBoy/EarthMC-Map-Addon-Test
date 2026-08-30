@@ -63,6 +63,14 @@ public abstract class MixinGuiMap {
     // TEST: how much further "World Map Overview" lets you zoom out (Xaero's min destScale / this).
     private static final double WORLD_MAP_OVERVIEW_FACTOR = 8.0;
 
+    /**
+     * Xaero's "camera follows player" lock. extractRenderState re-snaps cameraX/cameraZ to the player at
+     * the TOP of every frame while this is set, so any camera we write later in the same method was
+     * overwritten before it could be drawn -- which is why recentring appeared to do nothing. Xaero
+     * clears it itself the moment the user drags the map; moving the camera means detaching it.
+     */
+    @Shadow(remap = false) private static boolean attachedCamera;
+
     @Shadow(remap = false) private double cameraX;
     @Shadow(remap = false) private double cameraZ;
     @Shadow(remap = false) private double scale;
@@ -92,6 +100,7 @@ public abstract class MixinGuiMap {
         if (recentre != null) {
             double dimScale = TownyMapMod.worldMapCoordinateScale();
             TownyMapMod.suppressNextPanClear();
+            attachedCamera = false;   // or the next frame snaps straight back to the player
             cameraX = recentre[0] / dimScale;
             cameraZ = recentre[1] / dimScale;
         }
@@ -509,6 +518,7 @@ public abstract class MixinGuiMap {
     private void jumpTo(TownData town) {
         if (town == null) return;
         TownyMapMod.suppressNextPanClear();   // centring on a selected result isn't a user pan
+        attachedCamera = false;               // same reason as above: a locked camera undoes this
         double dimScale = TownyMapMod.worldMapCoordinateScale();
         cameraX = town.centerX() / dimScale;
         cameraZ = town.centerZ() / dimScale;
@@ -517,6 +527,7 @@ public abstract class MixinGuiMap {
     private void jumpTo(MapJumpTarget target) {
         if (target == null) return;
         TownyMapMod.suppressNextPanClear();   // centring on a selected result isn't a user pan
+        attachedCamera = false;               // same reason as above: a locked camera undoes this
         double dimScale = TownyMapMod.worldMapCoordinateScale();
         cameraX = target.x() / dimScale;
         cameraZ = target.z() / dimScale;
