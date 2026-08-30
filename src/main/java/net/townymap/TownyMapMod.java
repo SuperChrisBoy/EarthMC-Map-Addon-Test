@@ -3265,16 +3265,13 @@ public class TownyMapMod implements ClientModInitializer {
         // Xaero files waypoints under the dimension the PLAYER is in, so a route to a Moon town created
         // from Earth would land in the Earth waypoint set at lunar coordinates -- an arrow pointing at
         // nothing. Refuse it rather than plant a waypoint that quietly lies.
-        String vk = xaeroViewedWorldKey();
-        String pk = playerWorldKey();
-        if (!viewingEarth() && (pk == null || !pk.equals(activeWorldKey()))) {
-            sendFeedback("Routes to " + activeWorldName() + " towns only work while you are there.",
-                    ChatFormatting.RED);
-            return false;
-        }
-        if (vk != null && pk != null && !vk.equals(pk)) {
-            sendFeedback("Xaero is showing another dimension - routes are placed where you stand.",
-                    ChatFormatting.RED);
+        // One symmetric test covers both directions. The earlier pair only refused when the map was off
+        // Earth, and otherwise leaned on Xaero's viewed dimension -- so standing on the Moon while
+        // viewing Terra Nostra slipped through whenever that dimension had not been switched, and it
+        // also went through the nullable playerWorldKey(), which needs squaremap's fetched world list.
+        if (viewingOtherWorld()) {
+            sendFeedback("Routes only work for the world you are standing in - the map is showing "
+                    + activeWorldName() + ".", ChatFormatting.RED);
             return false;
         }
         try {
