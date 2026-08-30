@@ -298,6 +298,12 @@ public final class DetailPages {
         List<DetailScreen.Block> b = new ArrayList<>();
         net.townymap.api.SquaremapApiClient api = TownyMapMod.getApiClient();
         List<net.townymap.model.TownData> towns = api == null ? List.of() : api.getTowns();
+        // getTowns() only ever holds the world being shown, so off Earth these leaderboards silently rank
+        // outposts alone. Say so rather than passing Moon-only totals off as server-wide ones.
+        if (!TownyMapMod.viewingEarth()) {
+            b.add(new DetailScreen.Wide("Scope", TownyMapMod.activeWorldName()
+                    + " only - outpost claims, not whole towns"));
+        }
 
         if (sub == 1) {
             Map<String, Integer> townCount = new java.util.HashMap<>();

@@ -1349,7 +1349,14 @@ public final class TownSearchOverlay {
                 || (details.maxChunks() > 0 && details.numChunks() > details.maxChunks());
         String sizeColor = overLimit ? "§c" : "§f";
         String maxStr = details.maxChunks() > 0 ? " / " + details.maxChunks() : "";
-        lines.add(InfoRow.text("§7Chunks: " + sizeColor + details.numChunks() + maxStr));
+        if (!TownyMapMod.viewingEarth()) {
+            // maxTownBlocks is a town-wide allowance shared with the Earth claim, so pairing it with
+            // an outpost-only count would read as a limit that is nowhere near being reached.
+            lines.add(InfoRow.text("§7Outpost: §f" + town.approximateChunks() + " chunks"));
+            lines.add(InfoRow.text("§8Town total: " + details.numChunks() + maxStr));
+        } else {
+            lines.add(InfoRow.text("§7Chunks: " + sizeColor + details.numChunks() + maxStr));
+        }
         if (!details.founded().isBlank()) lines.add(InfoRow.text("§7Founded: §f" + details.founded()));
         String townInactive = details.activeResidentCount() >= 0
                 && details.activeResidentCount() < details.residentCount()
