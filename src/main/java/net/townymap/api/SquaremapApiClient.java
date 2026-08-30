@@ -660,11 +660,10 @@ public class SquaremapApiClient {
                 if (!el.isJsonObject()) continue;
                 JsonObject p = el.getAsJsonObject();
 
-                // Filter to the world being shown, not a hardcoded "overworld" -- otherwise Moon players
-                // would be dropped while viewing the Moon, and Earth players would appear on it.
+                // Kept on the marker, not filtered away here: the world map wants the world it is
+                // showing and the minimap wants the one the player is standing in, and those differ
+                // whenever the map is pinned. Callers choose with getPlayers(world).
                 String world = getString(p, "world");
-                String active = TownyMapMod.activeWorldKey();
-                if (world != null && !world.equals(active)) continue;
 
                 boolean hidden = p.has("hidden") && p.get("hidden").getAsBoolean();
                 if (hidden) continue;
@@ -689,7 +688,9 @@ public class SquaremapApiClient {
                     try { yaw = p.get("yaw").getAsFloat(); } catch (Exception ignored) {}
                 }
 
-                result.add(new PlayerMarker(name != null ? name : "?", uuid, x, z, yaw));
+                String pname = name != null ? name : "?";
+                result.add(new PlayerMarker(pname, uuid, x, z, yaw,
+                        pname.toLowerCase(Locale.ROOT), world == null ? "" : world));
             }
         } catch (Exception e) {
             LOGGER.error("[TownyMap] Failed to parse players.json", e);
