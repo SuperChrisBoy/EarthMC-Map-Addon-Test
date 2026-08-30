@@ -146,6 +146,11 @@ public final class TownyMinimapOverlay {
             if (config.netherMode == 2
                     && client.level.dimension() == net.minecraft.world.level.Level.NETHER) {
                 dimScale = TownyMapMod.dimensionCoordinateScale();   // Overworld Coords
+            } else if (TownyMapMod.standingInActiveWorld()) {
+                // A world squaremap maps and that the map is showing - the Moon. Claims there are at
+                // real 1:1 coordinates, so draw exactly as on Earth. This gate predates the Moon and
+                // hid the whole minimap overlay there, which is why outposts never appeared on it.
+                dimScale = 1.0;
             } else if (TownyMapMod.isOnEarthMcServer()) {
                 return;                                              // Hidden
             }
@@ -1390,6 +1395,8 @@ public final class TownyMinimapOverlay {
             if (config.netherMode == 2
                     && client.level.dimension() == net.minecraft.world.level.Level.NETHER) {
                 dimScale = TownyMapMod.dimensionCoordinateScale();
+            } else if (TownyMapMod.standingInActiveWorld()) {
+                dimScale = 1.0;   // the world the map is showing; 1:1, exactly like Earth
             } else if (TownyMapMod.isOnEarthMcServer()) {
                 return;
             }
