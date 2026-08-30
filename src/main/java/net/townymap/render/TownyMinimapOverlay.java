@@ -983,7 +983,7 @@ public final class TownyMinimapOverlay {
     }
 
     private static void drawOptimisticClaimChunks(DrawContext ctx) {
-        for (OptimisticClaimChunk chunk : TownyMapMod.optimisticClaimChunks()) {
+        for (OptimisticClaimChunk chunk : TownyMapMod.optimisticClaimChunks(TownyMapMod.playerWorldResolved())) {
             int blockX = chunk.blockX();
             int blockZ = chunk.blockZ();
             ctx.fill(blockX, blockZ, blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE, chunk.fillColor());
@@ -998,7 +998,7 @@ public final class TownyMinimapOverlay {
                                                   double centerX, double centerY,
                                                   double playerX, double playerZ,
                                                   double pixelsPerBlock, double sin, double cos) {
-        for (OptimisticClaimChunk chunk : TownyMapMod.optimisticClaimChunks()) {
+        for (OptimisticClaimChunk chunk : TownyMapMod.optimisticClaimChunks(TownyMapMod.playerWorldResolved())) {
             int blockX = chunk.blockX();
             int blockZ = chunk.blockZ();
             if (clip.worldRectFullyInside(blockX, blockZ, blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE,

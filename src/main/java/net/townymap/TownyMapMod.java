@@ -372,7 +372,7 @@ public class TownyMapMod implements ClientModInitializer {
         long now = System.currentTimeMillis();
         optimisticClaimChunks.removeIf(chunk -> chunk.chunkX() == chunkX && chunk.chunkZ() == chunkZ);
         optimisticClaimChunks.add(new OptimisticClaimChunk(chunkX, chunkZ, townName, fillColor, outlineColor,
-                now + OPTIMISTIC_CLAIM_TTL_MS));
+                now + OPTIMISTIC_CLAIM_TTL_MS, playerWorldResolved()));
     }
 
     private static TownData townByName(String townName) {
@@ -934,8 +934,15 @@ public class TownyMapMod implements ClientModInitializer {
     }
 
     public static List<OptimisticClaimChunk> optimisticClaimChunks() {
+        return optimisticClaimChunks(activeWorldKey());
+    }
+
+    /** Claims belonging to one world -- the minimap asks for the one the player is standing in. */
+    public static List<OptimisticClaimChunk> optimisticClaimChunks(String worldKey) {
         pruneOptimisticClaimChunks(false);
-        return List.copyOf(optimisticClaimChunks);
+        List<OptimisticClaimChunk> out = new ArrayList<>();
+        for (OptimisticClaimChunk c : optimisticClaimChunks) if (c.inWorld(worldKey)) out.add(c);
+        return out;
     }
 
     private static void pruneOptimisticClaimChunks(boolean clearAll) {
@@ -1214,7 +1221,8 @@ public class TownyMapMod implements ClientModInitializer {
         long now = System.currentTimeMillis();
         if (now - lastMinimapNationAlertUpdateMs < 500L) return;
         lastMinimapNationAlertUpdateMs = now;
-        List<TownData> towns = apiClient.getTowns();
+        // Minimap alert, so it reads the world the player is standing in, not the pinned one.
+        List<TownData> towns = apiClient.getTowns(playerWorldResolved());
         if (towns.isEmpty()) {
             minimapOutsideNationPlayers.clear();
             return;
@@ -1706,6 +1714,42 @@ public class TownyMapMod implements ClientModInitializer {
     /** Auto mode's answer, resolved on the client tick so fetch threads never touch the level. */
     private static volatile String autoResolvedWorld = WORLD_OVERWORLD;
     private static volatile String resolvedPlayerWorld = WORLD_OVERWORLD;
+    private static volatile String pendingRecentreWorld = null;
+
+    /**
+     * Where the world map should re-aim after a world switch, or null if it should stay put.
+     *
+     * <p>Returns null while the target world's claims are still loading, so the request survives until
+     * there is something to aim at -- the first switch to a world usually lands before its markers do.
+     */
+    public static double[] consumeWorldMapRecentre() {
+        String world = pendingRecentreWorld;
+        if (world == null) return null;
+        if (world.equals(resolvedPlayerWorld)) {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client == null || client.player == null) return null;
+            pendingRecentreWorld = null;
+            return new double[]{client.player.getX(), client.player.getZ()};
+        }
+        double[] centre = worldClaimCentre(world);
+        if (centre == null) return null;   // markers not in yet; try again next frame
+        pendingRecentreWorld = null;
+        return centre;
+    }
+
+    /** Middle of a world's claimed area, or null if its markers have not arrived. */
+    private static double[] worldClaimCentre(String world) {
+        if (apiClient == null) return null;
+        List<TownData> towns = apiClient.getTowns(world);
+        if (towns.isEmpty()) return null;
+        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
+        int minZ = Integer.MAX_VALUE, maxZ = Integer.MIN_VALUE;
+        for (TownData t : towns) {
+            minX = Math.min(minX, t.centerX()); maxX = Math.max(maxX, t.centerX());
+            minZ = Math.min(minZ, t.centerZ()); maxZ = Math.max(maxZ, t.centerZ());
+        }
+        return new double[]{(minX + maxX) / 2.0, (minZ + maxZ) / 2.0};
+    }
 
     /**
      * The squaremap world the player is standing in, resolved on the client tick.
@@ -1997,10 +2041,14 @@ public class TownyMapMod implements ClientModInitializer {
         if (apiClient != null) apiClient.onWorldChanged();
         cachedGhosts = List.of();
         cachedGhostsAt = 0;
-        // Chunk coordinates with no world attached: a claim made on Earth would redraw on the Moon.
-        optimisticClaimChunks.clear();
-        minimapOutsideNationPlayers.clear();
+        // Optimistic claims are NOT dropped here any more: they belong to the world the player claimed
+        // in and carry it, so pinning the map elsewhere must not wipe them off the minimap. The
+        // dimension-change hook still clears them.
         townInfoRouteTarget = null;   // points into the world we just left
+        // The camera is sitting at coordinates that meant something in the world we just left. Re-aim it:
+        // at the player when the map is back on their own world, at the new world's claims otherwise --
+        // the Moon's sit around x 3600 z 250, so the player's Earth position there is empty ground.
+        pendingRecentreWorld = key;
         // The result cache is keyed on collection SIZES, and 5,500 Earth towns against 47 lunar ones will
         // always differ - but nothing guarantees that, so retire the results explicitly.
         net.townymap.gui.TownSearchOverlay.invalidateResults();
@@ -3331,8 +3379,10 @@ public class TownyMapMod implements ClientModInitializer {
         // per open, so halving the refresh rate halves the cost of flicking through the tabs.
         if (richPlayersLoading || now - richPlayersAtMs < 120_000L) return richPlayers;
         if (apiClient == null || earthMcApi == null) return richPlayers;
+        // Everyone online, not just the world on screen: this is a server-wide leaderboard, and
+        // pinning the map to the Moon would otherwise shrink it to whoever happens to be up there.
         List<String> names = new ArrayList<>();
-        for (net.townymap.model.PlayerMarker m : apiClient.getPlayers()) {
+        for (net.townymap.model.PlayerMarker m : apiClient.getAllPlayers()) {
             if (m.name() != null && !m.name().isBlank()) names.add(m.name());
         }
         if (names.isEmpty()) return richPlayers;
