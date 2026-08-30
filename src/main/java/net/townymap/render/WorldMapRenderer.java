@@ -258,8 +258,12 @@ public class WorldMapRenderer {
         List<RenderTown> visibleTowns = visibleTowns(blockScale, worldLeft, worldRight, worldTop, worldBottom);
         refreshFavoriteTownKeys();
 
-        borderOverlay.render(ctx, cameraX, cameraZ, blockScale, sw, sh,
-                worldLeft, worldRight, worldTop, worldBottom);
+        // Real-world country and state borders, so they mean nothing anywhere but Terra Nostra -- on
+        // the Moon they drew Earth's coastlines across lunar terrain.
+        if (TownyMapMod.viewingEarth()) {
+            borderOverlay.render(ctx, cameraX, cameraZ, blockScale, sw, sh,
+                    worldLeft, worldRight, worldTop, worldBottom);
+        }
 
         renderChunkGrid(ctx, cameraX, cameraZ, blockScale, sw, sh,
                 worldLeft, worldRight, worldTop, worldBottom);
