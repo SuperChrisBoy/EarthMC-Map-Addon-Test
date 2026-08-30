@@ -1704,11 +1704,63 @@ public class TownyMapMod implements ClientModInitializer {
         }
     }
 
+    public static final int WORLD_MODE_AUTO  = 0;
+    public static final int WORLD_MODE_EARTH = 1;
+    public static final int WORLD_MODE_MOON  = 2;
+
+    /** Auto mode's answer, resolved on the client tick so fetch threads never touch the level. */
+    private static volatile String autoResolvedWorld = WORLD_OVERWORLD;
+    private static volatile String loggedDimensionAlias = null;
+
+    /**
+     * The squaremap world the player is standing in. Never null -- Earth is the fallback.
+     *
+     * <p>The dimension id is NOT assumed to equal squaremap's world name for it. EarthMC's lunar
+     * dimension is referred to as "space" in-game while squaremap publishes the world as
+     * {@code earthmc_moon}, and a derived {@code namespace_path} match would silently never fire. So:
+     * exact match first, then the vanilla dimensions (all of which project onto Earth), then the single
+     * non-Earth world squaremap publishes -- which is right however EarthMC names the dimension.
+     *
+     * <p>Client thread only; {@link #activeWorldKey()} reads the resolved value instead.
+     */
+    public static String playerMapWorld() {
+        String raw = rawWorldKey();
+        if (raw == null) return WORLD_OVERWORLD;
+        Map<String, String> worlds = squaremapWorlds();
+        if (worlds.containsKey(raw)) return raw;                    // earthmc_moon, minecraft_overworld
+        if (raw.startsWith("minecraft_")) return WORLD_OVERWORLD;   // overworld, nether and end
+        // EarthMC has two lunar dimensions -- earthmc:space and earthmc:moon -- but squaremap publishes
+        // one world for them, earthmc_moon. So space has no world of its own and would otherwise fall
+        // back to Earth, putting Terra Nostra's map up while the player is off it.
+        // Deliberately not conditional on the fetched world list: that list is retried on a 60s timer,
+        // and requiring it meant stepping onto the Moon before it landed resolved to Earth and left
+        // Terra Nostra on screen until the retry.
+        if (raw.startsWith("earthmc_")) return WORLD_MOON;
+        String only = null;
+        for (String k : worlds.keySet()) {
+            if (WORLD_OVERWORLD.equals(k)) continue;
+            if (only != null) return WORLD_OVERWORLD;   // more than one candidate: refuse to guess
+            only = k;
+        }
+        if (only == null) return WORLD_OVERWORLD;
+        if (!raw.equals(loggedDimensionAlias)) {
+            loggedDimensionAlias = raw;
+            LOGGER.info("[TownyMap] Dimension {} is not a squaremap world name; treating it as {}",
+                    raw, only);
+        }
+        return only;
+    }
+
     /** The squaremap world the map should currently show. */
     public static String activeWorldKey() {
         if (config == null) return WORLD_OVERWORLD;
-        // Explicit, never automatic: travelling to the Moon does not silently change what the map shows.
-        return config.mapWorldMode == 1 ? WORLD_MOON : WORLD_OVERWORLD;
+        return switch (config.mapWorldMode) {
+            case WORLD_MODE_EARTH -> WORLD_OVERWORLD;
+            case WORLD_MODE_MOON  -> WORLD_MOON;
+            // Auto: whatever the last client tick resolved. Read from fetch threads, so it must not
+            // reach into the level here.
+            default -> autoResolvedWorld;
+        };
     }
 
     /**
@@ -1724,16 +1776,10 @@ public class TownyMapMod implements ClientModInitializer {
 
     /** True when the map shows a world the player is not in -- markers there are not where they are. */
     public static boolean viewingOtherWorld() {
-        // Derived from the dimension directly, NOT from playerWorldKey(): that one requires the world to
-        // be in squaremap's fetched list, so before the list arrives (or if the fetch ever failed) it
-        // returned null, this returned false, and overworld players were drawn on the Moon as red dots.
-        String pk = rawWorldKey();
-        if (pk == null) return false;
-        String active = activeWorldKey();
-        if (pk.equals(active)) return false;
-        // Nether/End showing the Earth overlay is a deliberate projection, not a different world.
-        if (WORLD_OVERWORLD.equals(active) && pk.startsWith("minecraft_")) return false;
-        return true;
+        // Goes through playerMapWorld() rather than the raw dimension id: the lunar dimension is not
+        // named after squaremap's world for it, so a raw comparison reported "other world" while the
+        // player stood in the very world on screen.
+        return !playerMapWorld().equals(activeWorldKey());
     }
 
     /** The town's claim polygon in the world currently shown, or null if it has none there. */
@@ -1790,8 +1836,8 @@ public class TownyMapMod implements ClientModInitializer {
 
     /** True when the player is standing in the very world the map is showing (and it is not Earth). */
     public static boolean standingInActiveWorld() {
-        String pk = rawWorldKey();
-        return pk != null && pk.equals(activeWorldKey()) && !WORLD_OVERWORLD.equals(pk);
+        String pk = playerMapWorld();
+        return pk.equals(activeWorldKey()) && !WORLD_OVERWORLD.equals(pk);
     }
 
     /** "namespace_path" for the dimension the player is in, with no validation against squaremap. */
@@ -1826,6 +1872,11 @@ public class TownyMapMod implements ClientModInitializer {
      * still decoding. On the tick it happens once, on the main thread, between frames.
      */
     public static void tickWorldChange() {
+        // Auto mode is resolved here, on the client tick, so activeWorldKey() stays safe to call from
+        // the fetch threads that read it.
+        if (config != null && config.mapWorldMode == WORLD_MODE_AUTO) {
+            autoResolvedWorld = playerMapWorld();
+        }
         tickPlayerDimensionChange();
         String key = activeWorldKey();
         if (key.equals(lastActiveWorld)) return;
@@ -1834,6 +1885,7 @@ public class TownyMapMod implements ClientModInitializer {
     }
 
     private static volatile String lastPlayerWorld = null;
+    private static volatile String lastAnnouncedWorld = null;
 
     /**
      * Resets what belonged to the dimension the player just left.
@@ -1854,10 +1906,20 @@ public class TownyMapMod implements ClientModInitializer {
         cachedGhosts = List.of();
         cachedGhostsAt = 0;
         net.townymap.integration.ShopWaypoints.onDimensionChanged();
-        // The map world is deliberately explicit, so it does not follow the player -- but arriving in a
-        // world squaremap maps while the map still shows another one is worth one line, not silence.
-        if (isOnEarthMcServer() && squaremapWorlds().containsKey(pk) && !pk.equals(activeWorldKey())) {
-            sendFeedback("You are on " + worldDisplayName(pk) + " - the map is still showing "
+        if (!isOnEarthMcServer()) return;
+        String world = playerMapWorld();
+        if (config != null && config.mapWorldMode == WORLD_MODE_AUTO) {
+            // The switch itself happens above; this is only the notice. Say nothing when the world did
+            // not actually change -- a Nether trip resolves to Earth just like the overworld does.
+            if (!world.equals(lastAnnouncedWorld)) {
+                lastAnnouncedWorld = world;
+                sendFeedback("Map switched to " + worldDisplayName(world) + ".", ChatFormatting.GREEN);
+            }
+            return;
+        }
+        // Pinned by hand: leave it alone, but do not let the map silently disagree with where they are.
+        if (!world.equals(activeWorldKey())) {
+            sendFeedback("You are on " + worldDisplayName(world) + " - the map is pinned to "
                     + activeWorldName() + ".", ChatFormatting.YELLOW);
         }
     }
@@ -2645,10 +2707,12 @@ public class TownyMapMod implements ClientModInitializer {
         if (apiClient == null || archiveLoading) return;
         // The other half of the archive/Moon exclusion (see onActiveWorldChanged): snapshots are Terra
         // Nostra only, so loading one from the Moon has to bring the map back to Earth first.
-        if (config != null && config.mapWorldMode != 0) {
-            config.mapWorldMode = 0;
+        // PINS Earth rather than selecting Auto: in Auto this would resolve straight back to the Moon
+        // for a player standing there, and the archive has no lunar data at all.
+        if (config != null && !WORLD_OVERWORLD.equals(activeWorldKey())) {
+            config.mapWorldMode = WORLD_MODE_EARTH;
             tickWorldChange();
-            sendFeedback("Switched to Terra Nostra - archives only cover Earth.", ChatFormatting.YELLOW);
+            sendFeedback("Pinned to Terra Nostra - archives only cover Earth.", ChatFormatting.YELLOW);
         }
         archiveLoading = true;
         archiveStatus = "Loading archive…";
