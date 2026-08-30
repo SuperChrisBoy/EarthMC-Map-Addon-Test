@@ -836,7 +836,11 @@ public final class TownSearchOverlay {
                 return new MapJumpTarget(name, town.centerX(), town.centerZ());
             }
         }
-        if (details.hasSpawn()) return new MapJumpTarget(name, details.spawnX(), details.spawnZ());
+        // Only on Earth: the API spawn is an Earth coordinate, so jumping to it while viewing the Moon
+        // would land somewhere unrelated rather than at the nation's outpost.
+        if (details.hasSpawn() && TownyMapMod.viewingEarth()) {
+            return new MapJumpTarget(name, details.spawnX(), details.spawnZ());
+        }
         return null;
     }
 
@@ -1498,7 +1502,7 @@ public final class TownSearchOverlay {
                     return new MapJumpTarget(fav.name(), capital.centerX(), capital.centerZ());
                 }
             }
-            if (nd != null && nd.hasSpawn()) {
+            if (nd != null && nd.hasSpawn() && TownyMapMod.viewingEarth()) {
                 return new MapJumpTarget(fav.name(), nd.spawnX(), nd.spawnZ());
             }
             return null;
