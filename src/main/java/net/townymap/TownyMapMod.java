@@ -886,14 +886,21 @@ public class TownyMapMod implements ClientModInitializer {
      * list = logged off → drop them, so a logged-off player is removed rather than left as a headless dot.
      */
     public static List<GhostMarker> lastSeenGhosts() {
+        return lastSeenGhosts(activeWorldKey());
+    }
+
+    /** Ghosts for one surface's world -- the minimap passes the world the player is standing in. */
+    public static List<GhostMarker> lastSeenGhosts(String worldKey) {
+        // History only ever records Terra Nostra positions, so there are no ghosts to show anywhere else.
+        if (!WORLD_OVERWORLD.equals(worldKey)) return List.of();
+        return lastSeenGhostsInner();
+    }
+
+    private static List<GhostMarker> lastSeenGhostsInner() {
         if (config == null || !config.playerLastSeen || apiClient == null || !isActiveOnCurrentServer()) {
             return List.of();
         }
-        // Ghosts are "in the server player list but off the map feed". That reasoning only holds on Earth:
-        // switching the map to the Moon drops every Earth player from the feed at once while they stay in
-        // the player list, so all ~200 of them turned into red ghosts. The player list cannot say which
-        // world someone is in, so there is no way to tell a real Moon ghost from an Earth player.
-        if (!viewingEarth()) return List.of();
+
         // Recompute a few times a second, not every frame: the set of ghosts and their fixed positions
         // change slowly, so rebuilding the feed set and scanning history at 60fps was pure waste.
         long sinceRecompute = System.currentTimeMillis() - cachedGhostsAt;
@@ -904,8 +911,10 @@ public class TownyMapMod implements ClientModInitializer {
         if (handler == null) return List.of();
 
         long now = System.currentTimeMillis();
+        // The Earth feed specifically: history only holds Earth positions, so comparing it against the
+        // Moon's feed would call every Earth player a ghost.
         Set<String> feed = new java.util.HashSet<>();
-        for (PlayerMarker m : apiClient.getPlayers()) {
+        for (PlayerMarker m : apiClient.getPlayers(WORLD_OVERWORLD)) {
             if (m.name() != null) feed.add(m.name().toLowerCase(Locale.ROOT));
         }
         Map<String, net.townymap.model.PlayerHistoryEntry> history = apiClient.getPlayerHistory();
@@ -1388,7 +1397,10 @@ public class TownyMapMod implements ClientModInitializer {
         double px = client.player.getX() * dimScale;
         double pz = client.player.getZ() * dimScale;
         long now = System.currentTimeMillis();
-        java.util.List<TownData> towns = apiClient.getTowns();
+        // Describes where the player physically stands, so it reads their world -- not the one the
+        // world map may be pinned to.
+        String hudWorld = playerWorldResolved();
+        java.util.List<TownData> towns = apiClient.getTowns(hudWorld);
         TownData here = TownHoverOverlay.townAt(px, pz, towns);
         java.util.List<String> lines = new java.util.ArrayList<>();
 
@@ -1417,14 +1429,14 @@ public class TownyMapMod implements ClientModInitializer {
             // retention buffer means the list self-corrects within a refresh and honours the Last Seen toggle.
             record Nearby(String name, double dist, boolean ghost) {}
             java.util.List<Nearby> near = new java.util.ArrayList<>();
-            for (PlayerMarker m : apiClient.getPlayers()) {
+            for (PlayerMarker m : apiClient.getPlayers(hudWorld)) {
                 if (m.name() == null || m.name().equalsIgnoreCase(self)) continue;
                 double d = Math.hypot(m.x() - px, m.z() - pz) / dimScale;
                 if (d <= 100.0) near.add(new Nearby(m.name(), d, false));
             }
             // Recently-departed players at their last-seen position (red), exactly the minimap's ghost data —
             // so you can still see roughly where someone was after they drop off the live feed.
-            for (GhostMarker g : lastSeenGhosts()) {
+            for (GhostMarker g : lastSeenGhosts(hudWorld)) {
                 if (g.name() == null || g.name().equalsIgnoreCase(self)) continue;
                 double d = Math.hypot(g.x() - px, g.z() - pz) / dimScale;
                 if (d <= 100.0) near.add(new Nearby(g.name(), d, true));
@@ -1716,6 +1728,15 @@ public class TownyMapMod implements ClientModInitializer {
 
     /** Auto mode's answer, resolved on the client tick so fetch threads never touch the level. */
     private static volatile String autoResolvedWorld = WORLD_OVERWORLD;
+    private static volatile String resolvedPlayerWorld = WORLD_OVERWORLD;
+
+    /**
+     * The squaremap world the player is standing in, resolved on the client tick.
+     *
+     * <p>Safe from any thread, unlike {@link #playerMapWorld()}. The minimap always shows this world --
+     * it shows where the player actually is -- while the world map shows {@link #activeWorldKey()}.
+     */
+    public static String playerWorldResolved() { return resolvedPlayerWorld; }
     private static volatile String loggedDimensionAlias = null;
 
     /**
@@ -1898,12 +1919,6 @@ public class TownyMapMod implements ClientModInitializer {
         }
     }
 
-    /** True when the player is standing in the very world the map is showing (and it is not Earth). */
-    public static boolean standingInActiveWorld() {
-        String pk = playerMapWorld();
-        return pk.equals(activeWorldKey()) && !WORLD_OVERWORLD.equals(pk);
-    }
-
     /** "namespace_path" for the dimension the player is in, with no validation against squaremap. */
     private static String rawWorldKey() {
         Minecraft client = Minecraft.getInstance();
@@ -1938,8 +1953,11 @@ public class TownyMapMod implements ClientModInitializer {
     public static void tickWorldChange() {
         // Auto mode is resolved here, on the client tick, so activeWorldKey() stays safe to call from
         // the fetch threads that read it.
+        // Resolved every tick, not only in Auto: the minimap and the marker fetcher both need the
+        // player's world from threads that must not touch the level.
+        resolvedPlayerWorld = playerMapWorld();
         if (config != null && config.mapWorldMode == WORLD_MODE_AUTO) {
-            autoResolvedWorld = playerMapWorld();
+            autoResolvedWorld = resolvedPlayerWorld;
         }
         tickPlayerDimensionChange();
         String key = activeWorldKey();
