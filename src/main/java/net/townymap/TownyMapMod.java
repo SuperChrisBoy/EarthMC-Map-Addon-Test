@@ -1829,6 +1829,64 @@ public class TownyMapMod implements ClientModInitializer {
      * The squaremap world key matching the dimension Xaero's world map is drawing, or null if unknown.
      * Same "namespace_path" derivation as {@link #playerWorldKey()}, but for the VIEWED dimension.
      */
+    /**
+     * Points Xaero's world map at the dimension matching the world we are showing, so its terrain and
+     * our claims agree instead of Moon borders sitting on Terra Nostra's ground.
+     *
+     * <p>Does exactly what Xaero's own dimension button does -- setCustomDimensionId then
+     * checkForWorldUpdate -- with null meaning "follow the player", which is what that button stores
+     * when the target is the dimension the player is already in.
+     *
+     * <p>Only ever targets a dimension Xaero already lists. GuiMap calls
+     * getCurrentDimension().getDimId() with no null check, so naming a dimension it has never seen
+     * (a player who has not been to the Moon) would crash inside Xaero's own render.
+     */
+    private static void syncXaeroDimension() {
+        try {
+            var session = xaero.map.core.XaeroWorldMapCore.currentSession;
+            if (session == null) return;
+            var proc = session.getMapProcessor();
+            if (proc == null) return;
+            var mapWorld = proc.getMapWorld();
+            if (mapWorld == null) return;
+            Minecraft client = Minecraft.getInstance();
+            if (client == null || client.level == null) return;
+
+            var target = knownXaeroDimensionFor(mapWorld, activeWorldKey());
+            if (target == null) return;   // Xaero has no map data for that world; leave it where it is
+            var own = client.level.dimension();
+            mapWorld.setCustomDimensionId(target.equals(own) ? null : target);
+            proc.checkForWorldUpdate();
+            LOGGER.info("[TownyMap] Xaero map dimension -> {}", target.identifier());
+        } catch (Throwable t) {
+            LOGGER.debug("[TownyMap] Could not sync Xaero map dimension", t);
+        }
+    }
+
+    /**
+     * A dimension Xaero already knows that belongs to the given squaremap world, or null if it knows
+     * none. EarthMC's two lunar dimensions share one squaremap world, so either satisfies the Moon --
+     * preferring whichever the player is standing in, then the exact world-name match.
+     */
+    private static net.minecraft.resources.ResourceKey<Level> knownXaeroDimensionFor(
+            xaero.map.world.MapWorld mapWorld, String worldKey) {
+        Minecraft client = Minecraft.getInstance();
+        var own = client == null || client.level == null ? null : client.level.dimension();
+        net.minecraft.resources.ResourceKey<Level> fallback = null;
+        for (var dim : mapWorld.getDimensionsList()) {
+            if (dim == null || dim.getDimId() == null) continue;
+            var id = dim.getDimId();
+            String key = id.identifier().getNamespace() + "_" + id.identifier().getPath();
+            boolean matches = WORLD_OVERWORLD.equals(worldKey)
+                    ? id.equals(Level.OVERWORLD)
+                    : key.equals(worldKey) || id.identifier().getNamespace().equals("earthmc");
+            if (!matches) continue;
+            if (id.equals(own)) return id;                                 // already here: best answer
+            if (fallback == null || key.equals(worldKey)) fallback = id;   // prefer the exact world
+        }
+        return fallback;
+    }
+
     public static String xaeroViewedWorldKey() {
         var key = xaeroViewedDimension();
         if (key == null) return null;
@@ -1955,6 +2013,8 @@ public class TownyMapMod implements ClientModInitializer {
             renderer.invalidateTownCaches();
             renderer.clearSquaremapTiles();
         }
+        // Keep Xaero's own terrain on the same world we are drawing claims for.
+        syncXaeroDimension();
     }
 
     /**
