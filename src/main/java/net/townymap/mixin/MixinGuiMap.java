@@ -22,6 +22,8 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Constant;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyConstant;
+import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.Slice;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.slf4j.Logger;
@@ -505,6 +507,31 @@ public abstract class MixinGuiMap {
     // Search results carry EarthMC (overworld) coordinates, but Xaero's camera is in the player's
     // current dimension. Without the divide, jumping to a town from the Nether centred the map 8x
     // too far out and the target wasn't on screen at all.
+    /**
+     * Suppresses Xaero's own player arrow while the map shows a world the player is not standing in.
+     *
+     * <p>Xaero gates the arrow on {@code getEffective(ARROW).booleanValue()} and skips the whole block
+     * when that reads false, so answering false is enough -- the drawing itself is untouched.
+     *
+     * <p>The slice bounds the redirect to the few instructions between the ARROW and ARROW_COLOR field
+     * reads, where exactly one booleanValue() call lives. Bounding it by ordinal instead would break
+     * whenever Xaero adds a setting, which has silently happened to this file before. The handler takes
+     * only JDK types on purpose: xaero.lib is not on our compile classpath, and the descriptors naming
+     * it here are plain strings.
+     */
+    @Redirect(require = 0, remap = false, method = "extractRenderState",
+            slice = @Slice(
+                    from = @At(value = "FIELD", opcode = Opcodes.GETSTATIC,
+                            target = "Lxaero/map/common/config/option/WorldMapProfiledConfigOptions;"
+                                   + "ARROW:Lxaero/lib/common/config/option/BooleanConfigOption;"),
+                    to = @At(value = "FIELD", opcode = Opcodes.GETSTATIC,
+                            target = "Lxaero/map/common/config/option/WorldMapProfiledConfigOptions;"
+                                   + "ARROW_COLOR:Lxaero/lib/common/config/option/RangeConfigOption;")),
+            at = @At(value = "INVOKE", target = "Ljava/lang/Boolean;booleanValue()Z"))
+    private boolean townymap$hidePlayerArrowOffWorld(Boolean value) {
+        return value.booleanValue() && !TownyMapMod.hideWorldMapPlayerArrow();
+    }
+
     private void jumpTo(TownData town) {
         if (town == null) return;
         TownyMapMod.suppressNextPanClear();   // centring on a selected result isn't a user pan
