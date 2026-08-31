@@ -565,6 +565,42 @@ public abstract class MixinGuiMap {
         return value.booleanValue() && !TownyMapMod.hideWorldMapPlayerArrow();
     }
 
+    /**
+     * Keeps the player's own waypoints off a map showing a world they are not in.
+     *
+     * <p>Xaero hands waypoint work to SupportXaeroMinimap.checkWaypoints; skipping that call leaves the
+     * map without them. Their coordinates belong to the player's world, so on the Moon they would mark
+     * lunar ground the player has never stood on.
+     */
+    @Redirect(require = 0, remap = false, method = "extractRenderState",
+            at = @At(value = "INVOKE",
+                    // Name only, no descriptor: the full one names Minecraft types, which are
+                    // intermediary at runtime under Fabric's remapped mappings, so a literal
+                    // remap = false descriptor would silently never match there. checkWaypoints has a
+                    // single overload, so the name resolves it on every branch.
+                    target = "Lxaero/map/mods/SupportXaeroMinimap;checkWaypoints"))
+    private void townymap$skipWaypointsOffWorld(
+            xaero.map.mods.SupportXaeroMinimap support, boolean enabled,
+            net.minecraft.registry.RegistryKey<net.minecraft.world.World> dim, String multiworld,
+            int a, int b, xaero.map.gui.GuiMap map, xaero.map.world.MapWorld mapWorld,
+            net.minecraft.registry.Registry<net.minecraft.world.dimension.DimensionType> registry) {
+        if (TownyMapMod.hidePlayerWorldMarkers()) return;
+        support.checkWaypoints(enabled, dim, multiworld, a, b, map, mapWorld, registry);
+    }
+
+    /**
+     * Drops the "Waypoints: x" banner along with the waypoints themselves. GuiMap only draws it when
+     * this returns non-null, so null is all that is needed -- it names the waypoint set of a world the
+     * map is not showing, which was the confusing part.
+     */
+    @Redirect(require = 0, remap = false, method = "extractRenderState",
+            at = @At(value = "INVOKE",
+                    target = "Lxaero/map/mods/SupportXaeroMinimap;"
+                           + "getSubWorldNameToRender()Ljava/lang/String;"))
+    private String townymap$hideSubWorldLabelOffWorld(xaero.map.mods.SupportXaeroMinimap support) {
+        return TownyMapMod.hidePlayerWorldMarkers() ? null : support.getSubWorldNameToRender();
+    }
+
     private void jumpTo(TownData town) {
         if (town == null) return;
         TownyMapMod.suppressNextPanClear();   // centring on a selected result isn't a user pan

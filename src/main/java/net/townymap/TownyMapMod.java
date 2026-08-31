@@ -1879,6 +1879,15 @@ public class TownyMapMod implements ClientModInitializer {
      * -- on the Moon it would plant them somewhere in the lunar landscape they have never been.
      */
     public static boolean hideWorldMapPlayerArrow() {
+        return hidePlayerWorldMarkers();
+    }
+
+    /**
+     * True when anything belonging to the world the PLAYER is in must stay off the world map, because
+     * the map is showing a different one. Their arrow, and their waypoints with the "Waypoints: x"
+     * banner that names the set -- all of it describes somewhere the map is not looking at.
+     */
+    public static boolean hidePlayerWorldMarkers() {
         return isActiveOnCurrentServer() && viewingOtherWorld();
     }
 
