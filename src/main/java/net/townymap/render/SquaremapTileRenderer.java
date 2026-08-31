@@ -42,6 +42,15 @@ final class SquaremapTileRenderer {
     // once they load they stay cached and the overview never has to re-fetch them. They're tiny in number
     // (the whole map is ~1-21 tiles at zoom 0-2), so this costs almost nothing.
     private static final int OVERVIEW_PIN_ZOOM = 2;
+    /**
+     * Textures kept for the world the minimap is drawing before the cache may start evicting them.
+     *
+     * <p>With the map pinned to one world and the player standing in another, both worlds share this
+     * cache -- and the world map floods it while it is open, so on closing it the minimap found its own
+     * imagery gone and had to fetch the lot again. Its working set is a few dozen tiles, so holding this
+     * many back costs little of the 1024.
+     */
+    private static final int MINIMAP_WORLD_RESERVE = 128;
     private static final long FAILED_RETRY_MS = 60_000;
     private static final long TILE_REFRESH_MS = 20 * 60_000L;
     private static final int QUALITY_ZOOM_BIAS = 2;
@@ -547,7 +556,11 @@ final class SquaremapTileRenderer {
 
     private void requestTile(TileKey key, boolean refreshExisting, int maxConcurrentLoads) {
         if ((!refreshExisting && textures.containsKey(key)) || !loading.add(key)) return;
-        if (loading.size() > maxConcurrentLoads) {
+        // Counted per world, not across the whole set. The minimap is allowed 8 concurrent loads while
+        // the world map takes 40; measured against the shared total, the minimap could not start a
+        // single fetch until the world map's requests drained, so closing a Moon map left the Earth
+        // minimap stalled behind 40 lunar tiles.
+        if (loadsForWorld(key.world()) > maxConcurrentLoads) {
             loading.remove(key);
             return;
         }
@@ -633,16 +646,41 @@ final class SquaremapTileRenderer {
         requestTile(key, true, maxConcurrentLoads);
     }
 
+    /** How many fetches are in flight for one world. Bounded by the concurrency caps, so a scan is fine. */
+    private int loadsForWorld(String world) {
+        int n = 0;
+        for (TileKey k : loading) if (world.equals(k.world())) n++;
+        return n;
+    }
+
     private void evictOldTextures(Minecraft client) {
+        if (textures.size() <= MAX_TEXTURES) return;
+        // Spare the minimap's world until it holds a working set of its own; the world map otherwise
+        // evicts imagery that is on screen right now in favour of tiles for a world the player is only
+        // looking at.
+        String spared = net.townymap.TownyMapMod.playerWorldResolved();
+        int sparedCount = 0;
+        for (TileKey k : textures.keySet()) if (spared.equals(k.world())) sparedCount++;
+
         while (textures.size() > MAX_TEXTURES) {
             // Evict the least-recently-used tile, but SKIP the pinned low-zoom overview tiles so zooming
             // in (which floods the cache with high-zoom tiles) can't drop them and force a reload on the
             // next zoom-out. entrySet() is access-order (eldest first); iterating doesn't re-order it.
+            boolean sparing = sparedCount <= MINIMAP_WORLD_RESERVE;
             Map.Entry<TileKey, Identifier> victim = null;
             for (Map.Entry<TileKey, Identifier> e : textures.entrySet()) {
-                if (e.getKey().zoom() > OVERVIEW_PIN_ZOOM) { victim = e; break; }
+                if (e.getKey().zoom() <= OVERVIEW_PIN_ZOOM) continue;
+                if (sparing && spared.equals(e.getKey().world())) continue;
+                victim = e; break;
+            }
+            if (victim == null && sparing) {
+                // Nothing outside the reserve left to drop -- fall back to plain LRU rather than spin.
+                for (Map.Entry<TileKey, Identifier> e : textures.entrySet()) {
+                    if (e.getKey().zoom() > OVERVIEW_PIN_ZOOM) { victim = e; break; }
+                }
             }
             if (victim == null) break;   // only pinned overview tiles remain — keep them all
+            if (spared.equals(victim.getKey().world())) sparedCount--;
             client.getTextureManager().release(victim.getValue());
             textures.remove(victim.getKey());
             textureLoadedAt.remove(victim.getKey());
