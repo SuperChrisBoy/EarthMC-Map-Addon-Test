@@ -179,11 +179,26 @@ public class SquaremapApiClient {
 
     /** Players on one specific world -- the minimap asks for the world the player is standing in. */
     public List<PlayerMarker> getPlayers(String world) {
+        // Memoised per world against the feed it was built from. Both renderers call this every frame,
+        // and filtering ~200 markers into a fresh list each time was pure garbage at frame rate; the
+        // feed itself only changes once a second.
         List<PlayerMarker> all = players;
-        List<PlayerMarker> out = new ArrayList<>(all.size());
-        for (PlayerMarker m : all) if (m.inWorld(world)) out.add(m);
-        return out;
+        PlayerFilterCache cache = playerFilterCache;
+        if (cache.source() != all) {
+            cache = new PlayerFilterCache(all, new ConcurrentHashMap<>());
+            playerFilterCache = cache;   // a concurrent rebuild is harmless: same input, same output
+        }
+        return cache.byWorld().computeIfAbsent(world, w -> {
+            List<PlayerMarker> out = new ArrayList<>(all.size());
+            for (PlayerMarker m : all) if (m.inWorld(w)) out.add(m);
+            return List.copyOf(out);
+        });
     }
+
+    /** The player feed plus its per-world filters, swapped as one so the two cannot disagree. */
+    private record PlayerFilterCache(List<PlayerMarker> source, Map<String, List<PlayerMarker>> byWorld) {}
+    private volatile PlayerFilterCache playerFilterCache =
+            new PlayerFilterCache(List.of(), new ConcurrentHashMap<>());
     public Map<String, PlayerHistoryEntry> getPlayerHistory() { return playerHistory; }
 
     public void tickWhileMapOpen() {
@@ -202,10 +217,10 @@ public class SquaremapApiClient {
     private void tickTownMarkers(long refreshMs) {
         if (archiveTowns != null) return;   // archive snapshot is frozen — don't overwrite it with live data
         long now = System.currentTimeMillis();
-        boolean missing = false;
-        for (String w : neededWorlds()) {
-            if (townsByWorld.getOrDefault(w, List.of()).isEmpty()) { missing = true; break; }
-        }
+        // Checked without building the needed-worlds set: this runs from the minimap render, so once a
+        // frame, and allocating a set there to answer a question about two strings was wasteful.
+        boolean missing = townsByWorld.getOrDefault(TownyMapMod.activeWorldKey(), List.of()).isEmpty()
+                || townsByWorld.getOrDefault(TownyMapMod.playerWorldResolved(), List.of()).isEmpty();
         if (!missing && now - lastMarkerTickCheckMs < 1_000L) return;
         lastMarkerTickCheckMs = now;
         if ((missing || now - lastMarkerFetchMs >= refreshMs)
@@ -302,6 +317,9 @@ public class SquaremapApiClient {
     private void fetchMarkers() {
         try {
             for (String world : neededWorlds()) fetchMarkersFor(world);
+            // Once per cycle, not once per world: the union spans ~50,000 roster entries and rebuilding
+            // it after each world did that work twice for a result only the last pass could be right.
+            recomposeTownIdentity();
         } finally {
             markerFetchRunning.set(false);
         }
@@ -338,7 +356,6 @@ public class SquaremapApiClient {
         Map<String, ParsedMarkers> nextMeta = new HashMap<>(markersByWorld);
         nextMeta.put(world, parsed);
         markersByWorld = Map.copyOf(nextMeta);
-        recomposeTownIdentity();
         lastMarkerSuccessMs = System.currentTimeMillis();
         markerFetchFailing = false;
         if (updated != current) TownyMapMod.onTownMarkersUpdated();
