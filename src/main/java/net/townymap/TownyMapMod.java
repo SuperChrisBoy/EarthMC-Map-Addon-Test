@@ -1979,8 +1979,20 @@ public class TownyMapMod implements ClientModInitializer {
      * while the player walks around Terra Nostra, and features anchored to the current dimension --
      * the footsteps trail among them -- stop behaving.
      */
+    /**
+     * True for the world map and the screens it opens on top of itself -- settings, dimension options,
+     * cave mode. Deliberately looser than {@link #isWorldMapOpen()}: those siblings are still "the map
+     * is up", and treating a hop into settings as a close would release and re-apply the dimension
+     * override, each of which pauses Xaero's writer and moves a FileLock.
+     */
+    private static boolean isWorldMapScreenActive() {
+        Minecraft client = Minecraft.getInstance();
+        return client != null && client.screen != null
+                && client.screen.getClass().getName().startsWith("xaero.map.gui.");
+    }
+
     private static void tickWorldMapOpenState() {
-        boolean open = isWorldMapOpen();
+        boolean open = isWorldMapScreenActive();
         if (open == worldMapWasOpen) return;
         worldMapWasOpen = open;
         if (open) {
@@ -2276,7 +2288,7 @@ public class TownyMapMod implements ClientModInitializer {
         // Requested, not done here: at login the saved map world resolves before Xaero has built its
         // world-map session, and a one-shot attempt at that moment was simply lost. Only while the map
         // is actually open -- see tickWorldMapOpenState for why it must not linger past that.
-        if (isWorldMapOpen()) requestXaeroDimensionSync();
+        if (isWorldMapScreenActive()) requestXaeroDimensionSync();
     }
 
     /**
