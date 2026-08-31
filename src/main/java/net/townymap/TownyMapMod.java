@@ -879,8 +879,13 @@ public class TownyMapMod implements ClientModInitializer {
     public record GhostMarker(String name, String uuid, int x, int z, int alpha) {}
 
     private static final long GHOST_MAX_AGE_MS = 5 * 60_000L;   // stop showing a ghost 5 min after it vanished
-    private static volatile List<GhostMarker> cachedGhosts = List.of();
-    private static volatile long cachedGhostsAt;
+    /**
+     * Cached per world. One shared list was fine while ghosts were Earth-only; now that the world map
+     * and the minimap can ask about different worlds within the same recompute window, a single entry
+     * would hand the second caller the first one's ghosts.
+     */
+    private static final Map<String, List<GhostMarker>> cachedGhosts = new ConcurrentHashMap<>();
+    private static final Map<String, Long> cachedGhostsAt = new ConcurrentHashMap<>();
     private static final long GHOST_RECOMPUTE_MS = 500L;   // ghosts move slowly; no need to rebuild per frame
 
     /**
@@ -898,30 +903,32 @@ public class TownyMapMod implements ClientModInitializer {
 
     /** Ghosts for one surface's world -- the minimap passes the world the player is standing in. */
     public static List<GhostMarker> lastSeenGhosts(String worldKey) {
-        // History only ever records Terra Nostra positions, so there are no ghosts to show anywhere else.
-        if (!WORLD_OVERWORLD.equals(worldKey)) return List.of();
-        return lastSeenGhostsInner();
+        return lastSeenGhostsInner(worldKey == null ? WORLD_OVERWORLD : worldKey);
     }
 
-    private static List<GhostMarker> lastSeenGhostsInner() {
+    private static List<GhostMarker> lastSeenGhostsInner(String worldKey) {
         if (config == null || !config.playerLastSeen || apiClient == null || !isActiveOnCurrentServer()) {
             return List.of();
         }
 
         // Recompute a few times a second, not every frame: the set of ghosts and their fixed positions
         // change slowly, so rebuilding the feed set and scanning history at 60fps was pure waste.
-        long sinceRecompute = System.currentTimeMillis() - cachedGhostsAt;
-        if (sinceRecompute >= 0 && sinceRecompute < GHOST_RECOMPUTE_MS) return cachedGhosts;
+        Long cachedAt = cachedGhostsAt.get(worldKey);
+        long sinceRecompute = cachedAt == null ? Long.MAX_VALUE : System.currentTimeMillis() - cachedAt;
+        if (sinceRecompute >= 0 && sinceRecompute < GHOST_RECOMPUTE_MS) {
+            return cachedGhosts.getOrDefault(worldKey, List.of());
+        }
 
         MinecraftClient client = MinecraftClient.getInstance();
         var handler = client == null ? null : client.getNetworkHandler();
         if (handler == null) return List.of();
 
         long now = System.currentTimeMillis();
-        // The Earth feed specifically: history only holds Earth positions, so comparing it against the
-        // Moon's feed would call every Earth player a ghost.
+        // Both sides read the same world. Comparing one world's history against another's feed would
+        // call every player in the first a ghost -- which is exactly what happened before the history
+        // knew which world a position came from.
         Set<String> feed = new java.util.HashSet<>();
-        for (PlayerMarker m : apiClient.getPlayers(WORLD_OVERWORLD)) {
+        for (PlayerMarker m : apiClient.getPlayers(worldKey)) {
             if (m.name() != null) feed.add(m.name().toLowerCase(Locale.ROOT));
         }
         Map<String, net.townymap.model.PlayerHistoryEntry> history = apiClient.getPlayerHistory();
@@ -929,6 +936,7 @@ public class TownyMapMod implements ClientModInitializer {
         List<GhostMarker> out = new ArrayList<>();
         for (var e : history.entrySet()) {
             if (feed.contains(e.getKey())) continue;       // still on the map → not a ghost
+            if (!worldKey.equals(e.getValue().worldOrDefault())) continue;   // last seen in another world
             var h = e.getValue();
             long age = now - h.lastSeenMs();
             if (age < 0 || age > GHOST_MAX_AGE_MS) continue;
@@ -936,8 +944,8 @@ public class TownyMapMod implements ClientModInitializer {
             out.add(new GhostMarker(h.name(), h.uuid(), h.x(), h.z(), 0xFF));
         }
 
-        cachedGhosts = out;
-        cachedGhostsAt = now;
+        cachedGhosts.put(worldKey, out);
+        cachedGhostsAt.put(worldKey, now);
         return out;
     }
 
@@ -2222,8 +2230,8 @@ public class TownyMapMod implements ClientModInitializer {
         // Chunk coordinates from the dimension just left; nothing marks which one they came from.
         optimisticClaimChunks.clear();
         minimapOutsideNationPlayers.clear();
-        cachedGhosts = List.of();
-        cachedGhostsAt = 0;
+        cachedGhosts.clear();
+        cachedGhostsAt.clear();
         net.townymap.integration.ShopWaypoints.onDimensionChanged();
         if (!isOnEarthMcServer()) return;
         String world = playerMapWorld();
@@ -2256,8 +2264,8 @@ public class TownyMapMod implements ClientModInitializer {
         // reused for the other. Towns and tiles are keyed by world and so survive; what follows is the
         // state that carries no world of its own.
         if (apiClient != null) apiClient.onWorldChanged();
-        cachedGhosts = List.of();
-        cachedGhostsAt = 0;
+        cachedGhosts.clear();
+        cachedGhostsAt.clear();
         // Optimistic claims are NOT dropped here any more: they belong to the world the player claimed
         // in and carry it, so pinning the map elsewhere must not wipe them off the minimap. The
         // dimension-change hook still clears them.

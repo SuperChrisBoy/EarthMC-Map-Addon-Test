@@ -434,16 +434,15 @@ public class SquaremapApiClient {
 
     private void rememberPlayers(List<PlayerMarker> parsed) {
         if (parsed.isEmpty()) return;
-        // History is a flat name -> X/Z store with no world, and it is persisted to disk, so a Moon
-        // position recorded here would later be drawn as a last-seen ghost on Terra Nostra. The list now
-        // carries every world at once, so the filter is per marker rather than per fetch.
+        // Every world is recorded now that the entry carries one. Filtering positions out here was what
+        // left the Moon with no last-seen markers at all.
         long now = System.currentTimeMillis();
         Map<String, PlayerHistoryEntry> updated = new HashMap<>(playerHistory);
         for (PlayerMarker marker : parsed) {
             if (marker.name() == null || marker.name().isBlank() || "?".equals(marker.name())) continue;
-            if (!TownyMapMod.WORLD_OVERWORLD.equals(marker.world())) continue;
             updated.put(marker.name().toLowerCase(Locale.ROOT),
-                    new PlayerHistoryEntry(marker.name(), marker.uuid(), marker.x(), marker.z(), now));
+                    new PlayerHistoryEntry(marker.name(), marker.uuid(), marker.x(), marker.z(), now,
+                            marker.world()));
         }
         if (updated.size() > MAX_PLAYER_HISTORY) {
             ArrayList<PlayerHistoryEntry> entries = new ArrayList<>(updated.values());
