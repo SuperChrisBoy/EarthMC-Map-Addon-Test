@@ -1004,6 +1004,9 @@ public class TownyMapMod implements ClientModInitializer {
             lastSearchMapInstance = mapInstance;
             armedMapDismiss = false;
             TownSearchOverlay.reset();
+            // Opening the map is the first moment Xaero is certain to have a session, and the surest
+            // point to catch a login-time switch that had nowhere to land.
+            requestXaeroDimensionSync();
             return;
         }
         if (armedMapDismiss) {
@@ -1943,16 +1946,46 @@ public class TownyMapMod implements ClientModInitializer {
      * getCurrentDimension().getDimId() with no null check, so naming a dimension it has never seen
      * (a player who has not been to the Moon) would crash inside Xaero's own render.
      */
-    private static void syncXaeroDimension() {
+    private static volatile boolean pendingXaeroSync = false;
+    private static volatile long lastXaeroSyncAttemptMs = 0;
+    private static volatile boolean loggedXaeroNotReady = false;
+
+    /** Ask for Xaero's map dimension to be brought in line; retried until it takes. */
+    public static void requestXaeroDimensionSync() {
+        pendingXaeroSync = true;
+        loggedXaeroNotReady = false;
+        lastXaeroSyncAttemptMs = 0;
+    }
+
+    /**
+     * Retries the dimension sync until Xaero is in a state to accept it.
+     *
+     * <p>XaeroWorldMapCore.currentSession is null for the first moments after joining, and the map world
+     * is resolved from config well before that -- so the switch that matters most, the one at login,
+     * always missed. Driven from the client tick, and cheap while waiting: three null checks.
+     */
+    private static void tickXaeroDimensionSync() {
+        if (!pendingXaeroSync) return;
+        long now = System.currentTimeMillis();
+        if (now - lastXaeroSyncAttemptMs < 500L) return;
+        lastXaeroSyncAttemptMs = now;
+        if (syncXaeroDimension()) pendingXaeroSync = false;
+    }
+
+    /** @return true once Xaero has actually been pointed at a dimension; false to retry later. */
+    private static boolean syncXaeroDimension() {
         try {
             var session = xaero.map.core.XaeroWorldMapCore.currentSession;
             var proc = session == null ? null : session.getMapProcessor();
             var mapWorld = proc == null ? null : proc.getMapWorld();
             Minecraft client = Minecraft.getInstance();
             if (mapWorld == null || client == null || client.level == null) {
-                LOGGER.info("[TownyMap] Xaero not ready for a dimension switch (session={}, world={})",
-                        session != null, mapWorld != null);
-                return;
+                if (!loggedXaeroNotReady) {
+                    loggedXaeroNotReady = true;
+                    LOGGER.info("[TownyMap] Xaero not ready for a dimension switch yet "
+                            + "(session={}, world={}) - will retry", session != null, mapWorld != null);
+                }
+                return false;
             }
 
             var target = knownXaeroDimensionFor(mapWorld, activeWorldKey());
@@ -1967,7 +2000,7 @@ public class TownyMapMod implements ClientModInitializer {
                 if (target == null) {
                     LOGGER.info("[TownyMap] No Xaero dimension for {}; leaving its map where it is",
                             activeWorldKey());
-                    return;
+                    return true;   // nothing more we can do; do not spin on it
                 }
             }
             var own = client.level.dimension();
@@ -1977,6 +2010,7 @@ public class TownyMapMod implements ClientModInitializer {
                     mapWorld.getDimensionsList().stream()
                             .filter(d -> d != null && d.getDimId() != null)
                             .map(d -> d.getDimId().identifier().toString()).toList());
+            return true;
         } catch (Throwable t) {
             // Was DEBUG, which meant a failure here looked identical to the feature simply not running:
             // the log showed a world switch and then nothing at all. Once per reason is enough.
@@ -1984,6 +2018,7 @@ public class TownyMapMod implements ClientModInitializer {
                 loggedSyncFailure = t.toString();
                 LOGGER.warn("[TownyMap] Could not sync Xaero map dimension", t);
             }
+            return true;   // a thrown failure will not fix itself by repeating
         }
     }
 
@@ -2102,6 +2137,7 @@ public class TownyMapMod implements ClientModInitializer {
             autoResolvedWorld = resolvedPlayerWorld;
         }
         tickPlayerDimensionChange();
+        tickXaeroDimensionSync();
         String key = activeWorldKey();
         if (key.equals(lastActiveWorld)) return;
         lastActiveWorld = key;
@@ -2180,8 +2216,9 @@ public class TownyMapMod implements ClientModInitializer {
             // instead of being thrown away -- the minimap is still drawing it. Wiping here meant
             // pinning the world map to the Moon stripped the minimap's Terra Nostra imagery.
         }
-        // Keep Xaero's own terrain on the same world we are drawing claims for.
-        syncXaeroDimension();
+        // Requested, not done here: at login the saved map world resolves before Xaero has built its
+        // world-map session, and a one-shot attempt at that moment was simply lost.
+        requestXaeroDimensionSync();
     }
 
     /**
