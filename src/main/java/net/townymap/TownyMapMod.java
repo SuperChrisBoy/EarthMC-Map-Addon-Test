@@ -1966,6 +1966,46 @@ public class TownyMapMod implements ClientModInitializer {
     private static volatile long lastXaeroSyncAttemptMs = 0;
     private static volatile boolean loggedXaeroNotReady = false;
 
+    private static volatile boolean worldMapWasOpen = false;
+
+    /**
+     * Applies the dimension override only while the world map is on screen, and hands Xaero back its own
+     * dimension the moment it closes.
+     *
+     * <p>The override exists so Xaero's terrain matches the world we are drawing claims for, and the
+     * world map is the only surface that shows it -- but MapProcessor.updateWorldSynced, which runs on
+     * every switch, pauses the map writer and moves a FileLock onto that dimension's folder. Left set
+     * after the map closes, Xaero spends the rest of the session holding a lock on the Moon's folder
+     * while the player walks around Terra Nostra, and features anchored to the current dimension --
+     * the footsteps trail among them -- stop behaving.
+     */
+    private static void tickWorldMapOpenState() {
+        boolean open = isWorldMapOpen();
+        if (open == worldMapWasOpen) return;
+        worldMapWasOpen = open;
+        if (open) {
+            requestXaeroDimensionSync();
+        } else {
+            pendingXaeroSync = false;
+            releaseXaeroDimension();
+        }
+    }
+
+    /** Gives Xaero back control of its own dimension (null = follow the player). */
+    private static void releaseXaeroDimension() {
+        try {
+            var session = xaero.map.core.XaeroWorldMapCore.currentSession;
+            var proc = session == null ? null : session.getMapProcessor();
+            var mapWorld = proc == null ? null : proc.getMapWorld();
+            if (mapWorld == null || mapWorld.getCustomDimensionId() == null) return;
+            mapWorld.setCustomDimensionId(null);
+            proc.checkForWorldUpdate();
+            LOGGER.info("[TownyMap] Xaero map dimension released back to the player's own");
+        } catch (Throwable t) {
+            LOGGER.debug("[TownyMap] Could not release Xaero map dimension", t);
+        }
+    }
+
     /** Ask for Xaero's map dimension to be brought in line; retried until it takes. */
     public static void requestXaeroDimensionSync() {
         pendingXaeroSync = true;
@@ -2153,6 +2193,7 @@ public class TownyMapMod implements ClientModInitializer {
             autoResolvedWorld = resolvedPlayerWorld;
         }
         tickPlayerDimensionChange();
+        tickWorldMapOpenState();
         tickXaeroDimensionSync();
         String key = activeWorldKey();
         if (key.equals(lastActiveWorld)) return;
@@ -2233,8 +2274,9 @@ public class TownyMapMod implements ClientModInitializer {
             // pinning the world map to the Moon stripped the minimap's Terra Nostra imagery.
         }
         // Requested, not done here: at login the saved map world resolves before Xaero has built its
-        // world-map session, and a one-shot attempt at that moment was simply lost.
-        requestXaeroDimensionSync();
+        // world-map session, and a one-shot attempt at that moment was simply lost. Only while the map
+        // is actually open -- see tickWorldMapOpenState for why it must not linger past that.
+        if (isWorldMapOpen()) requestXaeroDimensionSync();
     }
 
     /**
