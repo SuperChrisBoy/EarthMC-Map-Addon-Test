@@ -795,7 +795,15 @@ final class SquaremapTileRenderer {
 
     private enum NetworkPolicy {
         WORLD_MAP(true, true, MAX_CONCURRENT_LOADS),
-        MINIMAP(false, false, 8);
+        // Refresh allowed, prefetch still not. Prefetch is the expensive half -- whole rings of
+        // neighbouring tiles and adjacent zooms -- while a refresh only re-pulls a tile already on
+        // screen that is over TILE_REFRESH_MS old, at 8 at a time and usually answered with a 304.
+        //
+        // It matters now that two worlds are held: the world map only ever refreshes the world it is
+        // showing, so with the map pinned to one world the OTHER one -- the one the minimap draws,
+        // where the player actually is -- had no path to updated imagery at all. Its tiles stayed as
+        // first fetched for the whole session.
+        MINIMAP(false, true, 8);
 
         private final boolean allowPrefetch;
         private final boolean allowRefresh;
