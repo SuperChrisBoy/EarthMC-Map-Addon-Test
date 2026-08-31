@@ -378,7 +378,10 @@ public class TownyMapMod implements ClientModInitializer {
 
     private static TownData townByName(String townName) {
         if (apiClient == null || townName == null) return null;
-        for (TownData town : apiClient.getTowns()) {
+        // The player's world: this seeds the colours of a chunk they just claimed, which happens where
+        // they stand. Reading the shown world meant claiming on Earth with the map pinned to the Moon
+        // found no town and fell back to default colours.
+        for (TownData town : apiClient.getTowns(playerWorldResolved())) {
             if (town.name().equalsIgnoreCase(townName)) return town;
         }
         return null;
@@ -940,7 +943,11 @@ public class TownyMapMod implements ClientModInitializer {
 
     /** Claims belonging to one world -- the minimap asks for the one the player is standing in. */
     public static List<OptimisticClaimChunk> optimisticClaimChunks(String worldKey) {
+        // Empty almost always -- claims live for seconds after claiming -- and this is called three
+        // times a frame across the two surfaces, so do not allocate for the common case.
+        if (optimisticClaimChunks.isEmpty()) return List.of();
         pruneOptimisticClaimChunks(false);
+        if (optimisticClaimChunks.isEmpty()) return List.of();
         List<OptimisticClaimChunk> out = new ArrayList<>();
         for (OptimisticClaimChunk c : optimisticClaimChunks) if (c.inWorld(worldKey)) out.add(c);
         return out;
@@ -952,8 +959,14 @@ public class TownyMapMod implements ClientModInitializer {
             optimisticClaimChunks.clear();
             return;
         }
-        List<TownData> towns = apiClient.getTowns();
-        optimisticClaimChunks.removeIf(chunk -> chunk.expired(now) || confirmedClaimChunk(chunk, towns));
+        if (optimisticClaimChunks.isEmpty()) return;
+        // Checked against the claim's OWN world, not the one being shown. A claim made on Earth while
+        // the map was pinned to the Moon was compared with lunar towns, never matched, and so lingered
+        // as a pending overlay until its TTL ran out instead of clearing the moment it went live.
+        optimisticClaimChunks.removeIf(chunk -> chunk.expired(now)
+                || confirmedClaimChunk(chunk, apiClient.getTowns(
+                        chunk.world() == null || chunk.world().isEmpty()
+                                ? activeWorldKey() : chunk.world())));
     }
 
     private static boolean confirmedClaimChunk(OptimisticClaimChunk chunk, List<TownData> towns) {
@@ -1232,7 +1245,9 @@ public class TownyMapMod implements ClientModInitializer {
         String selfName = client.getUser().getName();
 
         Set<String> currentlyVisibleWilderness = new HashSet<>();
-        for (var marker : apiClient.getPlayers()) {
+        // Same world as the towns above -- this half still read the shown world, so a Moon-pinned map
+        // compared lunar players against Earth claims and flagged them all as outside their nation.
+        for (var marker : apiClient.getPlayers(playerWorldResolved())) {
             if (marker.name() == null || marker.name().equalsIgnoreCase(selfName)) continue;
             if (Math.abs(marker.x() - playerX) > visibleBlocks
                     || Math.abs(marker.z() - playerZ) > visibleBlocks) continue;
@@ -1887,10 +1902,11 @@ public class TownyMapMod implements ClientModInitializer {
 
     /** True when the map shows a world the player is not in -- markers there are not where they are. */
     public static boolean viewingOtherWorld() {
-        // Goes through playerMapWorld() rather than the raw dimension id: the lunar dimension is not
-        // named after squaremap's world for it, so a raw comparison reported "other world" while the
-        // player stood in the very world on screen.
-        return !playerMapWorld().equals(activeWorldKey());
+        // The tick-resolved value, not playerMapWorld(): that one rebuilds the key from the dimension
+        // id with a string concatenation on every call, and this is read several times a frame by the
+        // camera pin and both arrow suppressions. It is also the same source of truth every other
+        // caller uses, so the two can no longer disagree mid-frame.
+        return !playerWorldResolved().equals(activeWorldKey());
     }
 
     /** The town's claim polygon in the world currently shown, or null if it has none there. */
