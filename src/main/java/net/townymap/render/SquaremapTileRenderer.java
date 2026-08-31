@@ -499,8 +499,13 @@ final class SquaremapTileRenderer {
             if (!completedTiles.remove(loaded.key(), loaded)) continue;
             try {
                 TileKey key = loaded.key();
+                // The world belongs in the texture name too, not just in TileKey. Without it Terra
+                // Nostra and the Moon share one Identifier per tile coordinate: registering one
+                // overwrote the other's imagery, and evicting either released the id the other was
+                // still pointing at -- which draws as the missing-texture checkerboard.
                 Identifier id = Identifier.fromNamespaceAndPath("townymapaddon",
-                        "squaremap/" + key.zoom + "/" + key.x + "_" + key.y);
+                        "squaremap/" + sanitiseWorld(key.world()) + "/" + key.zoom
+                                + "/" + key.x + "_" + key.y);
                 Identifier old = textures.remove(key);
                 if (old != null) {
                     client.getTextureManager().release(old);
@@ -644,6 +649,12 @@ final class SquaremapTileRenderer {
         Long loadedAt = textureLoadedAt.get(key);
         if (loadedAt == null || System.currentTimeMillis() - loadedAt < TILE_REFRESH_MS) return;
         requestTile(key, true, maxConcurrentLoads);
+    }
+
+    /** World key reduced to characters an Identifier path allows. */
+    private static String sanitiseWorld(String world) {
+        if (world == null || world.isEmpty()) return "unknown";
+        return world.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9_.-]", "_");
     }
 
     /** How many fetches are in flight for one world. Bounded by the concurrency caps, so a scan is fine. */
