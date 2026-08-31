@@ -2,6 +2,14 @@
 
 A client-side EarthMC map extension for **Xaero's World Map** and **Xaero's Minimap**. It overlays EarthMC Towny data directly onto your in-game maps so you can read towns, nations, players, borders, and claims without leaving Minecraft.
 
+## Worlds
+
+- Terra Nostra and the Moon, each with its own claims, outposts, terrain and players.
+- The World button follows the dimension you are in by default: the Moon while you are up there, Terra Nostra everywhere else. Click it to pin one world instead, and cycle round to Auto to hand it back.
+- Browsing one world leaves the minimap on the other, so it keeps showing the claims, terrain, players and chunk selection where you actually are.
+- The world map switches Xaero's own dimension to match, so you see the lunar terrain you have explored, and hands it back when the map closes.
+- Outpost sizes are counted separately from the parent town, so a small lunar outpost is not reported as its town's whole claim. Popups, tooltips and search show the claim in front of you with the town-wide total underneath.
+
 ## World Map
 
 - Town claims drawn as real claim shapes, with configurable border thickness, fill opacity, and smooth outlines.
