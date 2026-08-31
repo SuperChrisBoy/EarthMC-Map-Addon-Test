@@ -716,7 +716,15 @@ final class SquaremapTileRenderer {
         textureLoadedAt.clear();
         tileEtags.clear();
         failedAt.clear();
-        for (LoadedTile t : completedTiles.values()) t.image().close();
+        // Take each tile OUT of the map before closing its image. processCompletedTiles claims one with
+        // remove(key, value) and uploads only if it wins that race; closing while the entry was still
+        // reachable let it win and then upload freed memory, which uploads as a black or noise-filled
+        // tile that stays in the cache. Removing first means the render thread either gets a live image
+        // or never sees the entry.
+        for (TileKey key : java.util.List.copyOf(completedTiles.keySet())) {
+            LoadedTile t = completedTiles.remove(key);
+            if (t != null) t.image().close();
+        }
         completedTiles.clear();
     }
 

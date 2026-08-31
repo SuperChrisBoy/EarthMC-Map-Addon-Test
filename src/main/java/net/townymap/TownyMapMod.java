@@ -494,6 +494,11 @@ public class TownyMapMod implements ClientModInitializer {
     public static void forceRefreshTownClaims() {
         if (apiClient == null) return;
         invalidateTownRenderCaches();
+        // Imagery too, not just the claims. Tiles are keyed by world so they never need clearing for
+        // correctness any more, which left no way to recover if a tile ever cached badly -- and one did,
+        // via the close-while-reachable race fixed alongside this. A deliberate refresh is the right
+        // place for that: only this path reaches it, so nothing automatic pays for it.
+        if (renderer != null) renderer.clearSquaremapTiles();
         apiClient.forceTownMarkerRefresh();
     }
 
