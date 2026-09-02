@@ -55,7 +55,6 @@ public final class MapToggleOverlay {
 
         drawSettingsButton(ctx, tr, settingsTop(sh));
         if(TownyMapMod.isTeleportFeatureAvailable())drawTexturedButton(ctx,LEFT,teleportTop(sh),WIDTH,HEIGHT,Component.translatable("townymapaddon.teleport.title").getString(),true,0xFF7EE2B8);
-        if(TownyMapMod.isHunterFeatureAvailable())drawTexturedButton(ctx, LEFT, hunterTop(sh), WIDTH, HEIGHT, net.minecraft.network.chat.Component.translatable("townymapaddon.hunter.watch.title").getString(), true, 0xFFFFB45C);
         } finally {
             if (scaled) UiScale.pop(ctx);
         }
@@ -127,15 +126,9 @@ public final class MapToggleOverlay {
         return mouseY >= sy && mouseY <= sy + HEIGHT;
     }
 
-    public static boolean handleHunterClick(double mouseX, double mouseY, int sh) {
-        if (UiScale.active()) { mouseX = UiScale.unscale(mouseX, LEFT); mouseY = UiScale.unscale(mouseY, togglesTop(sh)); }
-        if (mouseX < LEFT || mouseX > LEFT + WIDTH) return false;
-        int y = hunterTop(sh);
-        return mouseY >= y && mouseY <= y + HEIGHT;
-    }
+    public static boolean handleHunterClick(double mouseX, double mouseY, int sh) { return false; }
     public static boolean handleActivityClick(double mouseX,double mouseY,int sh){
-        if(UiScale.active()){mouseX=UiScale.unscale(mouseX,LEFT);mouseY=UiScale.unscale(mouseY,togglesTop(sh));}
-        int y=hunterTop(sh);return mouseX>=LEFT+WIDTH+3&&mouseX<=LEFT+WIDTH+29&&mouseY>=y&&mouseY<=y+HEIGHT;
+        return false;
     }
     public static boolean handleTeleportClick(double mouseX,double mouseY,int sh,TownyMapConfig config){if(!config.teleportViewerEnabled)return false;if(UiScale.active()){mouseX=UiScale.unscale(mouseX,LEFT);mouseY=UiScale.unscale(mouseY,togglesTop(sh));}int y=teleportTop(sh);return mouseX>=LEFT&&mouseX<=LEFT+WIDTH&&mouseY>=y&&mouseY<=y+HEIGHT;}
 
@@ -173,7 +166,7 @@ public final class MapToggleOverlay {
 
     /** Top edge of the toggle column — other left-side HUD must stay above this. */
     public static int togglesTop(int sh) {
-        int totalHeight = TOGGLE_ROWS * HEIGHT + (TOGGLE_ROWS - 1) * GAP + SETTINGS_GAP + HEIGHT + GAP + HEIGHT + GAP + HEIGHT;
+        int totalHeight = TOGGLE_ROWS * HEIGHT + (TOGGLE_ROWS - 1) * GAP + SETTINGS_GAP + HEIGHT + GAP + HEIGHT;
         return Math.max(8, (sh - totalHeight) / 2);
     }
 
