@@ -82,6 +82,7 @@ public class TownyMapMod implements ClientModInitializer {
     private static TownyMapConfig     config;
     private static SquaremapApiClient apiClient;
     private static EarthMcApiClient   earthMcApi;
+    private static net.townymap.vote.VotePartyService votePartyService;
     private static net.townymap.hunter.HunterEarlyWarningSystem hunterSystem;
     private static net.townymap.teleport.TeleportAccessService teleportAccess;
     private static boolean teleportTargetArmed;
@@ -159,6 +160,7 @@ public class TownyMapMod implements ClientModInitializer {
         config     = TownyMapConfig.load();
         apiClient  = new SquaremapApiClient(config);
         earthMcApi = new EarthMcApiClient();
+        votePartyService = new net.townymap.vote.VotePartyService(earthMcApi,config);
         teleportAccess = new net.townymap.teleport.TeleportAccessService(earthMcApi, config);
         hunterSystem = new net.townymap.hunter.HunterEarlyWarningSystem(config, earthMcApi, teleportAccess,
                 TownyMapMod::sendHunterFeedback);
@@ -173,6 +175,7 @@ public class TownyMapMod implements ClientModInitializer {
         ClientSendMessageEvents.COMMAND.register(TownyMapMod::onCommandSent);
         ClientReceiveMessageEvents.GAME.register(TownyMapMod::onGameMessage);
         net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK.register(c -> {
+            if(votePartyService!=null)votePartyService.tick();
             net.townymap.integration.ShopWaypoints.tick();
             if (c.world != null && isActiveOnCurrentServer()) net.townymap.ice.IceRoadNetwork.tickAutoUpdate();
             if (hunterSystem != null && apiClient != null && isActiveOnCurrentServer()) {
@@ -1461,6 +1464,7 @@ public class TownyMapMod implements ClientModInitializer {
      * in the wilderness. Per-line config toggles.
      */
     public static int renderMinimapInfoLines(DrawContext ctx, int mapCenterX, int mapTop, int mapBottom) {
+        if(config!=null&&config.votePartyEnabled&&config.votePartyShowHud&&votePartyService!=null){MinecraftClient mc=MinecraftClient.getInstance();net.townymap.gui.VotePartyOverlay.renderBesideMinimap(ctx,mapCenterX,mapTop,mapBottom,mc.getWindow().getScaledWidth(),votePartyService.status(),votePartyService.loading());}
         if (!isActiveOnCurrentServer() || config == null || apiClient == null) return 0;
         if (!config.infoDisplayTownEnabled && !config.infoDisplayNearbyPlayersEnabled
                 && !config.infoDisplayNearestTownEnabled && !config.hunterWarningEnabled) return 0;
@@ -2672,7 +2676,9 @@ public class TownyMapMod implements ClientModInitializer {
     public static boolean onHunterActivityButtonClick(double mouseX,double mouseY,int screenH){
         return false;
     }
-    public static boolean onTeleportButtonClick(double x,double y,int sh){if(config!=null&&MapToggleOverlay.handleTeleportClick(x,y,sh,config)){toggleTeleportTarget();return true;}return false;}
+    public static boolean onTeleportButtonClick(double x,double y,int sh){if(config!=null&&MapToggleOverlay.handleTeleportClick(x,y,sh,config)){MinecraftClient mc=MinecraftClient.getInstance();if(mc!=null)mc.setScreen(new net.townymap.gui.TeleportViewerSettingsScreen(mc.currentScreen));return true;}return false;}
+    public static void renderVotePartyGlobal(DrawContext ctx,int sw,int sh,net.minecraft.client.gui.screen.Screen screen){if(config!=null&&config.votePartyEnabled&&config.votePartyShowGlobalScreens&&votePartyService!=null)net.townymap.gui.VotePartyOverlay.renderMenu(ctx,sw,sh,votePartyService.status(),votePartyService.loading(),screen);}
+    public static void renderVotePartyWorldMap(DrawContext ctx,int sw,int sh){if(config!=null&&config.votePartyEnabled&&config.votePartyShowWorldMap&&votePartyService!=null)net.townymap.gui.VotePartyOverlay.renderWorldMap(ctx,sw,votePartyService.status(),votePartyService.loading());}
     public static void renderHunterActivity(DrawContext ctx,int sw,int sh){}
     public static void renderHunterActivityHud(DrawContext ctx){}
     public static void renderWildernessRiskHud(DrawContext ctx,boolean actionBarVisible){}
@@ -2693,7 +2699,7 @@ public class TownyMapMod implements ClientModInitializer {
     public static java.util.List<TownData> currentTownSnapshot() { return apiClient == null ? java.util.List.of() : apiClient.getTowns(); }
     public static boolean teleportTargetArmed(){return teleportTargetArmed;}
     public static void toggleTeleportTarget(){if(config!=null&&config.teleportViewerEnabled&&config.teleportMapClickAction)teleportTargetArmed=!teleportTargetArmed;}
-    public static boolean consumeTeleportTarget(double worldX,double worldZ){if(!teleportTargetArmed||teleportAccess==null)return false;net.townymap.gui.TeleportViewerOverlay.open(worldX,worldZ);return true;}
+    public static boolean consumeTeleportTarget(double worldX,double worldZ){if(config==null||!config.teleportViewerEnabled||!config.teleportMapClickAction||teleportAccess==null)return false;net.townymap.gui.TeleportViewerOverlay.open(worldX,worldZ);return true;}
     public static void refreshTeleportData(double x,double z){MinecraftClient mc=MinecraftClient.getInstance();if(mc!=null&&mc.getSession()!=null&&teleportAccess!=null)teleportAccess.beginQuery(currentTownSnapshot(),mc.getSession().getUsername(),x,z);}
     public static void forceRefreshTeleportData(double x,double z){MinecraftClient mc=MinecraftClient.getInstance();if(mc!=null&&mc.getSession()!=null&&teleportAccess!=null){teleportAccess.beginQuery(currentTownSnapshot(),mc.getSession().getUsername(),x,z);teleportAccess.refresh(currentTownSnapshot(),mc.getSession().getUsername());}}
     public static void renderTeleportViewer(DrawContext g,double cx,double cz,double scale,int sw,int sh){if(config!=null)net.townymap.gui.TeleportViewerOverlay.render(g,cx,cz,scale,sw,sh,config);}

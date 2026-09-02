@@ -1,0 +1,1 @@
+package net.townymap.model;import org.junit.jupiter.api.Test;import static org.junit.jupiter.api.Assertions.*;class VotePartyStatusTest{@Test void parses(){var s=VotePartyStatus.parse("{\"voteParty\":{\"target\":5000,\"numRemaining\":1250}}",10);assertEquals(75,s.percent());assertEquals(3750,s.completed());}@Test void rejectsMissing(){assertNull(VotePartyStatus.parse("{}",10));}}

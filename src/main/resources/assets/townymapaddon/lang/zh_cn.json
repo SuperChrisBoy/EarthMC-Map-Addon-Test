@@ -25,6 +25,7 @@
     "townymapaddon.teleport.copy":  "复制",
     "townymapaddon.teleport.copied":  "已复制：%1$s",
     "townymapaddon.teleport.blocks":  "%1$s 格",
+    "townymapaddon.teleport.blocks_short": "格",
     "townymapaddon.teleport.route_meta":  "权限：%1$s · 风险：%2$s · 加入次数：%3$s",
     "townymapaddon.teleport.saving":  "比标准路线节省 %1$s 格",
     "townymapaddon.teleport.show_risky":  "显示高风险路线",

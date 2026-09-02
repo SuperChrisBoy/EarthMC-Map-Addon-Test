@@ -223,6 +223,12 @@ public class TownyMapConfigScreen extends Screen {
                 () -> cfg.netherMode == DEFAULTS.netherMode,
                 () -> cfg.netherMode = DEFAULTS.netherMode);
 
+        section(Text.translatable("townymapaddon.voteparty.settings.section").getString());
+        option(Text.translatable("townymapaddon.voteparty.settings.enabled").getString(),onOff(cfg.votePartyEnabled,v->cfg.votePartyEnabled=v),()->cfg.votePartyEnabled==DEFAULTS.votePartyEnabled,()->cfg.votePartyEnabled=DEFAULTS.votePartyEnabled);
+        option(Text.translatable("townymapaddon.voteparty.settings.hud").getString(),onOff(cfg.votePartyShowHud,v->cfg.votePartyShowHud=v),()->cfg.votePartyShowHud==DEFAULTS.votePartyShowHud,()->cfg.votePartyShowHud=DEFAULTS.votePartyShowHud);
+        option(Text.translatable("townymapaddon.voteparty.settings.world_map").getString(),onOff(cfg.votePartyShowWorldMap,v->cfg.votePartyShowWorldMap=v),()->cfg.votePartyShowWorldMap==DEFAULTS.votePartyShowWorldMap,()->cfg.votePartyShowWorldMap=DEFAULTS.votePartyShowWorldMap);
+        option(Text.translatable("townymapaddon.voteparty.settings.global_screens").getString(),onOff(cfg.votePartyShowGlobalScreens,v->cfg.votePartyShowGlobalScreens=v),()->cfg.votePartyShowGlobalScreens==DEFAULTS.votePartyShowGlobalScreens,()->cfg.votePartyShowGlobalScreens=DEFAULTS.votePartyShowGlobalScreens);
+
         section("Minimap");
         option("Town Names", cycle(cfg.minimapTownNameMode, new int[]{0, 1, 2, 3},
                         TownyMapConfigScreen::minimapTownNameModeText,

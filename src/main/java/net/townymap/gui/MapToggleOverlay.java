@@ -54,7 +54,7 @@ public final class MapToggleOverlay {
         }
 
         drawSettingsButton(ctx, tr, settingsTop(sh));
-        if(config.teleportViewerEnabled)drawTexturedButton(ctx,LEFT,teleportTop(sh),WIDTH,HEIGHT,Text.translatable(TownyMapMod.teleportTargetArmed()?"townymapaddon.teleport.toggle.on":"townymapaddon.teleport.title").getString(),true,TownyMapMod.teleportTargetArmed()?0xFF7EE2B8:0xFFFFFFFF);
+        if(config.teleportViewerEnabled)drawTexturedButton(ctx,LEFT,teleportTop(sh),WIDTH,HEIGHT,Text.translatable("townymapaddon.teleport.title").getString(),true,0xFF7EE2B8);
         } finally {
             if (scaled) UiScale.pop(ctx);
         }

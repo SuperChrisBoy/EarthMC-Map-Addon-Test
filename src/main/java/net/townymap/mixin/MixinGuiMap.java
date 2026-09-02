@@ -55,6 +55,8 @@ public abstract class MixinGuiMap {
     private static final AtomicBoolean CLICK_ERROR_LOGGED = new AtomicBoolean(false);
     @org.spongepowered.asm.mixin.Unique
     private boolean townymap$widgetsHidden = false;
+    @org.spongepowered.asm.mixin.Unique private long townymap$lastTeleportClickNanos;
+    @org.spongepowered.asm.mixin.Unique private double townymap$lastTeleportClickX,townymap$lastTeleportClickY;
     /** Widgets wider or taller than this share of the screen are never hidden — that's map surface, not UI. */
     @org.spongepowered.asm.mixin.Unique
     private static final double TOWNYMAP_MAX_HIDEABLE_FRACTION = 0.4;
@@ -210,6 +212,7 @@ public abstract class MixinGuiMap {
                 TownyMapMod.renderTownSearch(ctx, w, h);
                 TownyMapMod.renderArchiveBanner(ctx, w);
                 TownyMapMod.renderHunterActivity(ctx, w, h);
+                TownyMapMod.renderVotePartyWorldMap(ctx,w,h);
             }
             TownyMapMod.captureMapScreenshotIfArmed();
         } catch (Exception e) {
@@ -482,6 +485,10 @@ public abstract class MixinGuiMap {
             }
 
             if (button == 0) {
+                long now=System.nanoTime();double ddx=click.x()-townymap$lastTeleportClickX,ddy=click.y()-townymap$lastTeleportClickY;
+                boolean doubleClick=now-townymap$lastTeleportClickNanos<=350_000_000L&&ddx*ddx+ddy*ddy<=64;
+                townymap$lastTeleportClickNanos=now;townymap$lastTeleportClickX=click.x();townymap$lastTeleportClickY=click.y();
+                if(doubleClick&&TownyMapMod.getConfig()!=null&&TownyMapMod.getConfig().teleportMapClickAction){double[] target=overlayWorldFromScreen(click.x(),click.y(),sw,sh);if(target!=null&&TownyMapMod.consumeTeleportTarget(target[0],target[1])){cir.setReturnValue(true);return;}}
                 TownyMapMod.armMapClickDismiss(cameraX, cameraZ);   // dismiss the search/popup unless this
                 return;                                             // click turns into a pan-drag (keeps it)
             }

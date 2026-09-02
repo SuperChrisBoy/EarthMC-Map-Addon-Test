@@ -46,6 +46,7 @@
     "townymapaddon.teleport.copy":  "Copy",
     "townymapaddon.teleport.copied":  "Copied: %1$s",
     "townymapaddon.teleport.blocks":  "%1$s blocks",
+    "townymapaddon.teleport.blocks_short": "blocks",
     "townymapaddon.teleport.route_meta":  "Access: %1$s · Risk: %2$s · Join hops: %3$s",
     "townymapaddon.teleport.saving":  "Saves %1$s blocks versus Standard",
     "townymapaddon.teleport.show_risky":  "Show Risky Route",

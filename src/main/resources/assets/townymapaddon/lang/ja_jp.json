@@ -25,6 +25,7 @@
     "townymapaddon.teleport.copy":  "コピー",
     "townymapaddon.teleport.copied":  "コピーしました：%1$s",
     "townymapaddon.teleport.blocks":  "%1$s ブロック",
+    "townymapaddon.teleport.blocks_short": "ブロック",
     "townymapaddon.teleport.route_meta":  "利用条件：%1$s · リスク：%2$s · 加入回数：%3$s",
     "townymapaddon.teleport.saving":  "標準ルートより %1$s ブロック短縮",
     "townymapaddon.teleport.show_risky":  "危険なルートを表示",

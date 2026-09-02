@@ -9,6 +9,7 @@ import net.townymap.model.NationFullData;
 import net.townymap.model.PlayerFullData;
 import net.townymap.model.TownFullData;
 import net.townymap.model.TownOverclaimProjection;
+import net.townymap.model.VotePartyStatus;
 import net.townymap.model.TownPopupData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +40,7 @@ import java.util.concurrent.*;
  *            body: {"query": ["TownName"]}
  */
 public class EarthMcApiClient {
+    public CompletableFuture<VotePartyStatus> fetchVoteParty(){return CompletableFuture.supplyAsync(()->{try{String json=get(BASE);return json==null?null:VotePartyStatus.parse(json,System.currentTimeMillis());}catch(RuntimeException e){LOGGER.warn("[TownyMap] EarthMC vote-party lookup failed: {}",e.getMessage());return null;}},executor);}
 
     private static final Logger LOGGER = LoggerFactory.getLogger("TownyMapAddon");
     private static final String BASE = "https://api.earthmc.net/v4";

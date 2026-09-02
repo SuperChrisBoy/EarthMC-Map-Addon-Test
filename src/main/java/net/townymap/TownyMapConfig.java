@@ -21,6 +21,10 @@ public class TownyMapConfig {
     // ── Feature toggles ──────────────────────────────────────────────────────
     public boolean townsEnabled   = true;
     public boolean playersEnabled = true;
+    public boolean votePartyEnabled = true;
+    public boolean votePartyShowHud = true;
+    public boolean votePartyShowWorldMap = true;
+    public boolean votePartyShowGlobalScreens = true;
     public boolean earthmcOnly = true;
     /**
      * Kept as a gate throughout the minimap rendering, but no longer user-facing: the settings row was

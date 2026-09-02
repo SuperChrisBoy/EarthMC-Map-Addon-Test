@@ -1,0 +1,4 @@
+package net.townymap.mixin;
+import net.minecraft.client.MinecraftClient;import net.minecraft.client.gui.DrawContext;import net.minecraft.client.gui.screen.Screen;import net.townymap.TownyMapMod;import org.spongepowered.asm.mixin.Mixin;import org.spongepowered.asm.mixin.injection.*;import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+/** Displays Vote Party progress on ordinary screens, matching 26.2. */
+@Mixin(Screen.class)public abstract class MixinScreen{@Inject(method="render",at=@At("RETURN"),require=0)private void townymap$voteParty(DrawContext g,int mx,int my,float delta,CallbackInfo ci){if(TownyMapMod.isWorldMapOpen())return;MinecraftClient mc=MinecraftClient.getInstance();Screen self=(Screen)(Object)this;if(mc.currentScreen==self)TownyMapMod.renderVotePartyGlobal(g,mc.getWindow().getScaledWidth(),mc.getWindow().getScaledHeight(),self);}}
