@@ -139,6 +139,7 @@ public abstract class MixinGuiMap {
             double mapScale = guiScale / dimMul;
             TownyMapMod.renderSquaremapBackground(ctx, camX, camZ, mapScale, w, h);
             TownyMapMod.renderOnWorldMap(ctx, camX, camZ, mapScale, w, h);
+            TownyMapMod.renderIceRoads(ctx, camX, camZ, mapScale, w, h);
             if (mapScale > 0) {
                 double worldX = (mouseX - w / 2.0) / mapScale + camX;
                 double worldZ = (mouseY - h / 2.0) / mapScale + camZ;
@@ -207,6 +208,7 @@ public abstract class MixinGuiMap {
                 TownyMapMod.renderPlanningCounter(ctx, w, h);
                 TownyMapMod.renderTownSearch(ctx, w, h);
                 TownyMapMod.renderArchiveBanner(ctx, w);
+                TownyMapMod.renderHunterActivity(ctx, w, h);
             }
             TownyMapMod.captureMapScreenshotIfArmed();
         } catch (Exception e) {
@@ -391,10 +393,21 @@ public abstract class MixinGuiMap {
                 return;
             }
 
+            if (button == 0 && TownyMapMod.onHunterButtonClick(click.x(), click.y(), sh)) {
+                TownyMapMod.openHunterWatchScreen();
+                cir.setReturnValue(true);
+                return;
+            }
+            if(button==0&&TownyMapMod.onHunterActivityButtonClick(click.x(),click.y(),sh)){cir.setReturnValue(true);return;}
+            if(button==0&&TownyMapMod.clickHunterActivity(click.x(),click.y(),sw,sh)){cir.setReturnValue(true);return;}
+            if(button==0&&TownyMapMod.onTeleportButtonClick(click.x(),click.y(),sh)){cir.setReturnValue(true);return;}
+
             if (button == 0 && TownyMapMod.onMapToggleClick(click.x(), click.y(), sh)) {
                 cir.setReturnValue(true);
                 return;
             }
+            if(button==0&&TownyMapMod.clickIceRoads(click.x(),click.y(),sw,sh)){cir.setReturnValue(true);return;}
+            if(button==0&&TownyMapMod.teleportTargetArmed()){double[] world=overlayWorldFromScreen(click.x(),click.y(),sw,sh);if(world!=null&&TownyMapMod.consumeTeleportTarget(world[0],world[1])){cir.setReturnValue(true);return;}}
 
             // Planning counter chips ("+" arms placement, T# removes that planned town).
             if (button == 0 && TownyMapMod.onPlanningCounterClick(click.x(), click.y())) {

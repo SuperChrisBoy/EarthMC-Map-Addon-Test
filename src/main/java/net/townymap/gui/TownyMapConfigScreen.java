@@ -34,6 +34,8 @@ import java.util.function.IntConsumer;
  */
 public class TownyMapConfigScreen extends Screen {
 
+    /** Hunter Alert is intentionally not exposed in the public settings UI. */
+    private static final boolean SHOW_HUNTER_ALERT_SETTINGS = false;
 
     // ── Layout metrics ────────────────────────────────────────────────────────
     private static final int ROW_H = 24;
@@ -343,6 +345,144 @@ public class TownyMapConfigScreen extends Screen {
                         v -> cfg.playerAffiliationMinScale = v),
                 () -> cfg.playerAffiliationMinScale == DEFAULTS.playerAffiliationMinScale,
                 () -> cfg.playerAffiliationMinScale = DEFAULTS.playerAffiliationMinScale);
+
+        if (SHOW_HUNTER_ALERT_SETTINGS) {
+        /* Hunter Alert is intentionally hidden from the public settings screen.
+        section(hunterLabel("section"));
+        option(hunterLabel("system"), onOff(cfg.hunterWarningEnabled, v -> cfg.hunterWarningEnabled = v),
+                () -> cfg.hunterWarningEnabled == DEFAULTS.hunterWarningEnabled,
+                () -> cfg.hunterWarningEnabled = DEFAULTS.hunterWarningEnabled);
+        option("Show Hunter HUD", onOff(cfg.hunterShowHud, v -> cfg.hunterShowHud = v),
+                () -> cfg.hunterShowHud == DEFAULTS.hunterShowHud,
+                () -> cfg.hunterShowHud = DEFAULTS.hunterShowHud);
+        option(Component.translatable("townymapaddon.hunter.settings.hud_position").getString(),Button.builder(Component.translatable("townymapaddon.hunter.settings.hud_position."+cfg.hunterHudPosition.name().toLowerCase(java.util.Locale.ROOT)),b->{var values=TownyMapConfig.HunterHudPosition.values();cfg.hunterHudPosition=values[(cfg.hunterHudPosition.ordinal()+1)%values.length];cfg.save();rebuildWidgets();}).bounds(0,0,150,20).build(),()->cfg.hunterHudPosition==DEFAULTS.hunterHudPosition,()->cfg.hunterHudPosition=DEFAULTS.hunterHudPosition);
+        option("Show Nearby Hunters", onOff(cfg.hunterShowNearby, v -> cfg.hunterShowNearby = v),
+                () -> cfg.hunterShowNearby == DEFAULTS.hunterShowNearby,
+                () -> cfg.hunterShowNearby = DEFAULTS.hunterShowNearby);
+        option("Show Recent Events", onOff(cfg.hunterShowRecentEvents, v -> cfg.hunterShowRecentEvents = v),
+                () -> cfg.hunterShowRecentEvents == DEFAULTS.hunterShowRecentEvents,
+                () -> cfg.hunterShowRecentEvents = DEFAULTS.hunterShowRecentEvents);
+        option("Warnings In Chat", onOff(cfg.hunterWarningsInChat, v -> cfg.hunterWarningsInChat = v),
+                () -> cfg.hunterWarningsInChat == DEFAULTS.hunterWarningsInChat,
+                () -> cfg.hunterWarningsInChat = DEFAULTS.hunterWarningsInChat);
+        option("Notifications In Chat", onOff(cfg.hunterNotificationsInChat, v -> cfg.hunterNotificationsInChat = v),
+                () -> cfg.hunterNotificationsInChat == DEFAULTS.hunterNotificationsInChat,
+                () -> cfg.hunterNotificationsInChat = DEFAULTS.hunterNotificationsInChat);
+        option("Show Activity Window", onOff(cfg.hunterActivityWindowShown, v -> cfg.hunterActivityWindowShown = v),
+                () -> cfg.hunterActivityWindowShown == DEFAULTS.hunterActivityWindowShown,
+                () -> cfg.hunterActivityWindowShown = DEFAULTS.hunterActivityWindowShown);
+        option("Show Risk", onOff(cfg.hunterShowRisk, v -> cfg.hunterShowRisk = v),
+                () -> cfg.hunterShowRisk == DEFAULTS.hunterShowRisk,
+                () -> cfg.hunterShowRisk = DEFAULTS.hunterShowRisk);
+        action("Manage Watched Hunters", () -> this.minecraft.gui.setScreen(new HunterWatchScreen(this)));
+        option("Nearby Radius", cycle(cfg.hunterNearbyRadius, new int[]{500, 1000, 2000, 5000},
+                        v -> Component.literal(v + " blocks"), v -> cfg.hunterNearbyRadius = v),
+                () -> cfg.hunterNearbyRadius == DEFAULTS.hunterNearbyRadius,
+                () -> cfg.hunterNearbyRadius = DEFAULTS.hunterNearbyRadius);
+        option("Elevated Threshold", cycle(cfg.hunterElevatedRadius, new int[]{250, 500, 750, 1000},
+                        v -> Component.literal(v + " blocks"), v -> cfg.hunterElevatedRadius = v),
+                () -> cfg.hunterElevatedRadius == DEFAULTS.hunterElevatedRadius,
+                () -> cfg.hunterElevatedRadius = DEFAULTS.hunterElevatedRadius);
+        option("High Threshold", cycle(cfg.hunterHighRadius, new int[]{100, 250, 500},
+                        v -> Component.literal(v + " blocks"), v -> cfg.hunterHighRadius = v),
+                () -> cfg.hunterHighRadius == DEFAULTS.hunterHighRadius,
+                () -> cfg.hunterHighRadius = DEFAULTS.hunterHighRadius);
+        option("Critical Threshold", cycle(cfg.hunterCriticalRadius, new int[]{50, 100, 150},
+                        v -> Component.literal(v + " blocks"), v -> cfg.hunterCriticalRadius = v),
+                () -> cfg.hunterCriticalRadius == DEFAULTS.hunterCriticalRadius,
+                () -> cfg.hunterCriticalRadius = DEFAULTS.hunterCriticalRadius);
+        option("Teleport Threat Radius", cycle(cfg.hunterTeleportThreatRadius, new int[]{1000, 2000, 3000, 5000},
+                        v -> Component.literal(v + " blocks"), v -> cfg.hunterTeleportThreatRadius = v),
+                () -> cfg.hunterTeleportThreatRadius == DEFAULTS.hunterTeleportThreatRadius,
+                () -> cfg.hunterTeleportThreatRadius = DEFAULTS.hunterTeleportThreatRadius);
+        option("Maximum HUD Entries", cycle(cfg.hunterMaxHudEntries, new int[]{1, 2, 3, 5, 10},
+                        v -> Component.literal(Integer.toString(v)), v -> cfg.hunterMaxHudEntries = v),
+                () -> cfg.hunterMaxHudEntries == DEFAULTS.hunterMaxHudEntries,
+                () -> cfg.hunterMaxHudEntries = DEFAULTS.hunterMaxHudEntries);
+        option("Normal Event Duration", cycle(cfg.hunterNormalEventDurationSecs, new int[]{5, 8, 10, 15},
+                        v -> Component.literal(v + " seconds"), v -> cfg.hunterNormalEventDurationSecs = v),
+                () -> cfg.hunterNormalEventDurationSecs == DEFAULTS.hunterNormalEventDurationSecs,
+                () -> cfg.hunterNormalEventDurationSecs = DEFAULTS.hunterNormalEventDurationSecs);
+        option("Candidate Outlaw Threshold", cycle(cfg.hunterCandidateOutlawThreshold, new int[]{5, 10, 15, 20, 30},
+                        v -> Component.literal("> " + v + " towns"), v -> cfg.hunterCandidateOutlawThreshold = v),
+                () -> cfg.hunterCandidateOutlawThreshold == DEFAULTS.hunterCandidateOutlawThreshold,
+                () -> cfg.hunterCandidateOutlawThreshold = DEFAULTS.hunterCandidateOutlawThreshold);
+        option(Component.translatable("townymapaddon.hunter.settings.candidate_warnings").getString(), onOff(cfg.hunterCandidateWarningsEnabled, v -> cfg.hunterCandidateWarningsEnabled = v),
+                () -> cfg.hunterCandidateWarningsEnabled == DEFAULTS.hunterCandidateWarningsEnabled,
+                () -> cfg.hunterCandidateWarningsEnabled = DEFAULTS.hunterCandidateWarningsEnabled);
+        option(Component.translatable("townymapaddon.hunter.settings.candidate_radius").getString(), cycle(cfg.hunterCandidateWarningRadius, new int[]{500, 1000, 1500, 2000, 5000},
+                        v -> Component.literal(v + " blocks"), v -> cfg.hunterCandidateWarningRadius = v),
+                () -> cfg.hunterCandidateWarningRadius == DEFAULTS.hunterCandidateWarningRadius,
+                () -> cfg.hunterCandidateWarningRadius = DEFAULTS.hunterCandidateWarningRadius);
+        option("Candidate Refresh", cycle(cfg.hunterCandidateRefreshMinutes, new int[]{5, 10, 15, 30, 60},
+                        v -> Component.literal(v + " minutes"), v -> cfg.hunterCandidateRefreshMinutes = v),
+                () -> cfg.hunterCandidateRefreshMinutes == DEFAULTS.hunterCandidateRefreshMinutes,
+                () -> cfg.hunterCandidateRefreshMinutes = DEFAULTS.hunterCandidateRefreshMinutes);
+        option("Activity History", cycle(cfg.hunterActivityMaxEvents, new int[]{50, 100, 200, 500},
+                        v -> Component.literal(v + " events"), v -> cfg.hunterActivityMaxEvents = v),
+                () -> cfg.hunterActivityMaxEvents == DEFAULTS.hunterActivityMaxEvents,
+                () -> cfg.hunterActivityMaxEvents = DEFAULTS.hunterActivityMaxEvents);
+        option("Direction", onOff(cfg.hunterDirectionEnabled, v -> cfg.hunterDirectionEnabled = v),
+                () -> cfg.hunterDirectionEnabled == DEFAULTS.hunterDirectionEnabled,
+                () -> cfg.hunterDirectionEnabled = DEFAULTS.hunterDirectionEnabled);
+        option("Dynmap Exposure", onOff(cfg.hunterExposureHud, v -> cfg.hunterExposureHud = v),
+                () -> cfg.hunterExposureHud == DEFAULTS.hunterExposureHud,
+                () -> cfg.hunterExposureHud = DEFAULTS.hunterExposureHud);
+        option(hunterLabel("exposure_entry_buffer"),cycle(cfg.hunterExposureEntryBufferSeconds,new int[]{0,10,20,30,45,60},v->Component.translatable("townymapaddon.common.seconds",v),v->cfg.hunterExposureEntryBufferSeconds=v),()->cfg.hunterExposureEntryBufferSeconds==DEFAULTS.hunterExposureEntryBufferSeconds,()->cfg.hunterExposureEntryBufferSeconds=DEFAULTS.hunterExposureEntryBufferSeconds);
+        option(hunterLabel("exposure_risk_time"),cycle(cfg.hunterExposureRiskMinutes,new int[]{3,4,5,6,7,10},v->Component.translatable("townymapaddon.common.minutes",v),v->cfg.hunterExposureRiskMinutes=v),()->cfg.hunterExposureRiskMinutes==DEFAULTS.hunterExposureRiskMinutes,()->cfg.hunterExposureRiskMinutes=DEFAULTS.hunterExposureRiskMinutes);
+        option(hunterLabel("exposure_claim_grace"),cycle(cfg.hunterExposureClaimGraceSeconds,new int[]{0,15,30,45,60,90,120},v->Component.translatable("townymapaddon.common.seconds",v),v->cfg.hunterExposureClaimGraceSeconds=v),()->cfg.hunterExposureClaimGraceSeconds==DEFAULTS.hunterExposureClaimGraceSeconds,()->cfg.hunterExposureClaimGraceSeconds=DEFAULTS.hunterExposureClaimGraceSeconds);
+        option(hunterLabel("wilderness_target_threshold"),cycle(cfg.hunterWildernessTargetExposureSeconds,new int[]{60,180,300,420,600,900,1200},v->Component.translatable("townymapaddon.common.seconds",v),v->cfg.hunterWildernessTargetExposureSeconds=v),()->cfg.hunterWildernessTargetExposureSeconds==DEFAULTS.hunterWildernessTargetExposureSeconds,()->cfg.hunterWildernessTargetExposureSeconds=DEFAULTS.hunterWildernessTargetExposureSeconds);
+        option(hunterLabel("player_hidden_safety"),onOff(cfg.hunterPlayerHiddenSafetyEnabled,v->cfg.hunterPlayerHiddenSafetyEnabled=v),()->cfg.hunterPlayerHiddenSafetyEnabled==DEFAULTS.hunterPlayerHiddenSafetyEnabled,()->cfg.hunterPlayerHiddenSafetyEnabled=DEFAULTS.hunterPlayerHiddenSafetyEnabled);
+        option(hunterLabel("player_hidden_safety_delay"),cycle(cfg.hunterPlayerHiddenSafetyDelaySeconds,new int[]{0,30,60,120,180,300,600},v->Component.translatable("townymapaddon.common.seconds",v),v->cfg.hunterPlayerHiddenSafetyDelaySeconds=v),()->cfg.hunterPlayerHiddenSafetyDelaySeconds==DEFAULTS.hunterPlayerHiddenSafetyDelaySeconds,()->cfg.hunterPlayerHiddenSafetyDelaySeconds=DEFAULTS.hunterPlayerHiddenSafetyDelaySeconds);
+        option(hunterLabel("player_hidden_safety_ramp"),cycle(cfg.hunterPlayerHiddenSafetyRampSeconds,new int[]{30,60,120,240,300,600,900},v->Component.translatable("townymapaddon.common.seconds",v),v->cfg.hunterPlayerHiddenSafetyRampSeconds=v),()->cfg.hunterPlayerHiddenSafetyRampSeconds==DEFAULTS.hunterPlayerHiddenSafetyRampSeconds,()->cfg.hunterPlayerHiddenSafetyRampSeconds=DEFAULTS.hunterPlayerHiddenSafetyRampSeconds);
+        option(hunterLabel("player_hidden_max_reduction"),cycle(cfg.hunterPlayerHiddenMaximumSafetyReductionPercent,new int[]{0,10,20,30,40,50,60,80},v->Component.literal(v+"%"),v->cfg.hunterPlayerHiddenMaximumSafetyReductionPercent=v),()->cfg.hunterPlayerHiddenMaximumSafetyReductionPercent==DEFAULTS.hunterPlayerHiddenMaximumSafetyReductionPercent,()->cfg.hunterPlayerHiddenMaximumSafetyReductionPercent=DEFAULTS.hunterPlayerHiddenMaximumSafetyReductionPercent);
+        option(hunterLabel("teleport_activation_on_exposure"),onOff(cfg.hunterTeleportActivationOnExposure,v->cfg.hunterTeleportActivationOnExposure=v),()->cfg.hunterTeleportActivationOnExposure==DEFAULTS.hunterTeleportActivationOnExposure,()->cfg.hunterTeleportActivationOnExposure=DEFAULTS.hunterTeleportActivationOnExposure);
+        option(hunterLabel("teleport_activation_initial_radius"),cycle(cfg.hunterTeleportActivationInitialRadius,new int[]{0,32,64,100,150,250,500},v->Component.translatable("townymapaddon.common.blocks",v),v->cfg.hunterTeleportActivationInitialRadius=v),()->cfg.hunterTeleportActivationInitialRadius==DEFAULTS.hunterTeleportActivationInitialRadius,()->cfg.hunterTeleportActivationInitialRadius=DEFAULTS.hunterTeleportActivationInitialRadius);
+        option(hunterLabel("offline_residual_time"),cycle(cfg.hunterOfflineResidualMinutes,new int[]{0,5,10,15,20,30,60},v->Component.translatable("townymapaddon.common.minutes",v),v->cfg.hunterOfflineResidualMinutes=v),()->cfg.hunterOfflineResidualMinutes==DEFAULTS.hunterOfflineResidualMinutes,()->cfg.hunterOfflineResidualMinutes=DEFAULTS.hunterOfflineResidualMinutes);
+        option(hunterLabel("radius_world_map"),onOff(cfg.hunterRadiusOnWorldMap,v->cfg.hunterRadiusOnWorldMap=v),()->cfg.hunterRadiusOnWorldMap==DEFAULTS.hunterRadiusOnWorldMap,()->cfg.hunterRadiusOnWorldMap=DEFAULTS.hunterRadiusOnWorldMap);
+        option(hunterLabel("radius_minimap"),onOff(cfg.hunterRadiusOnMinimap,v->cfg.hunterRadiusOnMinimap=v),()->cfg.hunterRadiusOnMinimap==DEFAULTS.hunterRadiusOnMinimap,()->cfg.hunterRadiusOnMinimap=DEFAULTS.hunterRadiusOnMinimap);
+        option(hunterLabel("fronts_enabled"),onOff(cfg.hunterThreatFrontsEnabled,v->cfg.hunterThreatFrontsEnabled=v),()->cfg.hunterThreatFrontsEnabled==DEFAULTS.hunterThreatFrontsEnabled,()->cfg.hunterThreatFrontsEnabled=DEFAULTS.hunterThreatFrontsEnabled);
+        option(hunterLabel("front_plausible"),onOff(cfg.hunterShowPlausibleFront,v->cfg.hunterShowPlausibleFront=v),()->cfg.hunterShowPlausibleFront==DEFAULTS.hunterShowPlausibleFront,()->cfg.hunterShowPlausibleFront=DEFAULTS.hunterShowPlausibleFront);
+        option(hunterLabel("front_warning"),onOff(cfg.hunterShowWarningFront,v->cfg.hunterShowWarningFront=v),()->cfg.hunterShowWarningFront==DEFAULTS.hunterShowWarningFront,()->cfg.hunterShowWarningFront=DEFAULTS.hunterShowWarningFront);
+        option(hunterLabel("front_plausible_speed"),cycle((int)cfg.hunterFrontPlausibleSpeed,new int[]{4,6,8,10,12,16},v->Component.translatable("townymapaddon.hunter.settings.blocks_per_second",v),v->cfg.hunterFrontPlausibleSpeed=v),()->cfg.hunterFrontPlausibleSpeed==DEFAULTS.hunterFrontPlausibleSpeed,()->cfg.hunterFrontPlausibleSpeed=DEFAULTS.hunterFrontPlausibleSpeed);
+        option(hunterLabel("front_warning_speed"),cycle((int)cfg.hunterFrontWarningSpeed,new int[]{8,10,12,16,20,24},v->Component.translatable("townymapaddon.hunter.settings.blocks_per_second",v),v->cfg.hunterFrontWarningSpeed=v),()->cfg.hunterFrontWarningSpeed==DEFAULTS.hunterFrontWarningSpeed,()->cfg.hunterFrontWarningSpeed=DEFAULTS.hunterFrontWarningSpeed);
+        option(hunterLabel("front_teleport_delay"),cycle(cfg.hunterFrontTeleportDelaySeconds,new int[]{0,4,8,12,20,30},v->Component.translatable("townymapaddon.common.seconds",v),v->cfg.hunterFrontTeleportDelaySeconds=v),()->cfg.hunterFrontTeleportDelaySeconds==DEFAULTS.hunterFrontTeleportDelaySeconds,()->cfg.hunterFrontTeleportDelaySeconds=DEFAULTS.hunterFrontTeleportDelaySeconds);
+        option(hunterLabel("front_warning_lead"),cycle(cfg.hunterFrontWarningLeadSeconds,new int[]{0,5,10,15,20,30},v->Component.translatable("townymapaddon.common.seconds",v),v->cfg.hunterFrontWarningLeadSeconds=v),()->cfg.hunterFrontWarningLeadSeconds==DEFAULTS.hunterFrontWarningLeadSeconds,()->cfg.hunterFrontWarningLeadSeconds=DEFAULTS.hunterFrontWarningLeadSeconds);
+        option(hunterLabel("front_teleport_margin"),cycle((int)Math.round(cfg.hunterFrontTeleportSafetyMargin*100),new int[]{50,75,100,125,150,200},v->Component.literal(v+"%"),v->cfg.hunterFrontTeleportSafetyMargin=v/100.0),()->cfg.hunterFrontTeleportSafetyMargin==DEFAULTS.hunterFrontTeleportSafetyMargin,()->cfg.hunterFrontTeleportSafetyMargin=DEFAULTS.hunterFrontTeleportSafetyMargin);
+        option(hunterLabel("front_minimap_limit"),cycle(cfg.hunterFrontMinimapLimit,new int[]{3,5,8,10,15,20},v->Component.literal(Integer.toString(v)),v->cfg.hunterFrontMinimapLimit=v),()->cfg.hunterFrontMinimapLimit==DEFAULTS.hunterFrontMinimapLimit,()->cfg.hunterFrontMinimapLimit=DEFAULTS.hunterFrontMinimapLimit);
+        option(hunterLabel("front_world_limit"),cycle(cfg.hunterFrontWorldMapLimit,new int[]{10,20,40,60,100,200},v->Component.literal(Integer.toString(v)),v->cfg.hunterFrontWorldMapLimit=v),()->cfg.hunterFrontWorldMapLimit==DEFAULTS.hunterFrontWorldMapLimit,()->cfg.hunterFrontWorldMapLimit=DEFAULTS.hunterFrontWorldMapLimit);
+        option(hunterLabel("front_known_warnings"),onOff(cfg.hunterKnownFrontWarnings,v->cfg.hunterKnownFrontWarnings=v),()->cfg.hunterKnownFrontWarnings==DEFAULTS.hunterKnownFrontWarnings,()->cfg.hunterKnownFrontWarnings=DEFAULTS.hunterKnownFrontWarnings);
+        option(hunterLabel("front_potential_warnings"),onOff(cfg.hunterPotentialFrontWarnings,v->cfg.hunterPotentialFrontWarnings=v),()->cfg.hunterPotentialFrontWarnings==DEFAULTS.hunterPotentialFrontWarnings,()->cfg.hunterPotentialFrontWarnings=DEFAULTS.hunterPotentialFrontWarnings);
+        option(hunterLabel("front_warning_crossing"),onOff(cfg.hunterWarningFrontCrossingAlert,v->cfg.hunterWarningFrontCrossingAlert=v),()->cfg.hunterWarningFrontCrossingAlert==DEFAULTS.hunterWarningFrontCrossingAlert,()->cfg.hunterWarningFrontCrossingAlert=DEFAULTS.hunterWarningFrontCrossingAlert);
+        option(hunterLabel("front_plausible_crossing"),onOff(cfg.hunterPlausibleFrontCrossingAlert,v->cfg.hunterPlausibleFrontCrossingAlert=v),()->cfg.hunterPlausibleFrontCrossingAlert==DEFAULTS.hunterPlausibleFrontCrossingAlert,()->cfg.hunterPlausibleFrontCrossingAlert=DEFAULTS.hunterPlausibleFrontCrossingAlert);
+        option(hunterLabel("front_hysteresis"),cycle(cfg.hunterFrontReentryHysteresis,new int[]{0,16,32,48,64,100},v->Component.translatable("townymapaddon.common.blocks",v),v->cfg.hunterFrontReentryHysteresis=v),()->cfg.hunterFrontReentryHysteresis==DEFAULTS.hunterFrontReentryHysteresis,()->cfg.hunterFrontReentryHysteresis=DEFAULTS.hunterFrontReentryHysteresis);
+        option(hunterLabel("front_interpolation"),onOff(cfg.hunterFrontVisualInterpolation,v->cfg.hunterFrontVisualInterpolation=v),()->cfg.hunterFrontVisualInterpolation==DEFAULTS.hunterFrontVisualInterpolation,()->cfg.hunterFrontVisualInterpolation=DEFAULTS.hunterFrontVisualInterpolation);
+        option(hunterLabel("front_opacity"),cycle(cfg.hunterFrontOpacity,new int[]{15,30,40,55,70,85,100},v->Component.literal(v+"%"),v->cfg.hunterFrontOpacity=v),()->cfg.hunterFrontOpacity==DEFAULTS.hunterFrontOpacity,()->cfg.hunterFrontOpacity=DEFAULTS.hunterFrontOpacity);
+        option(hunterLabel("front_thickness"),cycle(cfg.hunterFrontLineThickness,new int[]{1,2,3,4},v->Component.literal(Integer.toString(v)),v->cfg.hunterFrontLineThickness=v),()->cfg.hunterFrontLineThickness==DEFAULTS.hunterFrontLineThickness,()->cfg.hunterFrontLineThickness=DEFAULTS.hunterFrontLineThickness);
+        option(hunterLabel("front_kill_freshness"),cycle(cfg.hunterKillOriginFreshnessSeconds,new int[]{10,20,30,45,60,120},v->Component.translatable("townymapaddon.common.seconds",v),v->cfg.hunterKillOriginFreshnessSeconds=v),()->cfg.hunterKillOriginFreshnessSeconds==DEFAULTS.hunterKillOriginFreshnessSeconds,()->cfg.hunterKillOriginFreshnessSeconds=DEFAULTS.hunterKillOriginFreshnessSeconds);
+        option(hunterLabel("teleport_spatial_radius"),cycle(cfg.hunterTeleportThreatSpatialRadius,new int[]{2000,3000,5000,7500,10000,20000},v->Component.translatable("townymapaddon.common.blocks",v),v->cfg.hunterTeleportThreatSpatialRadius=v),()->cfg.hunterTeleportThreatSpatialRadius==DEFAULTS.hunterTeleportThreatSpatialRadius,()->cfg.hunterTeleportThreatSpatialRadius=DEFAULTS.hunterTeleportThreatSpatialRadius);
+        option(hunterLabel("teleport_cluster_radius"),cycle(cfg.hunterTeleportThreatClusterRadius,new int[]{32,100,200,300,500,1000},v->Component.translatable("townymapaddon.common.blocks",v),v->cfg.hunterTeleportThreatClusterRadius=v),()->cfg.hunterTeleportThreatClusterRadius==DEFAULTS.hunterTeleportThreatClusterRadius,()->cfg.hunterTeleportThreatClusterRadius=DEFAULTS.hunterTeleportThreatClusterRadius);
+        option(hunterLabel("teleport_max_relevant"),cycle(cfg.hunterMaxRelevantTeleportThreats,new int[]{5,10,16,24,40,60,100},v->Component.literal(Integer.toString(v)),v->cfg.hunterMaxRelevantTeleportThreats=v),()->cfg.hunterMaxRelevantTeleportThreats==DEFAULTS.hunterMaxRelevantTeleportThreats,()->cfg.hunterMaxRelevantTeleportThreats=DEFAULTS.hunterMaxRelevantTeleportThreats);
+        option(hunterLabel("teleport_per_hunter_minimap"),cycle(cfg.hunterMaxActiveTeleportThreatsPerHunterMinimap,new int[]{1,2,3,5,8,10},v->Component.literal(Integer.toString(v)),v->cfg.hunterMaxActiveTeleportThreatsPerHunterMinimap=v),()->cfg.hunterMaxActiveTeleportThreatsPerHunterMinimap==DEFAULTS.hunterMaxActiveTeleportThreatsPerHunterMinimap,()->cfg.hunterMaxActiveTeleportThreatsPerHunterMinimap=DEFAULTS.hunterMaxActiveTeleportThreatsPerHunterMinimap);
+        option(hunterLabel("teleport_global_minimap"),cycle(cfg.hunterMaxActiveTeleportThreatsGlobalMinimap,new int[]{3,5,8,10,15,20},v->Component.literal(Integer.toString(v)),v->cfg.hunterMaxActiveTeleportThreatsGlobalMinimap=v),()->cfg.hunterMaxActiveTeleportThreatsGlobalMinimap==DEFAULTS.hunterMaxActiveTeleportThreatsGlobalMinimap,()->cfg.hunterMaxActiveTeleportThreatsGlobalMinimap=DEFAULTS.hunterMaxActiveTeleportThreatsGlobalMinimap);
+        option(hunterLabel("teleport_per_hunter_world"),cycle(cfg.hunterMaxActiveTeleportThreatsPerHunterWorldMap,new int[]{3,5,8,12,20,30},v->Component.literal(Integer.toString(v)),v->cfg.hunterMaxActiveTeleportThreatsPerHunterWorldMap=v),()->cfg.hunterMaxActiveTeleportThreatsPerHunterWorldMap==DEFAULTS.hunterMaxActiveTeleportThreatsPerHunterWorldMap,()->cfg.hunterMaxActiveTeleportThreatsPerHunterWorldMap=DEFAULTS.hunterMaxActiveTeleportThreatsPerHunterWorldMap);
+        option(hunterLabel("teleport_rerank_movement"),cycle(cfg.hunterTeleportThreatRerankMovement,new int[]{32,64,128,256,500,1000},v->Component.translatable("townymapaddon.common.blocks",v),v->cfg.hunterTeleportThreatRerankMovement=v),()->cfg.hunterTeleportThreatRerankMovement==DEFAULTS.hunterTeleportThreatRerankMovement,()->cfg.hunterTeleportThreatRerankMovement=DEFAULTS.hunterTeleportThreatRerankMovement);
+        option(hunterLabel("teleport_rerank_interval"),cycle(cfg.hunterTeleportThreatRerankSeconds,new int[]{1,2,5,10,20,30,60},v->Component.translatable("townymapaddon.common.seconds",v),v->cfg.hunterTeleportThreatRerankSeconds=v),()->cfg.hunterTeleportThreatRerankSeconds==DEFAULTS.hunterTeleportThreatRerankSeconds,()->cfg.hunterTeleportThreatRerankSeconds=DEFAULTS.hunterTeleportThreatRerankSeconds);
+        option(hunterLabel("teleport_promotion_hysteresis"),cycle(cfg.hunterTeleportThreatPromotionHysteresisPercent,new int[]{0,4,8,12,20,30,50},v->Component.literal(v+"%"),v->cfg.hunterTeleportThreatPromotionHysteresisPercent=v),()->cfg.hunterTeleportThreatPromotionHysteresisPercent==DEFAULTS.hunterTeleportThreatPromotionHysteresisPercent,()->cfg.hunterTeleportThreatPromotionHysteresisPercent=DEFAULTS.hunterTeleportThreatPromotionHysteresisPercent);
+        option(hunterLabel("teleport_demotion_hysteresis"),cycle(cfg.hunterTeleportThreatDemotionHysteresisPercent,new int[]{0,2,4,8,12,20,50},v->Component.literal(v+"%"),v->cfg.hunterTeleportThreatDemotionHysteresisPercent=v),()->cfg.hunterTeleportThreatDemotionHysteresisPercent==DEFAULTS.hunterTeleportThreatDemotionHysteresisPercent,()->cfg.hunterTeleportThreatDemotionHysteresisPercent=DEFAULTS.hunterTeleportThreatDemotionHysteresisPercent);
+        option(hunterLabel("show_teleport_clusters"),onOff(cfg.hunterShowTeleportThreatClusters,v->cfg.hunterShowTeleportThreatClusters=v),()->cfg.hunterShowTeleportThreatClusters==DEFAULTS.hunterShowTeleportThreatClusters,()->cfg.hunterShowTeleportThreatClusters=DEFAULTS.hunterShowTeleportThreatClusters);
+        option(hunterLabel("show_latent_teleports"),onOff(cfg.hunterShowLatentTeleportOriginsWorldMap,v->cfg.hunterShowLatentTeleportOriginsWorldMap=v),()->cfg.hunterShowLatentTeleportOriginsWorldMap==DEFAULTS.hunterShowLatentTeleportOriginsWorldMap,()->cfg.hunterShowLatentTeleportOriginsWorldMap=DEFAULTS.hunterShowLatentTeleportOriginsWorldMap);
+        option(hunterLabel("aggregate_teleport_warnings"),onOff(cfg.hunterAggregateTeleportWarnings,v->cfg.hunterAggregateTeleportWarnings=v),()->cfg.hunterAggregateTeleportWarnings==DEFAULTS.hunterAggregateTeleportWarnings,()->cfg.hunterAggregateTeleportWarnings=DEFAULTS.hunterAggregateTeleportWarnings);
+        */
+        }
+
+        section(Text.translatable("townymapaddon.teleport.title").getString());
+        option(Text.translatable("townymapaddon.teleport.settings.enabled").getString(), onOff(cfg.teleportViewerEnabled,v->cfg.teleportViewerEnabled=v),()->cfg.teleportViewerEnabled==DEFAULTS.teleportViewerEnabled,()->cfg.teleportViewerEnabled=DEFAULTS.teleportViewerEnabled);
+        option(Text.translatable("townymapaddon.teleport.settings.map_click").getString(),onOff(cfg.teleportMapClickAction,v->cfg.teleportMapClickAction=v),()->cfg.teleportMapClickAction==DEFAULTS.teleportMapClickAction,()->cfg.teleportMapClickAction=DEFAULTS.teleportMapClickAction);
+        option(Text.translatable("townymapaddon.teleport.settings.default_mode").getString(),ButtonWidget.builder(Text.translatable(cfg.teleportDefaultAdvanced?"townymapaddon.teleport.mode.advanced":"townymapaddon.teleport.mode.standard"),b->{cfg.teleportDefaultAdvanced=!cfg.teleportDefaultAdvanced;cfg.save();clearAndInit();}).dimensions(0,0,120,20).build(),()->cfg.teleportDefaultAdvanced==DEFAULTS.teleportDefaultAdvanced,()->cfg.teleportDefaultAdvanced=DEFAULTS.teleportDefaultAdvanced);
+        option(Text.translatable("townymapaddon.teleport.settings.show_uncertain").getString(),onOff(cfg.teleportShowUncertain,v->cfg.teleportShowUncertain=v),()->cfg.teleportShowUncertain==DEFAULTS.teleportShowUncertain,()->cfg.teleportShowUncertain=DEFAULTS.teleportShowUncertain);
+        option(Text.translatable("townymapaddon.teleport.settings.show_obstructed").getString(),onOff(cfg.teleportShowObstructed,v->cfg.teleportShowObstructed=v),()->cfg.teleportShowObstructed==DEFAULTS.teleportShowObstructed,()->cfg.teleportShowObstructed=DEFAULTS.teleportShowObstructed);
+        option(Text.translatable("townymapaddon.teleport.settings.remember_home").getString(),onOff(cfg.teleportRememberPrimaryHome,v->cfg.teleportRememberPrimaryHome=v),()->cfg.teleportRememberPrimaryHome==DEFAULTS.teleportRememberPrimaryHome,()->cfg.teleportRememberPrimaryHome=DEFAULTS.teleportRememberPrimaryHome);
 
         section("Info Display");
         option("Current Town & Nation", onOff(cfg.infoDisplayTownEnabled, v -> cfg.infoDisplayTownEnabled = v),

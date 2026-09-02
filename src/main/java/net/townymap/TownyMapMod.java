@@ -82,6 +82,9 @@ public class TownyMapMod implements ClientModInitializer {
     private static TownyMapConfig     config;
     private static SquaremapApiClient apiClient;
     private static EarthMcApiClient   earthMcApi;
+    private static net.townymap.hunter.HunterEarlyWarningSystem hunterSystem;
+    private static net.townymap.teleport.TeleportAccessService teleportAccess;
+    private static boolean teleportTargetArmed;
     private static WorldMapRenderer   renderer;
     private static final AtomicLong townLookupId = new AtomicLong();
     private static double lastWorldMapCameraX = Double.NaN;
@@ -156,6 +159,9 @@ public class TownyMapMod implements ClientModInitializer {
         config     = TownyMapConfig.load();
         apiClient  = new SquaremapApiClient(config);
         earthMcApi = new EarthMcApiClient();
+        teleportAccess = new net.townymap.teleport.TeleportAccessService(earthMcApi, config);
+        hunterSystem = new net.townymap.hunter.HunterEarlyWarningSystem(config, earthMcApi, teleportAccess,
+                TownyMapMod::sendHunterFeedback);
         renderer   = new WorldMapRenderer(config, apiClient);
         ChunkCounterOverlay.loadSelection(config.chunkCounterSelection,
                 config.chunkCounterGroups, config.activeChunkCounterGroup);
@@ -166,8 +172,14 @@ public class TownyMapMod implements ClientModInitializer {
         TownyMapKeybinds.register();
         ClientSendMessageEvents.COMMAND.register(TownyMapMod::onCommandSent);
         ClientReceiveMessageEvents.GAME.register(TownyMapMod::onGameMessage);
-        net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK
-                .register(c -> net.townymap.integration.ShopWaypoints.tick());
+        net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK.register(c -> {
+            net.townymap.integration.ShopWaypoints.tick();
+            if (c.world != null && isActiveOnCurrentServer()) net.townymap.ice.IceRoadNetwork.tickAutoUpdate();
+            if (hunterSystem != null && apiClient != null && isActiveOnCurrentServer()) {
+                apiClient.tickPlayers();
+                hunterSystem.tick(c, apiClient.getPlayers(), apiClient.getTowns());
+            }
+        });
 
         LOGGER.info("TownyMap Addon ready; map refreshes are deferred until map/minimap rendering is active ({})", config.squaremapBaseUrl);
     }
@@ -187,6 +199,7 @@ public class TownyMapMod implements ClientModInitializer {
 
     private static void onGameMessage(Text message, boolean overlay) {
         if (apiClient == null || !isActiveOnCurrentServer() || message == null) return;
+        if (hunterSystem != null) hunterSystem.onSystemMessage(message.getString());
         // Shop results are independent of the claim flow, so they have to be read before the
         // pending-claim early return below or they'd only ever parse right after a /town claim.
         if (net.townymap.integration.ShopWaypoints.onGameMessage(message.getString())) return;
@@ -384,6 +397,13 @@ public class TownyMapMod implements ClientModInitializer {
             if (town.name().equalsIgnoreCase(townName)) return town;
         }
         return null;
+    }
+
+    /** Provider-neutral claim metadata lookup used by the isolated hunter feature. */
+    public static String knownTownNation(String townName) {
+        if (apiClient == null || townName == null) return "";
+        String nation = apiClient.getTownNation(townKey(townName));
+        return nation == null ? "" : nation.replaceFirst("(?i)^Capital of\\s+", "");
     }
 
     private static int floorToChunk(double blockCoord) {
@@ -1109,6 +1129,7 @@ public class TownyMapMod implements ClientModInitializer {
     public static void renderWorldMapLatePass(DrawContext ctx, double cameraX, double cameraZ,
                                               double scale, int screenW, int screenH) {
         if (!isActiveOnCurrentServer() || renderer == null || config == null) return;
+        if (hunterSystem != null) hunterSystem.renderWorldMap(ctx, cameraX, cameraZ, scale, screenW, screenH);
         // Join-range zone for the selected nation, under the player dots.
         if (config.nationRangeEnabled) {
             // Planning always shows its own nation's zone — that's the whole point of the mode — otherwise
@@ -1213,6 +1234,11 @@ public class TownyMapMod implements ClientModInitializer {
                     renderer != null && renderer.isBorderLoading());
         }
     }
+
+    public static void renderIceRoads(DrawContext ctx,double cameraX,double cameraZ,double scale,int width,int height){
+        if(isActiveOnCurrentServer()&&config!=null) net.townymap.gui.IceRoadOverlay.render(ctx,cameraX,cameraZ,scale,width,height,config);
+    }
+    public static boolean clickIceRoads(double x,double y,int width,int height){return config!=null&&net.townymap.gui.IceRoadOverlay.click(x,y,width,height,config);}
 
     /** The Planning-mode town counter, drawn top-left alongside the other map HUD. */
     public static void renderPlanningCounter(DrawContext ctx, int screenW, int screenH) {
@@ -1438,7 +1464,7 @@ public class TownyMapMod implements ClientModInitializer {
     public static int renderMinimapInfoLines(DrawContext ctx, int mapCenterX, int mapTop, int mapBottom) {
         if (!isActiveOnCurrentServer() || config == null || apiClient == null) return 0;
         if (!config.infoDisplayTownEnabled && !config.infoDisplayNearbyPlayersEnabled
-                && !config.infoDisplayNearestTownEnabled) return 0;
+                && !config.infoDisplayNearestTownEnabled && !config.hunterWarningEnabled) return 0;
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null || client.player == null || client.getSession() == null) return 0;
 
@@ -1456,6 +1482,7 @@ public class TownyMapMod implements ClientModInitializer {
         java.util.List<TownData> towns = apiClient.getTowns(hudWorld);
         TownData here = TownHoverOverlay.townAt(px, pz, towns);
         java.util.List<String> lines = new java.util.ArrayList<>();
+        if (hunterSystem != null) lines.addAll(hunterSystem.exposureHudLines());
 
         if (config.infoDisplayTownEnabled) {
             if (here != null) {
@@ -2642,6 +2669,38 @@ public class TownyMapMod implements ClientModInitializer {
         return MapToggleOverlay.handleSettingsClick(mouseX, mouseY, screenH);
     }
 
+    public static boolean onHunterButtonClick(double mouseX, double mouseY, int screenH) {
+        return MapToggleOverlay.handleHunterClick(mouseX, mouseY, screenH);
+    }
+    public static boolean onHunterActivityButtonClick(double mouseX,double mouseY,int screenH){
+        if(config!=null&&MapToggleOverlay.handleActivityClick(mouseX,mouseY,screenH)){net.townymap.gui.HunterActivityOverlay.toggle(config);return true;}return false;
+    }
+    public static boolean onTeleportButtonClick(double x,double y,int sh){if(config!=null&&MapToggleOverlay.handleTeleportClick(x,y,sh,config)){toggleTeleportTarget();return true;}return false;}
+    public static void renderHunterActivity(DrawContext ctx,int sw,int sh){if(config!=null)net.townymap.gui.HunterActivityOverlay.render(ctx,sw,sh,config,true);}
+    public static void renderHunterActivityHud(DrawContext ctx){MinecraftClient mc=MinecraftClient.getInstance();if(mc.player!=null&&mc.currentScreen==null&&config!=null&&config.hunterWarningEnabled)net.townymap.gui.HunterActivityOverlay.render(ctx,mc.getWindow().getScaledWidth(),mc.getWindow().getScaledHeight(),config,false);}
+    public static void renderWildernessRiskHud(DrawContext ctx,boolean actionBarVisible){if(config==null||!config.hunterWarningEnabled||hunterSystem==null)return;MinecraftClient mc=MinecraftClient.getInstance();if(mc.player==null||mc.currentScreen!=null)return;String line=hunterSystem.wildernessRiskHudLine();if(line.isBlank())return;int sw=mc.getWindow().getScaledWidth(),sh=mc.getWindow().getScaledHeight(),w=mc.textRenderer.getWidth(line),x=sw/2,y=Math.max(4,sh-(actionBarVisible?96:82));ctx.fill(x-w/2-6,y-3,x+w/2+6,y+12,0xD8101216);ctx.drawCenteredTextWithShadow(mc.textRenderer,line,x,y,0xFFFFFFFF);}
+    public static void renderHunterWarningHud(DrawContext ctx){if(config==null||!config.hunterWarningEnabled||hunterSystem==null)return;MinecraftClient mc=MinecraftClient.getInstance();if(mc.player==null||mc.currentScreen!=null)return;java.util.List<String> lines=hunterSystem.warningHudLines();int sw=mc.getWindow().getScaledWidth(),y=8;for(String line:lines){ctx.drawCenteredTextWithShadow(mc.textRenderer,line,sw/2,y,0xFFFFFFFF);y+=13;}}
+    public static boolean clickHunterActivity(double x,double y,int sw,int sh){return config!=null&&net.townymap.gui.HunterActivityOverlay.click(x,y,sw,sh,config);}
+    public static boolean scrollHunterActivity(double x,double y,double amount,int sw,int sh){return config!=null&&net.townymap.gui.HunterActivityOverlay.scroll(x,y,amount,sw,sh,config);}
+
+    public static void openHunterWatchScreen() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client != null) client.setScreen(new net.townymap.gui.HunterWatchScreen(client.currentScreen));
+    }
+    public static java.util.List<net.townymap.hunter.alert.HunterEvent> hunterActivityHistory() {
+        return hunterSystem == null ? java.util.List.of() : hunterSystem.activityHistory();
+    }
+    public static net.townymap.hunter.discovery.HunterCandidateService hunterCandidateService() {
+        return hunterSystem == null ? null : hunterSystem.candidateService();
+    }
+    public static java.util.List<TownData> currentTownSnapshot() { return apiClient == null ? java.util.List.of() : apiClient.getTowns(); }
+    public static boolean teleportTargetArmed(){return teleportTargetArmed;}
+    public static void toggleTeleportTarget(){if(config!=null&&config.teleportViewerEnabled&&config.teleportMapClickAction)teleportTargetArmed=!teleportTargetArmed;}
+    public static boolean consumeTeleportTarget(double worldX,double worldZ){if(!teleportTargetArmed)return false;MinecraftClient mc=MinecraftClient.getInstance();if(mc==null||teleportAccess==null)return true;String name=mc.getSession()==null?"":mc.getSession().getUsername();teleportAccess.ensure(currentTownSnapshot(),name);mc.setScreen(new net.townymap.gui.TeleportViewerScreen(mc.currentScreen,worldX,worldZ));return true;}
+    public static net.townymap.teleport.TeleportAccessService.Plan teleportPlan(double x,double z){if(teleportAccess==null)return new net.townymap.teleport.TeleportAccessService.Plan(java.util.List.of(),java.util.List.of(),null,false,"Unavailable");MinecraftClient mc=MinecraftClient.getInstance();if(mc!=null&&mc.getSession()!=null)teleportAccess.ensure(currentTownSnapshot(),mc.getSession().getUsername());var plan=teleportAccess.plan(x,z);if(config!=null&&config.teleportRememberPrimaryHome&&plan.player()!=null&&!plan.player().town().isBlank()&&!plan.player().town().equals(config.teleportPrimaryHomeTown)){config.teleportPrimaryHomeTown=plan.player().town();config.save();}if(config!=null&&!config.teleportShowUncertain){java.util.function.Predicate<net.townymap.teleport.TeleportRoute> known=r->r.destination().eligibility()!=net.townymap.teleport.TeleportDestination.Eligibility.UNCERTAIN;plan=new net.townymap.teleport.TeleportAccessService.Plan(plan.standard().stream().filter(known).toList(),plan.advanced().stream().filter(known).toList(),plan.player(),plan.loading(),plan.error());}return plan;}
+    public static void cycleTeleportSpawnReport(net.townymap.teleport.TeleportDestination destination){if(teleportAccess!=null)teleportAccess.cycleSpawnReport(destination);}
+    public static String teleportTargetContext(double x,double z){TownData t=TownHoverOverlay.townAt(x,z,currentTownSnapshot());return t==null?Text.translatable("townymapaddon.teleport.wilderness").getString():t.name();}
+
     public static boolean onChunkCounterClick(double worldX, double worldZ) {
         if (!isActiveOnCurrentServer()) return false;
         if (config == null || !config.chunkCounterEnabled) return false;
@@ -3413,6 +3472,7 @@ public class TownyMapMod implements ClientModInitializer {
                 .formatted(Formatting.GOLD)
                 .append(Text.literal(message).formatted(color)), false);
     }
+    private static void sendHunterFeedback(String message){MinecraftClient client=MinecraftClient.getInstance();if(client==null||client.player==null)return;client.player.sendMessage(Text.literal(message),false);}
 
     // Single-town fetch for the hovered/clicked town. Visible-map and search details go through the bulk
     // path (requestTownDetailsBulk); this is only ever called for one town at a time, so it needs no

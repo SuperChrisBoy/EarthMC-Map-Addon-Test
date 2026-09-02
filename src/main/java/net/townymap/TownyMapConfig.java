@@ -121,6 +121,103 @@ public class TownyMapConfig {
     /** Starred nations and players. Towns had this from the start; the other two kinds behave the same. */
     public List<String> favoriteNations = new ArrayList<>();
     public List<String> favoritePlayers = new ArrayList<>();
+    /** User-maintained hunter names. Identity UUIDs are resolved at runtime via the EarthMC API. */
+    public List<String> hunterWatchlist = new ArrayList<>();
+    public List<String> disabledHunterNames = new ArrayList<>();
+    /** Disabled by default; Hunter Alert is currently hidden from the public settings UI. */
+    public boolean hunterWarningEnabled = false;
+    public boolean hunterShowHud = true;
+    public HunterHudPosition hunterHudPosition = HunterHudPosition.RIGHT_OF_MINIMAP;
+    public boolean hunterShowNearby = true;
+    public boolean hunterShowRecentEvents = true;
+    public boolean hunterWarningsInChat = true;
+    public boolean hunterNotificationsInChat = true;
+    public boolean hunterActivityWindowShown = true;
+    public boolean hunterActivityWindowMinimized = false;
+    public int hunterActivityWindowX = -1;
+    public int hunterActivityWindowY = 34;
+    public boolean hunterShowRisk = true;
+    public boolean hunterExposureHud = true;
+    public boolean hunterRadiusOnWorldMap = true;
+    public boolean hunterRadiusOnMinimap = true;
+    public boolean hunterThreatFrontsEnabled=true;
+    public boolean hunterShowPlausibleFront=true;
+    public boolean hunterShowWarningFront=true;
+    public double hunterFrontPlausibleSpeed=8.0;
+    public double hunterFrontWarningSpeed=12.0;
+    public int hunterFrontTeleportDelaySeconds=8;
+    public double hunterFrontTeleportSafetyMargin=1.0;
+    public int hunterFrontWarningLeadSeconds=10;
+    public int hunterFrontMinimapLimit=8;
+    public int hunterFrontWorldMapLimit=40;
+    public boolean hunterKnownFrontWarnings=true;
+    public boolean hunterPotentialFrontWarnings=true;
+    public boolean hunterWarningFrontCrossingAlert=true;
+    public boolean hunterPlausibleFrontCrossingAlert=true;
+    public int hunterFrontReentryHysteresis=32;
+    public boolean hunterFrontVisualInterpolation=true;
+    public int hunterFrontOpacity=55;
+    public int hunterFrontLineThickness=1;
+    public int hunterKillOriginFreshnessSeconds=30;
+    public int hunterTeleportThreatSpatialRadius=5000;
+    public int hunterTeleportThreatClusterRadius=300;
+    public int hunterMaxActiveTeleportThreatsPerHunterMinimap=3;
+    public int hunterMaxActiveTeleportThreatsGlobalMinimap=8;
+    public int hunterMaxActiveTeleportThreatsPerHunterWorldMap=8;
+    public int hunterMaxRelevantTeleportThreats=24;
+    public int hunterTeleportThreatRerankMovement=128;
+    public int hunterTeleportThreatRerankSeconds=5;
+    public int hunterTeleportThreatPromotionHysteresisPercent=8;
+    public int hunterTeleportThreatDemotionHysteresisPercent=4;
+    public boolean hunterShowTeleportThreatClusters=true;
+    public boolean hunterShowLatentTeleportOriginsWorldMap=false;
+    public boolean hunterAggregateTeleportWarnings=true;
+    public boolean hunterDirectionEnabled = true;
+    public int hunterNearbyRadius = 1000;
+    public int hunterElevatedRadius = 500;
+    public int hunterHighRadius = 250;
+    public int hunterCriticalRadius = 100;
+    public int hunterMaxHudEntries = 3;
+    public int hunterTeleportThreatRadius = 2000;
+    public int hunterExposureEntryRadius = 3000;
+    public int hunterExposureEntryLimit = 24;
+    public int hunterExposureEntryBufferSeconds = 30;
+    public int hunterExposureRiskMinutes = 5;
+    public int hunterExposureClaimGraceSeconds = 60;
+    public int hunterWildernessTargetExposureSeconds=420;
+    public boolean hunterPlayerHiddenSafetyEnabled=true;
+    public int hunterPlayerHiddenSafetyDelaySeconds=60;
+    public int hunterPlayerHiddenSafetyRampSeconds=240;
+    public int hunterPlayerHiddenMaximumSafetyReductionPercent=40;
+    public boolean hunterTeleportActivationOnExposure=true;
+    public int hunterTeleportActivationInitialRadius=64;
+    public int hunterThreatRefreshSeconds = 60;
+    public double hunterLungeBlocksPerSecond = 8.0;
+    public int hunterTeleportSetupSeconds = 8;
+    public double hunterArrivalSafetyFactor = 1.0;
+    public int hunterOfflineResidualMinutes = 15;
+    public int hunterNormalEventDurationSecs = 8;
+    public int hunterActivityMaxEvents = 200;
+    public int hunterCandidateOutlawThreshold = 10;
+    public int hunterCandidateRefreshMinutes = 10;
+    public boolean hunterCandidateWarningsEnabled = true;
+    public int hunterCandidateWarningRadius = 1000;
+    public boolean teleportViewerEnabled = true;
+    public boolean teleportMapClickAction = true;
+    public boolean teleportDefaultAdvanced = false;
+    public boolean teleportShowUncertain = true;
+    public boolean teleportShowObstructed = true;
+    public boolean teleportIncludeIceRoads = true;
+    public boolean iceRoadOverlayEnabled = false;
+    public int iceRoadStationFilter = 0;
+    public int teleportAdvancedMaxJoinHops = 1;
+    public boolean teleportRememberPrimaryHome = true;
+    public int teleportWindowX = 118;
+    public int teleportWindowY = 34;
+    public java.util.Map<String,String> teleportSpawnReports = new java.util.HashMap<>();
+    public java.util.Map<String,String> iceRoadStationReports = new java.util.HashMap<>();
+    public String teleportPrimaryHomeTown = "";
+    public enum HunterHudPosition { RIGHT_OF_MINIMAP, LEFT_OF_MINIMAP, BELOW_MINIMAP }
     /**
      * squaremap world the saved selection was drawn in. Chunk keys are raw coordinates with no world
      * attached, so without this a selection made on Terra Nostra reappeared over the Moon. Defaults to
@@ -222,6 +319,8 @@ public class TownyMapConfig {
 
     private boolean sanitize() {
         boolean changed = false;
+        if (teleportSpawnReports == null) { teleportSpawnReports = new java.util.HashMap<>(); changed = true; }
+        if (iceRoadStationReports == null) { iceRoadStationReports = new java.util.HashMap<>(); changed = true; }
 
         // Migrate the old single on/off flag: a config written before the per-map modes existed only
         // knew "on", which meant both maps. Clear the legacy flag afterwards so this runs once.
@@ -245,6 +344,50 @@ public class TownyMapConfig {
             refreshTownsSecs = 60;
             changed = true;
         }
+        int hn = Math.clamp(hunterNearbyRadius, 100, 10000);
+        int he = Math.clamp(hunterElevatedRadius, 50, hn);
+        int hh = Math.clamp(hunterHighRadius, 25, he);
+        int hc = Math.clamp(hunterCriticalRadius, 10, hh);
+        int hm = Math.clamp(hunterMaxHudEntries, 1, 10);
+        int ht = Math.clamp(hunterTeleportThreatRadius, 100, 20000);
+        int hd = Math.clamp(hunterNormalEventDurationSecs, 2, 30);
+        int ha = Math.clamp(hunterActivityMaxEvents, 25, 500);
+        int ho = Math.clamp(hunterCandidateOutlawThreshold, 0, 1000);
+        int hr = Math.clamp(hunterCandidateRefreshMinutes, 5, 60);
+        int hw = Math.clamp(hunterCandidateWarningRadius, 100, 20000);
+        double hl = Math.clamp(hunterLungeBlocksPerSecond, 1.0, 40.0);
+        int hs = Math.clamp(hunterTeleportSetupSeconds, 0, 120);
+        double hf = Math.clamp(hunterArrivalSafetyFactor, 0.25, 4.0);
+        int heb = Math.clamp(hunterExposureEntryBufferSeconds,0,300);
+        int her = Math.clamp(hunterExposureRiskMinutes,1,60);
+        int heg = Math.clamp(hunterExposureClaimGraceSeconds,0,600);
+        int hwte=Math.clamp(hunterWildernessTargetExposureSeconds,30,3600),hhsd=Math.clamp(hunterPlayerHiddenSafetyDelaySeconds,0,600),hhsr=Math.clamp(hunterPlayerHiddenSafetyRampSeconds,1,1800),hhsm=Math.clamp(hunterPlayerHiddenMaximumSafetyReductionPercent,0,80),htai=Math.clamp(hunterTeleportActivationInitialRadius,0,1000);
+        int hor = Math.clamp(hunterOfflineResidualMinutes,0,120);
+        double hps=Math.clamp(hunterFrontPlausibleSpeed,1,40),hws=Math.clamp(hunterFrontWarningSpeed,hps+.1,80),hts=Math.clamp(hunterFrontTeleportSafetyMargin,.25,4);
+        int htd=Math.clamp(hunterFrontTeleportDelaySeconds,0,120),hwl=Math.clamp(hunterFrontWarningLeadSeconds,0,120),hml=Math.clamp(hunterFrontMinimapLimit,1,20),hwm=Math.clamp(hunterFrontWorldMapLimit,1,200),hhy=Math.clamp(hunterFrontReentryHysteresis,0,500),hop=Math.clamp(hunterFrontOpacity,5,100),hlt=Math.clamp(hunterFrontLineThickness,1,4),hkf=Math.clamp(hunterKillOriginFreshnessSeconds,1,120);
+        int htsr=Math.clamp(hunterTeleportThreatSpatialRadius,1000,20000),htcr=Math.clamp(hunterTeleportThreatClusterRadius,32,2000),htpm=Math.clamp(hunterMaxActiveTeleportThreatsPerHunterMinimap,1,10),htgm=Math.clamp(hunterMaxActiveTeleportThreatsGlobalMinimap,1,20),htpw=Math.clamp(hunterMaxActiveTeleportThreatsPerHunterWorldMap,1,30),htre=Math.clamp(hunterMaxRelevantTeleportThreats,1,100),htrm=Math.clamp(hunterTeleportThreatRerankMovement,16,1000),htri=Math.clamp(hunterTeleportThreatRerankSeconds,1,60),htph=Math.clamp(hunterTeleportThreatPromotionHysteresisPercent,0,50),htdh=Math.clamp(hunterTeleportThreatDemotionHysteresisPercent,0,50);
+        if (hn != hunterNearbyRadius || he != hunterElevatedRadius || hh != hunterHighRadius
+                || hc != hunterCriticalRadius || hm != hunterMaxHudEntries || ht != hunterTeleportThreatRadius
+                || hd != hunterNormalEventDurationSecs || ha != hunterActivityMaxEvents
+                || ho != hunterCandidateOutlawThreshold || hr != hunterCandidateRefreshMinutes
+                || hw != hunterCandidateWarningRadius || hl != hunterLungeBlocksPerSecond
+                || hs != hunterTeleportSetupSeconds || hf != hunterArrivalSafetyFactor) changed = true;
+        if(heb!=hunterExposureEntryBufferSeconds||her!=hunterExposureRiskMinutes||heg!=hunterExposureClaimGraceSeconds)changed=true;
+        if(hwte!=hunterWildernessTargetExposureSeconds||hhsd!=hunterPlayerHiddenSafetyDelaySeconds||hhsr!=hunterPlayerHiddenSafetyRampSeconds||hhsm!=hunterPlayerHiddenMaximumSafetyReductionPercent||htai!=hunterTeleportActivationInitialRadius)changed=true;
+        if(hor!=hunterOfflineResidualMinutes)changed=true;
+        if(hps!=hunterFrontPlausibleSpeed||hws!=hunterFrontWarningSpeed||hts!=hunterFrontTeleportSafetyMargin||htd!=hunterFrontTeleportDelaySeconds||hwl!=hunterFrontWarningLeadSeconds||hml!=hunterFrontMinimapLimit||hwm!=hunterFrontWorldMapLimit||hhy!=hunterFrontReentryHysteresis||hop!=hunterFrontOpacity||hlt!=hunterFrontLineThickness||hkf!=hunterKillOriginFreshnessSeconds)changed=true;
+        if(htsr!=hunterTeleportThreatSpatialRadius||htcr!=hunterTeleportThreatClusterRadius||htpm!=hunterMaxActiveTeleportThreatsPerHunterMinimap||htgm!=hunterMaxActiveTeleportThreatsGlobalMinimap||htpw!=hunterMaxActiveTeleportThreatsPerHunterWorldMap||htre!=hunterMaxRelevantTeleportThreats||htrm!=hunterTeleportThreatRerankMovement||htri!=hunterTeleportThreatRerankSeconds||htph!=hunterTeleportThreatPromotionHysteresisPercent||htdh!=hunterTeleportThreatDemotionHysteresisPercent)changed=true;
+        hunterNearbyRadius=hn; hunterElevatedRadius=he; hunterHighRadius=hh; hunterCriticalRadius=hc;
+        hunterMaxHudEntries=hm; hunterTeleportThreatRadius=ht;
+        hunterNormalEventDurationSecs=hd;
+        hunterActivityMaxEvents=ha; hunterCandidateOutlawThreshold=ho; hunterCandidateRefreshMinutes=hr;
+        hunterCandidateWarningRadius=hw;
+        hunterLungeBlocksPerSecond=hl; hunterTeleportSetupSeconds=hs; hunterArrivalSafetyFactor=hf;
+        hunterExposureEntryBufferSeconds=heb;hunterExposureRiskMinutes=her;hunterExposureClaimGraceSeconds=heg;
+        hunterWildernessTargetExposureSeconds=hwte;hunterPlayerHiddenSafetyDelaySeconds=hhsd;hunterPlayerHiddenSafetyRampSeconds=hhsr;hunterPlayerHiddenMaximumSafetyReductionPercent=hhsm;hunterTeleportActivationInitialRadius=htai;
+        hunterOfflineResidualMinutes=hor;
+        hunterFrontPlausibleSpeed=hps;hunterFrontWarningSpeed=hws;hunterFrontTeleportSafetyMargin=hts;hunterFrontTeleportDelaySeconds=htd;hunterFrontWarningLeadSeconds=hwl;hunterFrontMinimapLimit=hml;hunterFrontWorldMapLimit=hwm;hunterFrontReentryHysteresis=hhy;hunterFrontOpacity=hop;hunterFrontLineThickness=hlt;hunterKillOriginFreshnessSeconds=hkf;
+        hunterTeleportThreatSpatialRadius=htsr;hunterTeleportThreatClusterRadius=htcr;hunterMaxActiveTeleportThreatsPerHunterMinimap=htpm;hunterMaxActiveTeleportThreatsGlobalMinimap=htgm;hunterMaxActiveTeleportThreatsPerHunterWorldMap=htpw;hunterMaxRelevantTeleportThreats=htre;hunterTeleportThreatRerankMovement=htrm;hunterTeleportThreatRerankSeconds=htri;hunterTeleportThreatPromotionHysteresisPercent=htph;hunterTeleportThreatDemotionHysteresisPercent=htdh;
         if (refreshPlayersSecs < 1) {
             refreshPlayersSecs = 1;
             changed = true;
@@ -448,6 +591,8 @@ public class TownyMapConfig {
      */
     private static final java.util.Set<String> PRESERVED_ON_RESET = java.util.Set.of(
             "favoriteTowns", "favoriteNations", "favoritePlayers",
+            "hunterWatchlist",
+            "disabledHunterNames",
             "chunkCounterSelection", "chunkCounterGroups",
             "activeChunkCounterGroup", "chunkCounterGroupCount");
 

@@ -21,7 +21,12 @@ import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.*;
 
 /**
@@ -52,6 +57,10 @@ public class EarthMcApiClient {
     /** Batches that exhausted their retries; surfaced after a sweep so silent loss cannot hide. */
     private final java.util.concurrent.atomic.AtomicInteger droppedPlayerBatches =
             new java.util.concurrent.atomic.AtomicInteger();
+    private static final long BULK_ROUTE_CACHE_MS=10L*60*1000;
+    private final Object bulkRouteLock=new Object();
+    private volatile BulkTownSnapshot bulkTownSnapshot;
+    private volatile BulkNationSnapshot bulkNationSnapshot;
 
     // Per-resident activity cache (id → {removalDate, fetchedAt}), so a huge nation like France (1000+
     // residents = ~11 /players calls) is fetched once, then repeat views and other nations that share
@@ -177,6 +186,68 @@ public class EarthMcApiClient {
             return out;
         }, executor);
     }
+
+    /** Bulk full-town snapshot for route planning. Callers must cache it; this is never a render-loop API. */
+    public CompletableFuture<java.util.Map<String,TownFullData>> fetchTownsFull(List<String> names) {
+        List<String> normalized=normalizedNames(names);String signature=String.join("\n",normalized);long now=System.currentTimeMillis();
+        synchronized(bulkRouteLock){BulkTownSnapshot cached=bulkTownSnapshot;if(cached!=null&&cached.signature.equals(signature)&&(cached.future.isDone()||now-cached.createdAt<BULK_ROUTE_CACHE_MS)){if(!cached.future.isDone()||now-cached.createdAt<BULK_ROUTE_CACHE_MS)return cached.future;}
+        CompletableFuture<java.util.Map<String,TownFullData>> future=CompletableFuture.supplyAsync(() -> {
+            java.util.Map<String,TownFullData> out=new ConcurrentHashMap<>();
+            if(normalized.isEmpty())return out;
+            java.util.List<String> list=normalized;
+            java.util.List<CompletableFuture<Void>> futures=new ArrayList<>();
+            for(int i=0;i<list.size();i+=TOWN_QUERY_BATCH){var batch=new ArrayList<>(list.subList(i,Math.min(list.size(),i+TOWN_QUERY_BATCH)));futures.add(CompletableFuture.runAsync(()->fetchTownsFullBatch(batch,out),executor));}
+            futures.forEach(f->{try{f.join();}catch(RuntimeException ignored){}});return java.util.Map.copyOf(out);
+        },executor);bulkTownSnapshot=new BulkTownSnapshot(signature,now,future);future.whenComplete((loaded,error)->{if(error!=null||loaded==null||(!normalized.isEmpty()&&loaded.size()<Math.max(1,(int)(normalized.size()*.9))))synchronized(bulkRouteLock){if(bulkTownSnapshot!=null&&bulkTownSnapshot.future==future)bulkTownSnapshot=null;}});return future;}
+    }
+    public CompletableFuture<java.util.Map<String,NationFullData>> fetchNationsFull(List<String> names){
+        List<String> normalized=normalizedNames(names);String signature=String.join("\n",normalized);long now=System.currentTimeMillis();synchronized(bulkRouteLock){BulkNationSnapshot cached=bulkNationSnapshot;if(cached!=null&&cached.signature.equals(signature)&&(!cached.future.isDone()||now-cached.createdAt<BULK_ROUTE_CACHE_MS))return cached.future;CompletableFuture<java.util.Map<String,NationFullData>> future=CompletableFuture.supplyAsync(()->{Map<String,NationFullData>out=new ConcurrentHashMap<>();if(normalized.isEmpty())return out;List<String>list=normalized;List<CompletableFuture<Void>>fs=new ArrayList<>();for(int i=0;i<list.size();i+=TOWN_QUERY_BATCH){var batch=new ArrayList<>(list.subList(i,Math.min(list.size(),i+TOWN_QUERY_BATCH)));fs.add(CompletableFuture.runAsync(()->fetchNationsFullBatch(batch,out),executor));}fs.forEach(f->{try{f.join();}catch(RuntimeException ignored){}});return Map.copyOf(out);},executor);bulkNationSnapshot=new BulkNationSnapshot(signature,now,future);future.whenComplete((loaded,error)->{if(error!=null||loaded==null||(!normalized.isEmpty()&&loaded.size()<Math.max(1,(int)(normalized.size()*.9))))synchronized(bulkRouteLock){if(bulkNationSnapshot!=null&&bulkNationSnapshot.future==future)bulkNationSnapshot=null;}});return future;}
+    }
+    private static List<String> normalizedNames(List<String> names){if(names==null||names.isEmpty())return List.of();TreeMap<String,String> unique=new TreeMap<>();for(String name:names)if(name!=null&&!name.isBlank())unique.putIfAbsent(name.trim().toLowerCase(Locale.ROOT),name.trim());return List.copyOf(unique.values());}
+    private record BulkTownSnapshot(String signature,long createdAt,CompletableFuture<Map<String,TownFullData>> future){}
+    private record BulkNationSnapshot(String signature,long createdAt,CompletableFuture<Map<String,NationFullData>> future){}
+    private void fetchNationsFullBatch(List<String>names,Map<String,NationFullData>out){JsonObject body=new JsonObject();JsonArray query=new JsonArray();names.forEach(query::add);body.add("query",query);body.add("template",nationRouteTemplate());String json=postGated(BASE+"/nations",body.toString());if(json==null)return;for(JsonElement el:JsonParser.parseString(json).getAsJsonArray())if(el.isJsonObject()){try{NationFullData d=parseNationFull(el.getAsJsonObject());if(d!=null)out.put(d.name().toLowerCase(Locale.ROOT),d);}catch(RuntimeException e){LOGGER.debug("[TownyMap] Skipped nation route record",e);}}}
+    private void fetchTownsFullBatch(List<String> names,java.util.Map<String,TownFullData> out){
+        JsonObject body=new JsonObject();JsonArray query=new JsonArray();names.forEach(query::add);body.add("query",query);
+        body.add("template",townRouteTemplate());
+        String json=postGated(BASE+"/towns",body.toString());if(json==null)return;
+        JsonArray arr=JsonParser.parseString(json).getAsJsonArray();for(JsonElement el:arr)if(el.isJsonObject()){try{TownFullData d=parseTownFull(el.getAsJsonObject());if(d!=null&&d.name()!=null)out.put(d.name().toLowerCase(Locale.ROOT),d);}catch(RuntimeException e){LOGGER.debug("[TownyMap] Skipped town route record",e);}}
+    }
+
+    /** Only fields consumed by TeleportAccessService; omits the very large resident/outlaw rosters. */
+    static JsonObject townRouteTemplate(){JsonObject t=new JsonObject();for(String field:new String[]{"name","nation","coordinates","status","stats","trusted"})t.addProperty(field,true);return t;}
+    /** Only fields consumed by teleport access/ranking; omits towns, residents, ranks and pacts. */
+    static JsonObject nationRouteTemplate(){JsonObject t=new JsonObject();for(String field:new String[]{"name","coordinates","status","allies","enemies"})t.addProperty(field,true);return t;}
+
+    /** Builds the official-town-data reverse outlaw relationship for Hunter Candidate discovery. */
+    public CompletableFuture<OutlawIndexSnapshot> fetchOutlawTownIndex(List<String> names) {
+        return CompletableFuture.supplyAsync(() -> {
+            java.util.Map<String, java.util.Set<String>> index = new ConcurrentHashMap<>();
+            java.util.Map<String,String> displayNames = new ConcurrentHashMap<>();
+            if (names == null || names.isEmpty()) return new OutlawIndexSnapshot(Map.of(), Map.of(), 0, System.currentTimeMillis());
+            java.util.LinkedHashSet<String> unique = new java.util.LinkedHashSet<>();
+            for (String n : names) if (n != null && !n.isBlank()) unique.add(n);
+            List<String> list = new ArrayList<>(unique);
+            java.util.concurrent.atomic.AtomicInteger scanned = new java.util.concurrent.atomic.AtomicInteger();
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
+            for (int i=0;i<list.size();i+=TOWN_QUERY_BATCH) {
+                List<String> batch=new ArrayList<>(list.subList(i,Math.min(list.size(),i+TOWN_QUERY_BATCH)));
+                futures.add(CompletableFuture.runAsync(()->outlawIndexBatch(batch,index,displayNames,scanned),executor));
+            }
+            for(CompletableFuture<Void> f:futures)try{f.join();}catch(RuntimeException ignored){}
+            Map<String,Set<String>> immutable=new HashMap<>();index.forEach((k,v)->immutable.put(k,Set.copyOf(v)));
+            return new OutlawIndexSnapshot(Map.copyOf(immutable),Map.copyOf(displayNames),scanned.get(),System.currentTimeMillis());
+        },executor);
+    }
+    private void outlawIndexBatch(List<String> batch,Map<String,Set<String>> index,Map<String,String> displayNames,
+                                  java.util.concurrent.atomic.AtomicInteger scanned) {
+        JsonObject body=new JsonObject();JsonArray q=new JsonArray();batch.forEach(q::add);body.add("query",q);
+        String json=postGated(BASE+"/towns",body.toString());if(json==null)return;
+        JsonArray arr;try{arr=JsonParser.parseString(json).getAsJsonArray();}catch(RuntimeException e){return;}
+        for(JsonElement el:arr){if(!el.isJsonObject())continue;JsonObject town=el.getAsJsonObject();String townName=str(town,"name","");if(townName.isBlank())continue;scanned.incrementAndGet();JsonElement roster=town.get("outlaws");if(roster==null||!roster.isJsonArray())continue;for(JsonElement entry:roster.getAsJsonArray()){String player=null;if(entry.isJsonPrimitive())player=entry.getAsString();else if(entry.isJsonObject())player=str(entry.getAsJsonObject(),"name",null);if(player==null||player.isBlank())continue;String key=player.toLowerCase(Locale.ROOT);displayNames.putIfAbsent(key,player);index.computeIfAbsent(key,k->ConcurrentHashMap.newKeySet()).add(townName);}}
+    }
+    public record OutlawIndexSnapshot(Map<String,Set<String>> townsByPlayer,Map<String,String> displayNames,
+                                      int townsScanned,long refreshedAtMs) {}
 
     private void countRosterBatch(List<String> batch, java.util.Map<String, int[]> out) {
         JsonObject body = new JsonObject();

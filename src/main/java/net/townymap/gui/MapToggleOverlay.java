@@ -24,7 +24,7 @@ public final class MapToggleOverlay {
     private static final int ADD_WIDTH = 20;
     private static final int FILL_WIDTH = 34;
     private static final int SETTINGS_GAP = 7;   // extra gap above the settings button
-    private static final int TOGGLE_ROWS = 6;    // Squaremap | Borders | Map mode | World | Chunks | Counter
+    private static final int TOGGLE_ROWS = 7;    // Squaremap | Borders | Map mode | World | Chunks | Counter | Ice
 
     private MapToggleOverlay() {}
 
@@ -45,6 +45,7 @@ public final class MapToggleOverlay {
                 !TownyMapMod.viewingEarth() || config.mapWorldMode != TownyMapMod.WORLD_MODE_AUTO);
         drawToggle(ctx, tr, 4, y, "Chunks", config.chunkGridEnabled);
         drawMode(ctx, tr, 5, y, "Counter", ChunkCounterOverlay.toolbarLabel(config), config.chunkCounterEnabled);
+        drawToggle(ctx, tr, 6, y, Text.translatable("townymapaddon.map_controls.ice_roads").getString(), config.iceRoadOverlayEnabled);
         if (config.chunkCounterEnabled) {
             if (ChunkCounterOverlay.isMultiMode(config)) {
                 drawCounterGroupButtons(ctx, tr, config);
@@ -53,6 +54,9 @@ public final class MapToggleOverlay {
         }
 
         drawSettingsButton(ctx, tr, settingsTop(sh));
+        if(config.teleportViewerEnabled)drawTexturedButton(ctx,LEFT,teleportTop(sh),WIDTH,HEIGHT,Text.translatable(TownyMapMod.teleportTargetArmed()?"townymapaddon.teleport.toggle.on":"townymapaddon.teleport.title").getString(),true,TownyMapMod.teleportTargetArmed()?0xFF7EE2B8:0xFFFFFFFF);
+        drawTexturedButton(ctx, LEFT, hunterTop(sh), WIDTH, HEIGHT, Text.translatable("townymapaddon.hunter.watch.title").getString(), true, 0xFFFFB45C);
+        drawTexturedButton(ctx, LEFT+WIDTH+3, hunterTop(sh), 26, HEIGHT, "Log", true, 0xFF9FD7FF);
         } finally {
             if (scaled) UiScale.pop(ctx);
         }
@@ -107,6 +111,7 @@ public final class MapToggleOverlay {
                         config.chunkCounterMode = 2;
                     }
                 }
+                case 6 -> config.iceRoadOverlayEnabled = !config.iceRoadOverlayEnabled;
                 default -> { return false; }
             }
             config.save();
@@ -122,6 +127,18 @@ public final class MapToggleOverlay {
         int sy = settingsTop(sh);
         return mouseY >= sy && mouseY <= sy + HEIGHT;
     }
+
+    public static boolean handleHunterClick(double mouseX, double mouseY, int sh) {
+        if (UiScale.active()) { mouseX = UiScale.unscale(mouseX, LEFT); mouseY = UiScale.unscale(mouseY, togglesTop(sh)); }
+        if (mouseX < LEFT || mouseX > LEFT + WIDTH) return false;
+        int y = hunterTop(sh);
+        return mouseY >= y && mouseY <= y + HEIGHT;
+    }
+    public static boolean handleActivityClick(double mouseX,double mouseY,int sh){
+        if(UiScale.active()){mouseX=UiScale.unscale(mouseX,LEFT);mouseY=UiScale.unscale(mouseY,togglesTop(sh));}
+        int y=hunterTop(sh);return mouseX>=LEFT+WIDTH+3&&mouseX<=LEFT+WIDTH+29&&mouseY>=y&&mouseY<=y+HEIGHT;
+    }
+    public static boolean handleTeleportClick(double mouseX,double mouseY,int sh,TownyMapConfig config){if(!config.teleportViewerEnabled)return false;if(UiScale.active()){mouseX=UiScale.unscale(mouseX,LEFT);mouseY=UiScale.unscale(mouseY,togglesTop(sh));}int y=teleportTop(sh);return mouseX>=LEFT&&mouseX<=LEFT+WIDTH&&mouseY>=y&&mouseY<=y+HEIGHT;}
 
     private static void drawToggle(DrawContext ctx, TextRenderer tr, int row, int baseY,
                                    String name, boolean enabled) {
@@ -156,13 +173,16 @@ public final class MapToggleOverlay {
 
     /** Top edge of the toggle column — other left-side HUD must stay above this. */
     public static int togglesTop(int sh) {
-        int totalHeight = TOGGLE_ROWS * HEIGHT + (TOGGLE_ROWS - 1) * GAP + SETTINGS_GAP + HEIGHT;
+        int totalHeight = TOGGLE_ROWS * HEIGHT + (TOGGLE_ROWS - 1) * GAP + SETTINGS_GAP + HEIGHT + GAP + HEIGHT + GAP + HEIGHT;
         return Math.max(8, (sh - totalHeight) / 2);
     }
 
     private static int settingsTop(int sh) {
         return togglesTop(sh) + TOGGLE_ROWS * (HEIGHT + GAP) + SETTINGS_GAP;
     }
+
+    private static int teleportTop(int sh){return settingsTop(sh)+HEIGHT+GAP;}
+    private static int hunterTop(int sh) { return teleportTop(sh) + HEIGHT + GAP; }
 
     private static void drawSettingsButton(DrawContext ctx, TextRenderer tr, int y) {
         String label = "⚙ Settings";
