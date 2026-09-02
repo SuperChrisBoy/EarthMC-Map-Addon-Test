@@ -139,6 +139,7 @@ public abstract class MixinGuiMap {
             double mapScale = guiScale / dimMul;
             TownyMapMod.renderSquaremapBackground(ctx, camX, camZ, mapScale, w, h);
             TownyMapMod.renderOnWorldMap(ctx, camX, camZ, mapScale, w, h);
+            TownyMapMod.renderIceRoads(ctx, camX, camZ, mapScale, w, h);
             if (mapScale > 0) {
                 double worldX = (mouseX - w / 2.0) / mapScale + camX;
                 double worldZ = (mouseY - h / 2.0) / mapScale + camZ;
@@ -405,6 +406,7 @@ public abstract class MixinGuiMap {
                 cir.setReturnValue(true);
                 return;
             }
+            if(button==0&&TownyMapMod.clickIceRoads(click.x(),click.y(),sw,sh)){cir.setReturnValue(true);return;}
             if(button==0&&TownyMapMod.teleportTargetArmed()){double[] world=overlayWorldFromScreen(click.x(),click.y(),sw,sh);if(world!=null&&TownyMapMod.consumeTeleportTarget(world[0],world[1])){cir.setReturnValue(true);return;}}
 
             // Planning counter chips ("+" arms placement, T# removes that planned town).

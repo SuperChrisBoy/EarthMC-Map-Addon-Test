@@ -9,6 +9,7 @@ import net.townymap.TownyMapMod;
 import net.townymap.integration.XaeroWaypointBridge;
 import net.townymap.teleport.TeleportDestination;
 import net.townymap.teleport.TeleportRoute;
+import net.townymap.ice.IceRoadNetwork;
 
 import java.util.List;
 import java.util.Locale;
@@ -17,7 +18,8 @@ import java.util.Locale;
 public final class TeleportViewerScreen extends Screen {
     private final Screen parent;
     private final double targetX, targetZ;
-    private boolean advanced, lastLoading = true;
+    private boolean advanced, lastLoading = true, usableOnly = true;
+    private int accessFilter;
     private int scroll;
     private String feedback = "";
 
@@ -33,6 +35,9 @@ public final class TeleportViewerScreen extends Screen {
         int left = Math.max(12, (width - Math.min(620, width - 24)) / 2), right = width - left;
         addDrawableChild(ButtonWidget.builder(Text.translatable("townymapaddon.teleport.mode.standard"), b -> setAdvanced(false)).dimensions(left + 12, 72, 120, 22).build());
         addDrawableChild(ButtonWidget.builder(Text.translatable("townymapaddon.teleport.mode.advanced"), b -> setAdvanced(true)).dimensions(left + 138, 72, 120, 22).build());
+        addDrawableChild(ButtonWidget.builder(Text.translatable(usableOnly?"townymapaddon.teleport.view.usable":"townymapaddon.teleport.view.all_spawns"), b -> {usableOnly=!usableOnly;scroll=0;clearAndInit();}).dimensions(left+264,72,110,22).build());
+        addDrawableChild(ButtonWidget.builder(Text.translatable("townymapaddon.teleport.ice_roads",TownyMapMod.getConfig().teleportIncludeIceRoads?"On":"Off"), b -> {var c=TownyMapMod.getConfig();c.teleportIncludeIceRoads=!c.teleportIncludeIceRoads;c.save();scroll=0;clearAndInit();}).dimensions(left+380,72,100,22).build());
+        addDrawableChild(ButtonWidget.builder(Text.translatable("townymapaddon.teleport.filter."+(accessFilter==1?"accessible":accessFilter==2?"blocked":"everything")), b -> {accessFilter=(accessFilter+1)%3;scroll=0;clearAndInit();}).dimensions(left+486,72,112,22).build());
         addDrawableChild(ButtonWidget.builder(Text.translatable("townymapaddon.teleport.target_waypoint"), b -> targetWaypoint()).dimensions(right - 176, 42, 164, 22).build());
         List<TeleportRoute> routes = routes();
         for (int i = 0; i < routes.size(); i++) {
@@ -55,7 +60,13 @@ public final class TeleportViewerScreen extends Screen {
 
     private List<TeleportRoute> routes() {
         var plan = TownyMapMod.teleportPlan(targetX, targetZ);
-        return advanced ? plan.advanced() : plan.standard();
+        List<TeleportRoute> result=advanced ? plan.advanced() : plan.standard();
+        var cfg=TownyMapMod.getConfig();
+        if(usableOnly)result=result.stream().filter(r->r.destination().eligibility()!=TeleportDestination.Eligibility.UNAVAILABLE).toList();
+        if(accessFilter==1)result=result.stream().filter(r->r.destination().physicalAccess()==TeleportDestination.PhysicalAccess.ACCESSIBLE).toList();
+        else if(accessFilter==2)result=result.stream().filter(r->r.destination().physicalAccess()==TeleportDestination.PhysicalAccess.OBSTRUCTED).toList();
+        if(cfg.teleportIncludeIceRoads)result=IceRoadNetwork.get().enrich(result,targetX,targetZ,cfg.iceRoadStationReports,accessFilter==1);
+        return result;
     }
 
     private void setAdvanced(boolean value) { advanced = value; scroll = 0; clearAndInit(); }

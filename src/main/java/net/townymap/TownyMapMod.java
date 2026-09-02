@@ -174,6 +174,7 @@ public class TownyMapMod implements ClientModInitializer {
         ClientReceiveMessageEvents.GAME.register(TownyMapMod::onGameMessage);
         net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK.register(c -> {
             net.townymap.integration.ShopWaypoints.tick();
+            if (c.world != null && isActiveOnCurrentServer()) net.townymap.ice.IceRoadNetwork.tickAutoUpdate();
             if (hunterSystem != null && apiClient != null && isActiveOnCurrentServer()) {
                 apiClient.tickPlayers();
                 hunterSystem.tick(c, apiClient.getPlayers(), apiClient.getTowns());
@@ -1233,6 +1234,11 @@ public class TownyMapMod implements ClientModInitializer {
                     renderer != null && renderer.isBorderLoading());
         }
     }
+
+    public static void renderIceRoads(DrawContext ctx,double cameraX,double cameraZ,double scale,int width,int height){
+        if(isActiveOnCurrentServer()&&config!=null) net.townymap.gui.IceRoadOverlay.render(ctx,cameraX,cameraZ,scale,width,height,config);
+    }
+    public static boolean clickIceRoads(double x,double y,int width,int height){return config!=null&&net.townymap.gui.IceRoadOverlay.click(x,y,width,height,config);}
 
     /** The Planning-mode town counter, drawn top-left alongside the other map HUD. */
     public static void renderPlanningCounter(DrawContext ctx, int screenW, int screenH) {

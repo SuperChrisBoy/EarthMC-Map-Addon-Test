@@ -6,6 +6,12 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class HunterCandidateTrackingRegressionTest {
+    @Test void dynmapOnlyRangeUsesVisibleCoordinatesAndDimensionScale(){
+        assertTrue(HunterEarlyWarningSystem.isNearbyDynmapHunter(0,0,999,0,1,1000));
+        assertFalse(HunterEarlyWarningSystem.isNearbyDynmapHunter(0,0,1001,0,1,1000));
+        assertTrue(HunterEarlyWarningSystem.isNearbyDynmapHunter(0,0,8000,0,8,1000));
+        assertFalse(HunterEarlyWarningSystem.isNearbyDynmapHunter(0,0,1,0,0,1000));
+    }
     @Test void teleportOriginRefreshDoesNotDependOnWildernessSession(){assertTrue(HunterEarlyWarningSystem.approachRefreshDue(true,false,true,1_000,0,60_000));assertTrue(HunterEarlyWarningSystem.approachRefreshDue(true,false,false,61_000,1_000,60_000));assertFalse(HunterEarlyWarningSystem.approachRefreshDue(false,true,true,61_000,0,60_000));}
     @Test void newCandidateSurvivesUntilItsFirstTrackingUpdate(){
         assertFalse(HunterEarlyWarningSystem.candidateShouldRemove(false,false,0,false,1_000));

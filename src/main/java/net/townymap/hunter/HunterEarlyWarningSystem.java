@@ -27,6 +27,7 @@ import java.util.regex.Pattern;
 
 /** Client-thread coordinator. Networking remains in the existing async EarthMC/Squaremap clients. */
 public final class HunterEarlyWarningSystem {
+    static boolean isNearbyDynmapHunter(double playerX,double playerZ,double hunterX,double hunterZ,double dimensionScale,int radiusBlocks){return dimensionScale>0&&Math.hypot(hunterX-playerX,hunterZ-playerZ)/dimensionScale<=radiusBlocks;}
     private static final Pattern DEATH = Pattern.compile("^([A-Za-z0-9_]{1,16}) (was slain by|was shot by|was blown up by|was killed by) ([A-Za-z0-9_]{1,16})(?: using .*)?$");
     private final TownyMapConfig config; private final EarthMcApiClient earth;
     private final Map<String,HunterState> states = new LinkedHashMap<>();

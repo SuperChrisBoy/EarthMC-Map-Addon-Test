@@ -207,11 +207,15 @@ public class TownyMapConfig {
     public boolean teleportDefaultAdvanced = false;
     public boolean teleportShowUncertain = true;
     public boolean teleportShowObstructed = true;
+    public boolean teleportIncludeIceRoads = true;
+    public boolean iceRoadOverlayEnabled = false;
+    public int iceRoadStationFilter = 0;
     public int teleportAdvancedMaxJoinHops = 1;
     public boolean teleportRememberPrimaryHome = true;
     public int teleportWindowX = 118;
     public int teleportWindowY = 34;
     public java.util.Map<String,String> teleportSpawnReports = new java.util.HashMap<>();
+    public java.util.Map<String,String> iceRoadStationReports = new java.util.HashMap<>();
     public String teleportPrimaryHomeTown = "";
     public enum HunterHudPosition { RIGHT_OF_MINIMAP, LEFT_OF_MINIMAP, BELOW_MINIMAP }
     /**
@@ -315,6 +319,8 @@ public class TownyMapConfig {
 
     private boolean sanitize() {
         boolean changed = false;
+        if (teleportSpawnReports == null) { teleportSpawnReports = new java.util.HashMap<>(); changed = true; }
+        if (iceRoadStationReports == null) { iceRoadStationReports = new java.util.HashMap<>(); changed = true; }
 
         // Migrate the old single on/off flag: a config written before the per-map modes existed only
         // knew "on", which meant both maps. Clear the legacy flag afterwards so this runs once.

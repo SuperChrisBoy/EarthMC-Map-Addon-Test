@@ -206,12 +206,18 @@ public class EarthMcApiClient {
     private static List<String> normalizedNames(List<String> names){if(names==null||names.isEmpty())return List.of();TreeMap<String,String> unique=new TreeMap<>();for(String name:names)if(name!=null&&!name.isBlank())unique.putIfAbsent(name.trim().toLowerCase(Locale.ROOT),name.trim());return List.copyOf(unique.values());}
     private record BulkTownSnapshot(String signature,long createdAt,CompletableFuture<Map<String,TownFullData>> future){}
     private record BulkNationSnapshot(String signature,long createdAt,CompletableFuture<Map<String,NationFullData>> future){}
-    private void fetchNationsFullBatch(List<String>names,Map<String,NationFullData>out){JsonObject body=new JsonObject();JsonArray query=new JsonArray();names.forEach(query::add);body.add("query",query);String json=postGated(BASE+"/nations",body.toString());if(json==null)return;for(JsonElement el:JsonParser.parseString(json).getAsJsonArray())if(el.isJsonObject()){try{NationFullData d=parseNationFull(el.getAsJsonObject());if(d!=null)out.put(d.name().toLowerCase(Locale.ROOT),d);}catch(RuntimeException e){LOGGER.debug("[TownyMap] Skipped nation route record",e);}}}
+    private void fetchNationsFullBatch(List<String>names,Map<String,NationFullData>out){JsonObject body=new JsonObject();JsonArray query=new JsonArray();names.forEach(query::add);body.add("query",query);body.add("template",nationRouteTemplate());String json=postGated(BASE+"/nations",body.toString());if(json==null)return;for(JsonElement el:JsonParser.parseString(json).getAsJsonArray())if(el.isJsonObject()){try{NationFullData d=parseNationFull(el.getAsJsonObject());if(d!=null)out.put(d.name().toLowerCase(Locale.ROOT),d);}catch(RuntimeException e){LOGGER.debug("[TownyMap] Skipped nation route record",e);}}}
     private void fetchTownsFullBatch(List<String> names,java.util.Map<String,TownFullData> out){
         JsonObject body=new JsonObject();JsonArray query=new JsonArray();names.forEach(query::add);body.add("query",query);
+        body.add("template",townRouteTemplate());
         String json=postGated(BASE+"/towns",body.toString());if(json==null)return;
         JsonArray arr=JsonParser.parseString(json).getAsJsonArray();for(JsonElement el:arr)if(el.isJsonObject()){try{TownFullData d=parseTownFull(el.getAsJsonObject());if(d!=null&&d.name()!=null)out.put(d.name().toLowerCase(Locale.ROOT),d);}catch(RuntimeException e){LOGGER.debug("[TownyMap] Skipped town route record",e);}}
     }
+
+    /** Only fields consumed by TeleportAccessService; omits the very large resident/outlaw rosters. */
+    static JsonObject townRouteTemplate(){JsonObject t=new JsonObject();for(String field:new String[]{"name","nation","coordinates","status","stats","trusted"})t.addProperty(field,true);return t;}
+    /** Only fields consumed by teleport access/ranking; omits towns, residents, ranks and pacts. */
+    static JsonObject nationRouteTemplate(){JsonObject t=new JsonObject();for(String field:new String[]{"name","coordinates","status","allies","enemies"})t.addProperty(field,true);return t;}
 
     /** Builds the official-town-data reverse outlaw relationship for Hunter Candidate discovery. */
     public CompletableFuture<OutlawIndexSnapshot> fetchOutlawTownIndex(List<String> names) {
