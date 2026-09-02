@@ -23,12 +23,12 @@
   "depends": {
     "fabricloader": ">=0.15.0",
     "fabric-api":   "*",
-    "minecraft":    ">=26.2 <26.3"
+    "minecraft":    ">=26.2 <26.3",
+    "xaerominimap":  "*",
+    "xaeroworldmap": "*"
   },
   "suggests": {
-    "xaeroworldmap": "*",
-    "xaerosminimap": "*",
-    "modmenu":       "*"
+    "modmenu": "*"
   },
   "custom": {
     "modmenu": {

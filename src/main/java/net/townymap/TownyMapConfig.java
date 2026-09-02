@@ -231,6 +231,12 @@ public class TownyMapConfig {
     public int teleportWindowY = 34;
     public java.util.Map<String,String> teleportSpawnReports = new java.util.HashMap<>();
     public enum HunterHudPosition { RIGHT_OF_MINIMAP, LEFT_OF_MINIMAP, BELOW_MINIMAP }
+    /**
+     * squaremap world the saved selection was drawn in. Chunk keys are raw coordinates with no world
+     * attached, so without this a selection made on Terra Nostra reappeared over the Moon. Defaults to
+     * the overworld so selections saved before the Moon existed keep working.
+     */
+    public String chunkCounterWorld = "minecraft_overworld";
     public List<Long> chunkCounterSelection = new ArrayList<>();
     public List<List<Long>> chunkCounterGroups = new ArrayList<>();
 
@@ -268,11 +274,37 @@ public class TownyMapConfig {
     // ── API endpoints ────────────────────────────────────────────────────────
     public String squaremapBaseUrl = "https://map.earthmc.net";
     public String worldKey         = "minecraft_overworld";
+    /**
+     * Which squaremap world the map shows: 0 = Terra Nostra, 1 = the Moon.
+     *
+     * <p>Always Terra Nostra unless you switch it, so nothing changes under you when you travel. While
+     * the map shows a world you are not standing in, player markers are hidden -- their coordinates
+     * belong to the other world, and the two overlap numerically.
+     */
+    /**
+      * 0 = Auto (follow the dimension you are in), 1 = Terra Nostra, 2 = Moon.
+      *
+      * <p>Auto is the default: EarthMC's earthmc:space and earthmc:moon both show the Moon, everything
+      * else shows Terra Nostra. Clicking the World button pins one world and stops the following;
+      * cycling back round to Auto resumes it.
+      */
+    public int mapWorldMode = 0;
     public int squaremapMaxZoom    = 5;
 
     // ── Computed URLs ────────────────────────────────────────────────────────
     public String markersUrl() {
-        return squaremapBaseUrl + "/tiles/" + worldKey + "/markers.json";
+        return markersUrl(worldKey);
+    }
+
+    /** Markers for a specific squaremap world, so the active world can differ from the configured one. */
+    public String markersUrl(String world) {
+        return squaremapBaseUrl + "/tiles/" + (world == null || world.isBlank() ? worldKey : world)
+                + "/markers.json";
+    }
+
+    /** The world list squaremap publishes, used to validate a dimension before we try to show it. */
+    public String worldsUrl() {
+        return squaremapBaseUrl + "/tiles/settings.json";
     }
     public String playersUrl() {
         return squaremapBaseUrl + "/tiles/players.json";
@@ -380,6 +412,10 @@ public class TownyMapConfig {
             changed = true;
         } else if (squaremapMaxZoom > 8) {
             squaremapMaxZoom = 8;
+            changed = true;
+        }
+        if (mapWorldMode < 0 || mapWorldMode > 2) {
+            mapWorldMode = 0;
             changed = true;
         }
         if (borderOverlayMode < 0 || borderOverlayMode > 2) {

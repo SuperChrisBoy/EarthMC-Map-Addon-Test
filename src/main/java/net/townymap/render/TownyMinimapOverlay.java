@@ -146,6 +146,11 @@ public final class TownyMinimapOverlay {
             if (config.netherMode == 2
                     && client.level.dimension() == net.minecraft.world.level.Level.NETHER) {
                 dimScale = TownyMapMod.dimensionCoordinateScale();   // Overworld Coords
+            } else if (!TownyMapMod.WORLD_OVERWORLD.equals(TownyMapMod.playerWorldResolved())) {
+                // A world squaremap maps -- the Moon. Claims there are at real 1:1 coordinates, so draw
+                // exactly as on Earth. Deliberately NOT tied to the world the map is showing: the
+                // minimap draws where the player stands, whatever the world map is pinned to.
+                dimScale = 1.0;
             } else if (TownyMapMod.isOnEarthMcServer()) {
                 return;                                              // Hidden
             }
@@ -193,7 +198,10 @@ public final class TownyMinimapOverlay {
                     pixelsPerBlock, angle, clip);
         }
 
-        if (api.getTowns().isEmpty()) {
+        // The minimap draws where the player IS, so it asks for that world's claims by name -- the world
+        // map may be pinned to the other one, and both are held now.
+        String minimapWorld = TownyMapMod.playerWorldResolved();
+        if (api.getTowns(minimapWorld).isEmpty()) {
             lastRenderCanCoverWaypoints = squaremapRendered || config.chunkCounterEnabled;
             if (squaremapRendered) {
                 renderMinimapChunkGrid(ctx, session, config, centerX, centerY, playerX, playerZ,
@@ -249,7 +257,7 @@ public final class TownyMinimapOverlay {
             }
         }
 
-        List<TownData> towns = api.getTowns();
+        List<TownData> towns = api.getTowns(minimapWorld);
         VisibleRenderData renderData = cachedVisibleRenderData(towns, minChunkX, minChunkZ, chunkWidth, chunkHeight);
         lastRenderCanCoverWaypoints = squaremapRendered || config.chunkCounterEnabled || !renderData.fillSpans().isEmpty();
 
@@ -296,7 +304,12 @@ public final class TownyMinimapOverlay {
                     drawVisibleTownEdges(ctx, renderData.edges(), config);
                     drawOptimisticClaimChunks(ctx);
                     if (config.chunkCounterEnabled) {
-                        ChunkCounterOverlay.renderWorldSpace(ctx);
+                        // Pass the visible block rect so a large selection only draws what is on screen.
+                        // Rotation means the diagonal is the worst case, hence the 1.5x margin.
+                        double half = (size / 2.0) / Math.max(0.0001, pixelsPerBlock) * 1.5;
+                        ChunkCounterOverlay.renderWorldSpace(ctx,
+                                (int) (playerX - half), (int) (playerZ - half),
+                                (int) (playerX + half), (int) (playerZ + half));
                     }
                 } finally {
                     matrices.popMatrix();
@@ -309,7 +322,7 @@ public final class TownyMinimapOverlay {
         if(config.hunterWarningEnabled&&config.hunterRadiusOnMinimap&&!TownyMapMod.isArchiveMode())XaeroRadiusOverlayRenderer.minimap(ctx,TownyMapMod.hunterMinimapRadiusOverlays(),centerX,centerY,playerX,playerZ,pixelsPerBlock,sin,cos,clip.left(),clip.top(),clip.right(),clip.bottom());
         if (config.playersEnabled && config.minimapPlayersEnabled
                 && !TownyMapMod.isArchiveMode()) {   // archived snapshots have no live players
-            renderPlayerDots(ctx, api.getPlayers(), player.getName().getString(),
+            renderPlayerDots(ctx, api.getPlayers(minimapWorld), player.getName().getString(),
                     mapX, mapY, size, playerX, playerZ, pixelsPerBlock, sin, cos,
                     clip);
         }
@@ -530,7 +543,10 @@ public final class TownyMinimapOverlay {
             matrices.rotate((float) angle);
             matrices.scale((float) pixelsPerBlock, (float) pixelsPerBlock);
             matrices.translate((float) -playerX, (float) -playerZ);
-            ChunkCounterOverlay.renderWorldSpace(ctx);
+            double halfSel = (size / 2.0) / Math.max(0.0001, pixelsPerBlock) * 1.5;
+            ChunkCounterOverlay.renderWorldSpace(ctx,
+                    (int) (playerX - halfSel), (int) (playerZ - halfSel),
+                    (int) (playerX + halfSel), (int) (playerZ + halfSel));
         } finally {
             matrices.popMatrix();
             ctx.disableScissor();
@@ -860,7 +876,7 @@ public final class TownyMinimapOverlay {
     }
 
     private static void drawOptimisticClaimChunks(GuiGraphicsExtractor ctx) {
-        for (OptimisticClaimChunk chunk : TownyMapMod.optimisticClaimChunks()) {
+        for (OptimisticClaimChunk chunk : TownyMapMod.optimisticClaimChunks(TownyMapMod.playerWorldResolved())) {
             int blockX = chunk.blockX();
             int blockZ = chunk.blockZ();
             ctx.fill(blockX, blockZ, blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE, chunk.fillColor());
@@ -876,7 +892,7 @@ public final class TownyMinimapOverlay {
                                                   double playerX, double playerZ,
                                                   double pixelsPerBlock, double sin, double cos) {
         Matrix3x2fStack matrices = ctx.pose();
-        for (OptimisticClaimChunk chunk : TownyMapMod.optimisticClaimChunks()) {
+        for (OptimisticClaimChunk chunk : TownyMapMod.optimisticClaimChunks(TownyMapMod.playerWorldResolved())) {
             int blockX = chunk.blockX();
             int blockZ = chunk.blockZ();
             matrices.pushMatrix();
@@ -1391,6 +1407,11 @@ public final class TownyMinimapOverlay {
             if (config.netherMode == 2
                     && client.level.dimension() == net.minecraft.world.level.Level.NETHER) {
                 dimScale = TownyMapMod.dimensionCoordinateScale();
+            } else if (!TownyMapMod.WORLD_OVERWORLD.equals(TownyMapMod.playerWorldResolved())) {
+                // A world squaremap maps -- the Moon. Claims there are at real 1:1 coordinates, so draw
+                // exactly as on Earth. Deliberately NOT tied to the world the map is showing: the
+                // minimap draws where the player stands, whatever the world map is pinned to.
+                dimScale = 1.0;
             } else if (TownyMapMod.isOnEarthMcServer()) {
                 return;
             }
@@ -1472,7 +1493,8 @@ public final class TownyMinimapOverlay {
         TownyMapConfig cfg = TownyMapMod.getConfig();
         boolean heads = cfg != null && (cfg.playerHeadMode & 2) != 0;   // bit 1 = minimap
         List<TownyMapMod.GhostMarker> ghosts =
-                (cfg != null && cfg.playerLastSeen) ? TownyMapMod.lastSeenGhosts() : java.util.List.of();
+                (cfg != null && cfg.playerLastSeen)
+                        ? TownyMapMod.lastSeenGhosts(TownyMapMod.playerWorldResolved()) : java.util.List.of();
         if (players.isEmpty() && ghosts.isEmpty()) return;
 
         ctx.enableScissor(clip.left(), clip.top(), clip.right() + 1, clip.bottom() + 1);

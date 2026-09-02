@@ -3,6 +3,7 @@ package net.townymap.gui;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.townymap.TownyMapMod;
 import net.townymap.model.TownData;
 import net.townymap.model.TownPopupData;
 
@@ -167,6 +168,9 @@ public final class TownHoverOverlay {
     }
 
     private static int chunks(TownData town, TownPopupData details) {
+        // Off Earth the API's numChunks is the town's total across all worlds, so it would report the
+        // whole Earth town for a hovered outpost. The polygon under the cursor is the honest answer.
+        if (!TownyMapMod.viewingEarth()) return town.approximateChunks();
         if (details != null && details != TownPopupData.WILDERNESS && details.numChunks() > 0) {
             return details.numChunks();
         }

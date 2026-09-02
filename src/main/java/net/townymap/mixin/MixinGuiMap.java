@@ -22,6 +22,8 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Constant;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyConstant;
+import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.Slice;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.slf4j.Logger;
@@ -65,6 +67,21 @@ public abstract class MixinGuiMap {
     // TEST: how much further "World Map Overview" lets you zoom out (Xaero's min destScale / this).
     private static final double WORLD_MAP_OVERVIEW_FACTOR = 8.0;
 
+    /**
+     * Xaero's "camera follows player" lock. extractRenderState re-snaps cameraX/cameraZ to the player at
+     * the TOP of every frame while this is set, so any camera we write later in the same method was
+     * overwritten before it could be drawn -- which is why recentring appeared to do nothing. Xaero
+     * clears it itself the moment the user drags the map; moving the camera means detaching it.
+     */
+    @Shadow(remap = false) private static boolean attachedCamera;
+
+    /**
+     * Xaero's one-shot "put the camera back on the player" flag, set when the map opens. Cleared every
+     * frame while the map shows a world the player is not in -- otherwise reopening the map planted the
+     * view at their Earth coordinates on the Moon, further off the lunar map the further out they stood.
+     */
+    @Shadow(remap = false) private boolean shouldResetCameraPos;
+
     @Shadow(remap = false) private double cameraX;
     @Shadow(remap = false) private double cameraZ;
     @Shadow(remap = false) private double scale;
@@ -88,6 +105,9 @@ public abstract class MixinGuiMap {
         // raw camera every frame, regardless of dimension. jumpTo() suppresses the next pan-clear so that
         // centre-on-select doesn't wipe the bar.
         TownyMapMod.onWorldMapFrame(this, cameraX, cameraZ);
+        // A world switch leaves the camera at coordinates belonging to the world we left. Re-aim before
+        // anything is drawn, and suppress the pan-clear so it does not read as the user panning.
+        applyPendingRecentre();
         if (TownyMapMod.isAccessBlocked()) return;
         // The EarthMC map is overworld-only. Outside the overworld our overlay is hidden, except in
         // "Overworld Coords" mode in the Nether, where we scale the overlay's camera x8 and its
@@ -141,6 +161,11 @@ public abstract class MixinGuiMap {
     private void onRenderPreDropdown(GuiGraphicsExtractor ctx, int mouseX, int mouseY,
                                      float delta, CallbackInfo ci) {
         if (TownyMapMod.isAccessBlocked()) return;
+        applyPendingRecentre();
+        // Remember where the camera is left in this world so switching back returns to it rather than
+        // to the claim centre every time.
+        double camScale = TownyMapMod.worldMapCoordinateScale();
+        TownyMapMod.noteWorldMapCamera(cameraX * camScale, cameraZ * camScale);
         // Freshness line goes HERE, not in the overlay inject: the squaremap tiles are drawn after that
         // one and painted straight over it, so the line vanished whenever the layer was switched on.
         // renderPreDropdown runs late enough to sit on top of everything. Screen-space at a fixed Y, so
@@ -208,8 +233,36 @@ public abstract class MixinGuiMap {
     //
     // (Previously this drew at extractRenderState RETURN, which queued the arrow AFTER the
     // UI panels — making the arrow draw over the search box.)
+    /**
+     * Applies a pending world-switch recentre.
+     *
+     * <p>Called from both injects on purpose. onBeforePlayerArrow anchors on a field access late in
+     * extractRenderState, and that anchor has silently stopped matching across Xaero updates before;
+     * renderPreDropdown is the anchor the whole overlay already depends on, so if the map is drawing at
+     * all this one runs. consumeWorldMapRecentre() clears itself, so whichever fires first wins.
+     */
+    private void applyPendingRecentre() {
+        // Both of Xaero's player-snap paths, every frame, for as long as the map is off-world: the
+        // attached-camera lock and the reset-on-open flag both assign the player's position at the top
+        // of extractRenderState, which is what kept dragging the Moon view back to Earth coordinates.
+        if (TownyMapMod.pinWorldMapCamera()) {
+            attachedCamera = false;
+            shouldResetCameraPos = false;
+        }
+        double[] recentre = TownyMapMod.consumeWorldMapRecentre();
+        if (recentre == null) return;
+        double dimScale = TownyMapMod.worldMapCoordinateScale();
+        TownyMapMod.suppressNextPanClear();
+        attachedCamera = false;   // a locked camera re-snaps to the player next frame
+        cameraX = recentre[0] / dimScale;
+        cameraZ = recentre[1] / dimScale;
+    }
+
     private void renderPlayerArrow(GuiGraphicsExtractor ctx) {
         try {
+            // We redraw Xaero's arrow ourselves for layering, so suppressing Xaero's own copy was only
+            // half the job -- this one has to go too, or the player still appears standing on the Moon.
+            if (TownyMapMod.hideWorldMapPlayerArrow()) return;
             if (!TownyMapMod.shouldRenderWorldMapIndicatorOverlay()) return;
             Minecraft mc = Minecraft.getInstance();
             LocalPlayer player = mc.player;
@@ -527,10 +580,72 @@ public abstract class MixinGuiMap {
     // Search results carry EarthMC (overworld) coordinates, but Xaero's camera is in the player's
     // current dimension. Without the divide, jumping to a town from the Nether centred the map 8x
     // too far out and the target wasn't on screen at all.
+    /**
+     * Suppresses Xaero's own player arrow while the map shows a world the player is not standing in.
+     *
+     * <p>Xaero gates the arrow on {@code getEffective(ARROW).booleanValue()} and skips the whole block
+     * when that reads false, so answering false is enough -- the drawing itself is untouched.
+     *
+     * <p>The slice bounds the redirect to the few instructions between the ARROW and ARROW_COLOR field
+     * reads, where exactly one booleanValue() call lives. Bounding it by ordinal instead would break
+     * whenever Xaero adds a setting, which has silently happened to this file before. The handler takes
+     * only JDK types on purpose: xaero.lib is not on our compile classpath, and the descriptors naming
+     * it here are plain strings.
+     */
+    @Redirect(require = 0, remap = false, method = "extractRenderState",
+            slice = @Slice(
+                    from = @At(value = "FIELD", opcode = Opcodes.GETSTATIC,
+                            target = "Lxaero/map/common/config/option/WorldMapProfiledConfigOptions;"
+                                   + "ARROW:Lxaero/lib/common/config/option/BooleanConfigOption;"),
+                    to = @At(value = "FIELD", opcode = Opcodes.GETSTATIC,
+                            target = "Lxaero/map/common/config/option/WorldMapProfiledConfigOptions;"
+                                   + "ARROW_COLOR:Lxaero/lib/common/config/option/RangeConfigOption;")),
+            at = @At(value = "INVOKE", target = "Ljava/lang/Boolean;booleanValue()Z"))
+    private boolean townymap$hidePlayerArrowOffWorld(Boolean value) {
+        return value.booleanValue() && !TownyMapMod.hideWorldMapPlayerArrow();
+    }
+
+    /**
+     * Keeps the player's own waypoints off a map showing a world they are not in.
+     *
+     * <p>Xaero hands waypoint work to SupportXaeroMinimap.checkWaypoints; skipping that call leaves the
+     * map without them. Their coordinates belong to the player's world, so on the Moon they would mark
+     * lunar ground the player has never stood on.
+     */
+    @Redirect(require = 0, remap = false, method = "extractRenderState",
+            at = @At(value = "INVOKE",
+                    // Name only, no descriptor: the full one names Minecraft types, which are
+                    // intermediary at runtime under Fabric's remapped mappings, so a literal
+                    // remap = false descriptor would silently never match there. checkWaypoints has a
+                    // single overload, so the name resolves it on every branch.
+                    target = "Lxaero/map/mods/SupportXaeroMinimap;checkWaypoints"))
+    private void townymap$skipWaypointsOffWorld(
+            xaero.map.mods.SupportXaeroMinimap support, boolean enabled,
+            net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dim, String multiworld,
+            int a, int b, xaero.map.gui.GuiMap map, xaero.map.world.MapWorld mapWorld,
+            net.minecraft.core.Registry<net.minecraft.world.level.dimension.DimensionType> registry) {
+        if (TownyMapMod.hidePlayerWorldMarkers()) return;
+        support.checkWaypoints(enabled, dim, multiworld, a, b, map, mapWorld, registry);
+    }
+
+    /**
+     * Drops the "Waypoints: x" banner along with the waypoints themselves. GuiMap only draws it when
+     * this returns non-null, so null is all that is needed -- it names the waypoint set of a world the
+     * map is not showing, which was the confusing part.
+     */
+    @Redirect(require = 0, remap = false, method = "extractRenderState",
+            at = @At(value = "INVOKE",
+                    target = "Lxaero/map/mods/SupportXaeroMinimap;"
+                           + "getSubWorldNameToRender()Ljava/lang/String;"))
+    private String townymap$hideSubWorldLabelOffWorld(xaero.map.mods.SupportXaeroMinimap support) {
+        return TownyMapMod.hidePlayerWorldMarkers() ? null : support.getSubWorldNameToRender();
+    }
+
     private void jumpTo(TownData town) {
         if (town == null) return;
         TownyMapMod.suppressNextPanClear();   // centring on a selected result isn't a user pan
-        double dimScale = TownyMapMod.dimensionCoordinateScale();
+        attachedCamera = false;               // same reason as above: a locked camera undoes this
+        double dimScale = TownyMapMod.worldMapCoordinateScale();
         cameraX = town.centerX() / dimScale;
         cameraZ = town.centerZ() / dimScale;
     }
@@ -538,7 +653,8 @@ public abstract class MixinGuiMap {
     private void jumpTo(MapJumpTarget target) {
         if (target == null) return;
         TownyMapMod.suppressNextPanClear();   // centring on a selected result isn't a user pan
-        double dimScale = TownyMapMod.dimensionCoordinateScale();
+        attachedCamera = false;               // same reason as above: a locked camera undoes this
+        double dimScale = TownyMapMod.worldMapCoordinateScale();
         cameraX = target.x() / dimScale;
         cameraZ = target.z() / dimScale;
     }

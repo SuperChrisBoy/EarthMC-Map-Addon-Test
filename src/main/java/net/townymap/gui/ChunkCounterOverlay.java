@@ -72,6 +72,8 @@ public final class ChunkCounterOverlay {
 
     public static String toolbarLabel(TownyMapConfig config) {
         if (config == null || !config.chunkCounterEnabled) return net.minecraft.network.chat.Component.translatable("townymapaddon.map_controls.off").getString();
+        // Say where the selection went rather than showing a count for something that is not on screen.
+        if (!ownsActiveWorld(config)) return "on " + selectionWorldName(config);
         return activeGroupLabel(config) + " " + effectiveChunks(activeSelection(config)).size();
     }
 
@@ -306,6 +308,41 @@ public final class ChunkCounterOverlay {
         persistSelectionNow();
     }
 
+    /**
+     * True when the saved selection belongs to the world the map is showing.
+     *
+     * <p>An empty selection belongs to whichever world claims it first, so switching worlds and starting
+     * fresh just works. A selection that exists elsewhere is neither drawn nor edited here rather than
+     * being cleared -- these run to tens of thousands of chunks and are hard-won.
+     */
+    public static boolean ownsActiveWorld(TownyMapConfig config) {
+        return ownsWorld(config, TownyMapMod.activeWorldKey());
+    }
+
+    /** Same test against one specific world -- the minimap shows the world the player is standing in. */
+    public static boolean ownsWorld(TownyMapConfig config, String worldKey) {
+        if (config == null) return true;
+        if (!hasSelection()) return true;
+        String w = config.chunkCounterWorld;
+        return w == null || w.isBlank() || w.equals(worldKey);
+    }
+
+    /** The world a selection is being started in, once the first chunk goes down. */
+    private static void claimActiveWorld(TownyMapConfig config) {
+        if (config == null || hasSelection()) return;
+        String active = TownyMapMod.activeWorldKey();
+        if (!active.equals(config.chunkCounterWorld)) {
+            config.chunkCounterWorld = active;
+            config.save();
+        }
+    }
+
+    /** The world the saved selection belongs to, for the "not here" notice. */
+    public static String selectionWorldName(TownyMapConfig config) {
+        String w = config == null ? null : config.chunkCounterWorld;
+        return TownyMapMod.worldDisplayName(w);
+    }
+
     public static boolean hasSelection() {
         for (SelectionState group : GROUPS) {
             if (!group.chunks.isEmpty()) return true;
@@ -315,6 +352,8 @@ public final class ChunkCounterOverlay {
 
     public static boolean handleRightClick(double worldX, double worldZ) {
         TownyMapConfig config = TownyMapMod.getConfig();
+        if (!ownsActiveWorld(config)) return false;   // belongs to another world; leave it untouched
+        claimActiveWorld(config);
         SelectionState selection = activeSelection(config);
         int cx = floorToChunk(worldX);
         int cz = floorToChunk(worldZ);
@@ -365,6 +404,7 @@ public final class ChunkCounterOverlay {
     }
 
     public static void tickDrag(double worldX, double worldZ) {
+        if (!ownsActiveWorld(TownyMapMod.getConfig())) return;
         Minecraft client = Minecraft.getInstance();
         if (client == null || client.getWindow() == null) return;
         long handle = client.getWindow().handle();
@@ -406,6 +446,7 @@ public final class ChunkCounterOverlay {
                               int sw, int sh, double mouseWorldX, double mouseWorldZ, boolean preview) {
         if (blockScale <= 0) return;
         TownyMapConfig config = TownyMapMod.getConfig();
+        if (!ownsActiveWorld(config)) return;
         int groupCount = visibleGroupCount(config);
         for (int i = 0; i < groupCount; i++) {
             if (i == normalizedActiveGroup(config)) continue;
@@ -447,12 +488,31 @@ public final class ChunkCounterOverlay {
     }
 
     public static void renderWorldSpace(GuiGraphicsExtractor ctx) {
+        // No bounds known: draw everything. Kept so nothing silently stops rendering, but every caller
+        // should use the culling overload -- a large selection is thousands of draw calls otherwise.
+        renderWorldSpace(ctx, Integer.MIN_VALUE, Integer.MIN_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Draws the selection, skipping chunks outside the visible block rect.
+     *
+     * <p>Without this every selected chunk was drawn every frame regardless of where the view was. A
+     * 20,000-chunk selection meant ~20k fills plus up to four edge quads each -- around 100k draw calls
+     * per frame -- which dropped the minimap to single-digit FPS and crashed the world map, leaving the
+     * player unable to open the map to clear it.
+     */
+    public static void renderWorldSpace(GuiGraphicsExtractor ctx,
+                                        int minBlockX, int minBlockZ, int maxBlockX, int maxBlockZ) {
         TownyMapConfig config = TownyMapMod.getConfig();
         if (config == null || !config.chunkCounterEnabled) return;
+        // Minimap-only path: it draws where the player is, so the selection shows there whenever it
+        // belongs to that world, whatever the world map happens to be pinned to.
+        if (!ownsWorld(config, TownyMapMod.playerWorldResolved())) return;
         int groupCount = visibleGroupCount(config);
         for (int i = 0; i < groupCount; i++) {
             SelectionState state = GROUPS.get(i);
-            drawSelectionWorldSpace(ctx, state, i == normalizedActiveGroup(config));
+            drawSelectionWorldSpace(ctx, state, i == normalizedActiveGroup(config),
+                    minBlockX, minBlockZ, maxBlockX, maxBlockZ);
         }
     }
 
@@ -508,10 +568,18 @@ public final class ChunkCounterOverlay {
         // town outlines, then fill + stroke that ONE path. Falls back to the per-chunk boxes if the
         // boundary can't be traced, so the counter is never left invisible.
         if (drawSelectionSmooth(ctx, selection, cameraX, cameraZ, blockScale, sw, sh, fill, border)) return;
+        // Same culling as the world-space path: only chunks whose block rect touches the view.
+        double halfW = sw / 2.0 / blockScale, halfH = sh / 2.0 / blockScale;
+        double vMinX = cameraX - halfW, vMaxX = cameraX + halfW;
+        double vMinZ = cameraZ - halfH, vMaxZ = cameraZ + halfH;
         for (long key : selection.effective) {
+            int bx = chunkX(key) * CHUNK_SIZE, bz = chunkZ(key) * CHUNK_SIZE;
+            if (bx + CHUNK_SIZE < vMinX || bx > vMaxX || bz + CHUNK_SIZE < vMinZ || bz > vMaxZ) continue;
             drawChunk(ctx, chunkX(key), chunkZ(key), cameraX, cameraZ, blockScale, sw, sh, fill, border, false);
         }
         for (Edge edge : selection.edges) {
+            int bx = edge.chunkX * CHUNK_SIZE, bz = edge.chunkZ * CHUNK_SIZE;
+            if (bx + CHUNK_SIZE < vMinX || bx > vMaxX || bz + CHUNK_SIZE < vMinZ || bz > vMaxZ) continue;
             drawEdge(ctx, edge.chunkX, edge.chunkZ, edge.side, cameraX, cameraZ, blockScale, sw, sh, border);
         }
     }
@@ -728,18 +796,24 @@ public final class ChunkCounterOverlay {
         ctx.fill(Math.max(0, left), Math.max(0, top), Math.min(sw, right), Math.min(sh, bottom), color);
     }
 
-    private static void drawSelectionWorldSpace(GuiGraphicsExtractor ctx, SelectionState selection, boolean active) {
+    private static void drawSelectionWorldSpace(GuiGraphicsExtractor ctx, SelectionState selection,
+                                                boolean active, int minBlockX, int minBlockZ,
+                                                int maxBlockX, int maxBlockZ) {
         selection.ensureBuilt();
         int fill = argb(active ? 0x42 : 0x2B, selection.rgb);
         int border = argb(active ? 0xE8 : 0xA0, selection.rgb);
         for (long key : selection.effective) {
             int blockX = chunkX(key) * CHUNK_SIZE;
             int blockZ = chunkZ(key) * CHUNK_SIZE;
+            if (blockX + CHUNK_SIZE < minBlockX || blockX > maxBlockX
+                    || blockZ + CHUNK_SIZE < minBlockZ || blockZ > maxBlockZ) continue;
             ctx.fill(blockX, blockZ, blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE, fill);
         }
         for (Edge edge : selection.edges) {
             int blockX = edge.chunkX * CHUNK_SIZE;
             int blockZ = edge.chunkZ * CHUNK_SIZE;
+            if (blockX + CHUNK_SIZE < minBlockX || blockX > maxBlockX
+                    || blockZ + CHUNK_SIZE < minBlockZ || blockZ > maxBlockZ) continue;
             switch (edge.side) {
                 case 0 -> ctx.fill(blockX, blockZ, blockX + CHUNK_SIZE, blockZ + 1, border);
                 case 1 -> ctx.fill(blockX + CHUNK_SIZE - 1, blockZ, blockX + CHUNK_SIZE, blockZ + CHUNK_SIZE, border);

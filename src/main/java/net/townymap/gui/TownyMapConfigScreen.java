@@ -177,6 +177,11 @@ public class TownyMapConfigScreen extends Screen {
         option(ui("town_borders"), onOff(cfg.townsEnabled, v -> cfg.townsEnabled = v),
                 () -> cfg.townsEnabled == DEFAULTS.townsEnabled,
                 () -> cfg.townsEnabled = DEFAULTS.townsEnabled);
+        option("Map World", cycle(cfg.mapWorldMode, new int[]{0, 1, 2},
+                        TownyMapConfigScreen::mapWorldModeText,
+                        v -> cfg.mapWorldMode = v),
+                () -> cfg.mapWorldMode == DEFAULTS.mapWorldMode,
+                () -> cfg.mapWorldMode = DEFAULTS.mapWorldMode);
         option(ui("data_freshness_line"), onOff(cfg.dataStatusEnabled, v -> cfg.dataStatusEnabled = v),
                 () -> cfg.dataStatusEnabled == DEFAULTS.dataStatusEnabled,
                 () -> cfg.dataStatusEnabled = DEFAULTS.dataStatusEnabled);
@@ -967,6 +972,15 @@ public class TownyMapConfigScreen extends Screen {
             case 1 -> "countries";
             case 2 -> "states_countries";
             default -> "off";
+        });
+    }
+
+    /** Auto follows the dimension you are in; the others pin the map to one squaremap world. */
+    private static Component mapWorldModeText(Integer mode) {
+        return Component.literal(switch (mode) {
+            case 1 -> "Terra Nostra";
+            case 2 -> "Moon";
+            default -> "Auto";
         });
     }
 

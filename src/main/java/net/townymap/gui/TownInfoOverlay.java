@@ -276,7 +276,18 @@ public final class TownInfoOverlay {
         lines.add(InfoRow.link(Component.translatable("townymapaddon.town_popup.mayor").getString(), d.mayor(), "", "player"));
         // "claimed / max chunks" using EarthMC's own claim max (stats.maxTownBlocks), which already
         // accounts for residents + bonus blocks + nation bonus. Over-limit is highlighted in red.
-        if (archive) {
+        if (!TownyMapMod.viewingEarth()) {
+            // numChunks is stats.numTownBlocks - the town's TOTAL across every world, so on the Moon it
+            // reported the whole Earth town for what is really a small outpost. The polygon in the world
+            // being shown IS the outpost, so count that instead and say which it is.
+            net.townymap.model.TownData here = TownyMapMod.townPolygon(d.townName());
+            int outpost = here != null ? here.approximateChunks() : -1;
+            lines.add(InfoRow.text(outpost >= 0
+                    ? "§7Outpost: §f§l" + outpost + " chunks"
+                    : "§7Outpost: §f§lno claim here"));
+            lines.add(InfoRow.text("§8Town total: " + d.numChunks()
+                    + (d.maxChunks() > 0 ? " / " + d.maxChunks() : "") + " chunks"));
+        } else if (archive) {
             // The archive has no claim limit, but the claimed count is derived from the snapshot's claim polygon.
             lines.add(InfoRow.text(Component.translatable("townymapaddon.town_popup.size", d.numChunks()).getString()));
         } else if (d.maxChunks() > 0) {

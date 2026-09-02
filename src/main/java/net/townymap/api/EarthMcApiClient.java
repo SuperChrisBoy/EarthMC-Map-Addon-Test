@@ -52,6 +52,9 @@ public class EarthMcApiClient {
     // fire a big entity's 100-id batches in parallel but throttled to this many at once (the safe max).
     // Base town/nation fetches are NOT gated (they have their own load cap), so the map stays responsive.
     private final java.util.concurrent.Semaphore activeBatchGate = new java.util.concurrent.Semaphore(4);
+    /** One 429 warning per session; being rate-limited fails every request, not just one. */
+    private final java.util.concurrent.atomic.AtomicBoolean rateLimitLogged =
+            new java.util.concurrent.atomic.AtomicBoolean();
     /** Batches that exhausted their retries; surfaced after a sweep so silent loss cannot hide. */
     private final java.util.concurrent.atomic.AtomicInteger droppedPlayerBatches =
             new java.util.concurrent.atomic.AtomicInteger();
@@ -1046,7 +1049,19 @@ public class EarthMcApiClient {
                     .build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() == 200) return resp.body();
-            LOGGER.warn("[TownyMap] EarthMC API {} → HTTP {}", url, resp.statusCode());
+            // 404 just means "no such entity" (an opt-out, usually) and is expected; logging one line per
+            // lookup buried the log. 429 means we are rate-limited and every other request is failing too,
+            // so say that once rather than several hundred times.
+            if (resp.statusCode() == 404) {
+                LOGGER.debug("[TownyMap] EarthMC API {} -> 404", url);
+            } else if (resp.statusCode() == 429) {
+                if (rateLimitLogged.compareAndSet(false, true)) {
+                    LOGGER.warn("[TownyMap] EarthMC API is rate-limiting us (HTTP 429). Lookups will fail"
+                            + " until it clears.");
+                }
+            } else {
+                LOGGER.warn("[TownyMap] EarthMC API {} -> HTTP {}", url, resp.statusCode());
+            }
         } catch (Exception e) {
             LOGGER.warn("[TownyMap] EarthMC API request failed: {}", e.getMessage());
         }

@@ -154,6 +154,19 @@ public final class ShopWaypoints {
      * Materialises a finished search and expires waypoints the player has walked away from. Cheap
      * enough to call every tick: it does nothing at all until a search has actually produced results.
      */
+    /**
+     * Drops the bookkeeping for shop waypoints left in another dimension.
+     *
+     * <p>Xaero files waypoints per dimension, so the Earth ones stay in Earth's set where they belong.
+     * What has to go is our own {@code active} map: its keys are packed coordinates, so the expiry pass
+     * would measure the player's Moon position against Earth shop coordinates, decide they had walked
+     * away, and delete waypoints they never returned to.
+     */
+    public static void onDimensionChanged() {
+        active.clear();
+        pending.clear();
+    }
+
     public static void tick() {
         if (!enabled()) {
             if (!active.isEmpty()) clearAll();

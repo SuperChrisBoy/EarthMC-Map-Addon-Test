@@ -32,6 +32,7 @@ public final class TownyMapKeybinds {
             // Blocked access turns every bind into a no-op, but the presses are still consumed so they
             // do not fall through to something else.
             TownyMapMod.tickAccessNotice();   // shows the blocked notice once a world is loaded
+            TownyMapMod.tickWorldChange();    // Terra Nostra <-> Moon, on the main thread
             if (TownyMapMod.isAccessBlocked()) {
                 while (mapScreenshot.consumeClick()) { /* discard */ }
                 while (refreshTowns.consumeClick()) { /* discard */ }

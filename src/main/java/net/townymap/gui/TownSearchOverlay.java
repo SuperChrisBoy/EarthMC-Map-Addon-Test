@@ -843,7 +843,11 @@ public final class TownSearchOverlay {
                 return new MapJumpTarget(name, town.centerX(), town.centerZ());
             }
         }
-        if (details.hasSpawn()) return new MapJumpTarget(name, details.spawnX(), details.spawnZ());
+        // Only on Earth: the API spawn is an Earth coordinate, so jumping to it while viewing the Moon
+        // would land somewhere unrelated rather than at the nation's outpost.
+        if (details.hasSpawn() && TownyMapMod.viewingEarth()) {
+            return new MapJumpTarget(name, details.spawnX(), details.spawnZ());
+        }
         return null;
     }
 
@@ -1282,7 +1286,24 @@ public final class TownSearchOverlay {
             lines.add(InfoRow.text(info("on_map", dateWithAgo(history.lastSeenMs()))));
         }
         if (details == null) {
-            lines.add(InfoRow.text(info("checking")));
+            // The EarthMC API has an opt-out, and for those players the lookup never returns -- the card
+            // used to sit on "Checking..." forever. Town rosters in markers.json are TOWN data with no
+            // opt-out, so fall back to those: it gives the town, and the nation through it. Labelled as
+            // map data, because someone who opted out deserves to see where this came from.
+            String rosterTown = null;
+            net.townymap.api.SquaremapApiClient api = TownyMapMod.getApiClient();
+            if (api != null) rosterTown = api.townOfResident(selectedName);
+            if (rosterTown != null) {
+                lines.add(InfoRow.link("§7Town: §f", rosterTown, "town"));
+                String rosterNation = api.getTownNation(rosterTown.toLowerCase(Locale.ROOT));
+                if (rosterNation != null && !rosterNation.isBlank()) {
+                    lines.add(InfoRow.link("§7Nation: §f", rosterNation, "nation"));
+                }
+                lines.add(InfoRow.text("§8From map data (not on the API)"));
+            } else {
+                // Still say something terminal. An endless "Checking..." reads as broken.
+                lines.add(InfoRow.text("§7Details: §fNot available"));
+            }
             return List.copyOf(lines);
         }
         if (!details.townName().isBlank()) lines.add(InfoRow.link(tr("town_prefix"), details.townName(), "town"));
@@ -1334,7 +1355,14 @@ public final class TownSearchOverlay {
                 || (details.maxChunks() > 0 && details.numChunks() > details.maxChunks());
         String sizeColor = overLimit ? "§c" : "§f";
         String maxStr = details.maxChunks() > 0 ? " / " + details.maxChunks() : "";
-        lines.add(InfoRow.text(info("chunks_styled", sizeColor, details.numChunks(), maxStr)));
+        if (!TownyMapMod.viewingEarth()) {
+            // maxTownBlocks is a town-wide allowance shared with the Earth claim, so pairing it with
+            // an outpost-only count would read as a limit that is nowhere near being reached.
+            lines.add(InfoRow.text("§7Outpost: §f" + town.approximateChunks() + " chunks"));
+            lines.add(InfoRow.text("§8Town total: " + details.numChunks() + maxStr));
+        } else {
+            lines.add(InfoRow.text(info("chunks_styled", sizeColor, details.numChunks(), maxStr)));
+        }
         if (!details.founded().isBlank()) lines.add(InfoRow.text(info("founded", details.founded())));
         String townInactive = details.activeResidentCount() >= 0
                 && details.activeResidentCount() < details.residentCount()
@@ -1487,7 +1515,7 @@ public final class TownSearchOverlay {
                     return new MapJumpTarget(fav.name(), capital.centerX(), capital.centerZ());
                 }
             }
-            if (nd != null && nd.hasSpawn()) {
+            if (nd != null && nd.hasSpawn() && TownyMapMod.viewingEarth()) {
                 return new MapJumpTarget(fav.name(), nd.spawnX(), nd.spawnZ());
             }
             return null;
