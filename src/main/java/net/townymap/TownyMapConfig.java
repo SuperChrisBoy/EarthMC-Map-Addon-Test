@@ -138,7 +138,7 @@ public class TownyMapConfig {
     public boolean hunterShowRecentEvents = true;
     public boolean hunterWarningsInChat = true;
     public boolean hunterNotificationsInChat = true;
-    public boolean hunterActivityWindowShown = true;
+    public boolean hunterActivityWindowShown = false;
     public boolean hunterActivityWindowMinimized = false;
     /** Negative X keeps the activity window anchored right until it is dragged. */
     public int hunterActivityWindowX = -1;
@@ -219,6 +219,12 @@ public class TownyMapConfig {
     public boolean teleportShowObstructed = true;
     public boolean teleportShowTownSpawns = true;
     public boolean teleportShowNationSpawns = true;
+    /** Include ice-highway travel when it improves a teleport route. */
+    public boolean teleportIncludeIceRoads = true;
+    /** Draw XiLeF2211's ice-highway lines/stations on the world map. Off by default. */
+    public boolean iceRoadOverlayEnabled = false;
+    /** 0 everything, 1 accessible, 2 blocked; applies to ice-road station symbols. */
+    public int iceRoadStationFilter = 0;
     public boolean teleportRouteLineVisible = true;
     public boolean teleportDestinationMarkerVisible = true;
     public boolean teleportArrivalMarkerVisible = true;
@@ -230,6 +236,7 @@ public class TownyMapConfig {
     public int teleportWindowX = 118;
     public int teleportWindowY = 34;
     public java.util.Map<String,String> teleportSpawnReports = new java.util.HashMap<>();
+    public java.util.Map<String,String> iceRoadStationReports = new java.util.HashMap<>();
     public enum HunterHudPosition { RIGHT_OF_MINIMAP, LEFT_OF_MINIMAP, BELOW_MINIMAP }
     /**
      * squaremap world the saved selection was drawn in. Chunk keys are raw coordinates with no world
@@ -332,6 +339,12 @@ public class TownyMapConfig {
 
     private boolean sanitize() {
         boolean changed = false;
+
+        // The Hunter activity log is intentionally unavailable in the Dynmap-only release.
+        if (hunterActivityWindowShown) {
+            hunterActivityWindowShown = false;
+            changed = true;
+        }
 
         // Migrate the old single on/off flag: a config written before the per-map modes existed only
         // knew "on", which meant both maps. Clear the legacy flag afterwards so this runs once.
@@ -603,6 +616,7 @@ public class TownyMapConfig {
             "favoriteTowns", "favoriteNations", "favoritePlayers",
             "hunterWatchlist",
             "disabledHunterNames",
+            "iceRoadStationReports",
             "chunkCounterSelection", "chunkCounterGroups",
             "activeChunkCounterGroup", "chunkCounterGroupCount");
 

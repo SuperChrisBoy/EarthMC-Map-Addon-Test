@@ -16,7 +16,10 @@ import java.util.List;
 public final class XaeroWaypointBridge {
 
     private static final String ROUTE_PREFIX = "TM: ";
+    private static final String TELEPORT_ROUTE_PREFIX = "TM · ";
+    private static final String LEGACY_TELEPORT_ROUTE_PREFIX = "TP Route · ";
     private static final List<Waypoint> TELEPORT_VIEWER_WAYPOINTS = new ArrayList<>();
+    public record RouteWaypoint(String label,int x,int y,int z){}
 
     private XaeroWaypointBridge() {
     }
@@ -62,7 +65,8 @@ public final class XaeroWaypointBridge {
         WaypointSet set=currentWaypointSet();Minecraft client=Minecraft.getInstance();if(set==null||client==null||client.player==null)return false;
         double scale=net.townymap.TownyMapMod.dimensionCoordinateScale();Waypoint waypoint=new Waypoint((int)Math.round(x/scale),y<=0?client.player.getBlockY():y,(int)Math.round(z/scale),cleanLabel(label),symbol(label),WaypointColor.PURPLE,WaypointPurpose.NORMAL,true,y>0);set.add(waypoint,true);TELEPORT_VIEWER_WAYPOINTS.add(waypoint);touch();return true;
     }
-    public static boolean removeTeleportWaypoints(){WaypointSet set=currentWaypointSet();if(set==null)return false;boolean removed=false;for(Waypoint waypoint:List.copyOf(TELEPORT_VIEWER_WAYPOINTS)){try{set.remove(waypoint);removed=true;}catch(RuntimeException ignored){}}TELEPORT_VIEWER_WAYPOINTS.clear();if(removed)touch();return removed;}
+    public static boolean replaceTeleportRouteWaypoints(List<RouteWaypoint> route){WaypointSet set=currentWaypointSet();Minecraft client=Minecraft.getInstance();if(set==null||client==null||client.player==null||route==null||route.isEmpty())return false;removeTeleportWaypoints();double scale=net.townymap.TownyMapMod.dimensionCoordinateScale();int number=1;for(RouteWaypoint point:route){String name=TELEPORT_ROUTE_PREFIX+number+" "+cleanLabel(point.label());Waypoint waypoint=new Waypoint((int)Math.round(point.x()/scale),point.y()<=0?client.player.getBlockY():point.y(),(int)Math.round(point.z()/scale),name,Integer.toString(Math.min(9,number)),WaypointColor.PURPLE,WaypointPurpose.NORMAL,true,point.y()>0);set.add(waypoint,true);TELEPORT_VIEWER_WAYPOINTS.add(waypoint);number++;}touch();return true;}
+    public static boolean removeTeleportWaypoints(){WaypointSet set=currentWaypointSet();if(set==null)return false;java.util.LinkedHashSet<Waypoint> remove=new java.util.LinkedHashSet<>(TELEPORT_VIEWER_WAYPOINTS);for(Waypoint waypoint:set.getWaypoints())if(waypoint.isTemporary()&&waypoint.getName()!=null&&(waypoint.getName().startsWith(TELEPORT_ROUTE_PREFIX)||waypoint.getName().startsWith(LEGACY_TELEPORT_ROUTE_PREFIX)))remove.add(waypoint);boolean removed=false;for(Waypoint waypoint:remove){try{set.remove(waypoint);removed=true;}catch(RuntimeException ignored){}}TELEPORT_VIEWER_WAYPOINTS.clear();if(removed)touch();return removed;}
 
     /**
      * Adds one temporary shop waypoint. The coordinates are literal in-world positions in the

@@ -177,7 +177,7 @@ public class TownyMapConfigScreen extends Screen {
         option(ui("town_borders"), onOff(cfg.townsEnabled, v -> cfg.townsEnabled = v),
                 () -> cfg.townsEnabled == DEFAULTS.townsEnabled,
                 () -> cfg.townsEnabled = DEFAULTS.townsEnabled);
-        option("Map World", cycle(cfg.mapWorldMode, new int[]{0, 1, 2},
+        option(Component.translatable("townymapaddon.map_controls.world").getString(), cycle(cfg.mapWorldMode, new int[]{0, 1, 2},
                         TownyMapConfigScreen::mapWorldModeText,
                         v -> cfg.mapWorldMode = v),
                 () -> cfg.mapWorldMode == DEFAULTS.mapWorldMode,
@@ -404,8 +404,6 @@ public class TownyMapConfigScreen extends Screen {
         option(Component.translatable("townymapaddon.safety.teleport_override").getString(),onOff(cfg.teleportAllowNonEarthMc,v->cfg.teleportAllowNonEarthMc=v),()->cfg.teleportAllowNonEarthMc==DEFAULTS.teleportAllowNonEarthMc,()->cfg.teleportAllowNonEarthMc=DEFAULTS.teleportAllowNonEarthMc);
         option(Component.translatable("townymapaddon.teleport.settings.map_click").getString(),onOff(cfg.teleportMapClickAction,v->cfg.teleportMapClickAction=v),()->cfg.teleportMapClickAction==DEFAULTS.teleportMapClickAction,()->cfg.teleportMapClickAction=DEFAULTS.teleportMapClickAction);
         option(Component.translatable("townymapaddon.teleport.settings.advanced_enabled").getString(),onOff(cfg.teleportAdvancedEnabled,v->{cfg.teleportAdvancedEnabled=v;if(!v)cfg.teleportDefaultAdvanced=false;}),()->cfg.teleportAdvancedEnabled==DEFAULTS.teleportAdvancedEnabled,()->cfg.teleportAdvancedEnabled=DEFAULTS.teleportAdvancedEnabled);
-        option(Component.translatable("townymapaddon.teleport.settings.show_uncertain").getString(),onOff(cfg.teleportShowUncertain,v->cfg.teleportShowUncertain=v),()->cfg.teleportShowUncertain==DEFAULTS.teleportShowUncertain,()->cfg.teleportShowUncertain=DEFAULTS.teleportShowUncertain);
-        option(Component.translatable("townymapaddon.teleport.settings.show_obstructed").getString(),onOff(cfg.teleportShowObstructed,v->cfg.teleportShowObstructed=v),()->cfg.teleportShowObstructed==DEFAULTS.teleportShowObstructed,()->cfg.teleportShowObstructed=DEFAULTS.teleportShowObstructed);
         option(Component.translatable("townymapaddon.teleport.settings.remember_home").getString(),onOff(cfg.teleportRememberPrimaryHome,v->cfg.teleportRememberPrimaryHome=v),()->cfg.teleportRememberPrimaryHome==DEFAULTS.teleportRememberPrimaryHome,()->cfg.teleportRememberPrimaryHome=DEFAULTS.teleportRememberPrimaryHome);
 
         section(ui("info_display"));
@@ -977,10 +975,10 @@ public class TownyMapConfigScreen extends Screen {
 
     /** Auto follows the dimension you are in; the others pin the map to one squaremap world. */
     private static Component mapWorldModeText(Integer mode) {
-        return Component.literal(switch (mode) {
-            case 1 -> "Terra Nostra";
-            case 2 -> "Moon";
-            default -> "Auto";
+        return Component.translatable("townymapaddon.map_controls."+switch (mode) {
+            case 1 -> "terra_nostra";
+            case 2 -> "moon";
+            default -> "world_auto";
         });
     }
 

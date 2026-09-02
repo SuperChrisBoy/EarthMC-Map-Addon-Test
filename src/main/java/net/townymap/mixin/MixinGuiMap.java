@@ -384,6 +384,7 @@ public abstract class MixinGuiMap {
                     return;
                 }
                 if(TownyMapMod.clickTeleportViewer(click.x(),click.y(),sw,sh)){cir.setReturnValue(true);return;}
+                if(TownyMapMod.clickIceRoadOverlay(click.x(),click.y(),sw,sh)){cir.setReturnValue(true);return;}
                 TownSearchOverlay.ClickResult result =
                         TownyMapMod.onTownSearchClick(click.x(), click.y(), sw, sh);
                 if (result.consumed()) {

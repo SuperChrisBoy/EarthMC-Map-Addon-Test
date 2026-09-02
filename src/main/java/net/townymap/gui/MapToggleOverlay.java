@@ -24,7 +24,7 @@ public final class MapToggleOverlay {
     private static final int ADD_WIDTH = 20;
     private static final int FILL_WIDTH = 34;
     private static final int SETTINGS_GAP = 7;   // extra gap above the settings button
-    private static final int TOGGLE_ROWS = 6;    // Squaremap | Borders | Map mode | World | Chunks | Counter
+    private static final int TOGGLE_ROWS = 7;    // Squaremap | Borders | Map mode | World | Chunks | Counter | Ice roads
 
     private MapToggleOverlay() {}
 
@@ -41,10 +41,11 @@ public final class MapToggleOverlay {
                 config.borderOverlayMode != 0);
         drawMode(ctx, tr, 2, y, tr("map"), statusModeLabel(config.townStatusOverlayMode),
                 config.townStatusOverlayMode != 0);
-        drawMode(ctx, tr, 3, y, "World", worldModeLabel(config),
+        drawMode(ctx, tr, 3, y, tr("world"), worldModeLabel(config),
                 !TownyMapMod.viewingEarth() || config.mapWorldMode != TownyMapMod.WORLD_MODE_AUTO);
         drawToggle(ctx, tr, 4, y, tr("chunks"), config.chunkGridEnabled);
         drawMode(ctx, tr, 5, y, tr("counter"), ChunkCounterOverlay.toolbarLabel(config), config.chunkCounterEnabled);
+        drawToggle(ctx, tr, 6, y, tr("ice_roads"), config.iceRoadOverlayEnabled);
         if (config.chunkCounterEnabled) {
             if (ChunkCounterOverlay.isMultiMode(config)) {
                 drawCounterGroupButtons(ctx, tr, config);
@@ -54,8 +55,7 @@ public final class MapToggleOverlay {
 
         drawSettingsButton(ctx, tr, settingsTop(sh));
         if(TownyMapMod.isTeleportFeatureAvailable())drawTexturedButton(ctx,LEFT,teleportTop(sh),WIDTH,HEIGHT,Component.translatable("townymapaddon.teleport.title").getString(),true,0xFF7EE2B8);
-        if(TownyMapMod.isHunterFeatureAvailable()){drawTexturedButton(ctx, LEFT, hunterTop(sh), WIDTH, HEIGHT, net.minecraft.network.chat.Component.translatable("townymapaddon.hunter.watch.title").getString(), true, 0xFFFFB45C);
-        drawTexturedButton(ctx, LEFT+WIDTH+3, hunterTop(sh), 26, HEIGHT, tr("log"), true, 0xFF9FD7FF);}
+        if(TownyMapMod.isHunterFeatureAvailable())drawTexturedButton(ctx, LEFT, hunterTop(sh), WIDTH, HEIGHT, net.minecraft.network.chat.Component.translatable("townymapaddon.hunter.watch.title").getString(), true, 0xFFFFB45C);
         } finally {
             if (scaled) UiScale.pop(ctx);
         }
@@ -110,6 +110,7 @@ public final class MapToggleOverlay {
                         config.chunkCounterMode = 2;
                     }
                 }
+                case 6 -> {if(backward){config.iceRoadOverlayEnabled=true;config.iceRoadStationFilter=(config.iceRoadStationFilter+1)%3;}else config.iceRoadOverlayEnabled=!config.iceRoadOverlayEnabled;}
                 default -> { return false; }
             }
             config.save();
@@ -299,9 +300,9 @@ public final class MapToggleOverlay {
     private static String worldModeLabel(TownyMapConfig config) {
         // In Auto the label has to show what it resolved to, or the button reads the same on both worlds.
         if (config.mapWorldMode == TownyMapMod.WORLD_MODE_AUTO) {
-            return "Auto: " + TownyMapMod.activeWorldName();
+            return tr("world_auto") + ": " + (TownyMapMod.viewingEarth()?tr("terra_nostra"):tr("moon"));
         }
-        return config.mapWorldMode == TownyMapMod.WORLD_MODE_MOON ? "Moon" : "Terra Nostra";
+        return config.mapWorldMode == TownyMapMod.WORLD_MODE_MOON ? tr("moon") : tr("terra_nostra");
     }
 
     private static String borderModeLabel(int mode) {

@@ -8,7 +8,7 @@ import java.util.ArrayList;
 import static org.junit.jupiter.api.Assertions.*;
 
 class HunterNotificationManagerTest {
-    @Test void activityHistoryKeepsRoutineAndWarningEventsWhenChatIsDisabled(){
+    @Test void activityHistoryIsDisabledWhileChatAndHudNotificationsStillWork(){
         TownyMapConfig config=new TownyMapConfig();
         config.hunterNotificationsInChat=false;
         config.hunterWarningsInChat=false;
@@ -18,9 +18,8 @@ class HunterNotificationManagerTest {
         manager.publish(HunterEvent.normal("online","Hunter online",1_000));
         manager.publish(HunterEvent.warning("nearby","Hunter nearby",2_000));
         assertTrue(chat.isEmpty());
-        assertEquals(2,manager.history().size());
-        assertEquals("Hunter nearby",manager.history().getFirst().title().getString());
-        assertEquals("Hunter online",manager.history().get(1).title().getString());
+        assertTrue(manager.history().isEmpty());
+        assertFalse(manager.hudLines(2_000).isEmpty());
     }
     @Test void activityOnlyNeverQueuesHudOrChat(){
         TownyMapConfig config=new TownyMapConfig();
@@ -29,6 +28,6 @@ class HunterNotificationManagerTest {
         manager.activityOnly(HunterEvent.normal("auto-low","Automatic player is low risk",1_000));
         assertTrue(chat.isEmpty());
         assertTrue(manager.hudLines(System.currentTimeMillis()).isEmpty());
-        assertEquals("Automatic player is low risk",manager.history().getFirst().title().getString());
+        assertTrue(manager.history().isEmpty());
     }
 }

@@ -27,6 +27,8 @@ import java.util.regex.Pattern;
 
 /** Client-thread coordinator. Networking remains in the existing async EarthMC/Squaremap clients. */
 public final class HunterEarlyWarningSystem {
+    /** Temporary scope: only manually configured, currently Dynmap-visible hunters are active. */
+    public static final boolean DYNMAP_VISIBILITY_ONLY = true;
     private static final Pattern DEATH = Pattern.compile("^([A-Za-z0-9_]{1,16}) (was slain by|was shot by|was blown up by|was killed by) ([A-Za-z0-9_]{1,16})(?: using .*)?$");
     private final TownyMapConfig config; private final EarthMcApiClient earth;
     private final Map<String,HunterState> states = new LinkedHashMap<>();
@@ -46,6 +48,8 @@ public final class HunterEarlyWarningSystem {
     private final HunterCandidateService candidates;
     private final Map<String,NearbyCandidate> nearbyCandidates = new HashMap<>();
     private final Map<String,Boolean> ruinStatus = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String,Boolean> dynmapNearby = new HashMap<>();
+    private final Map<String,Boolean> lastSeenAreaNearby = new HashMap<>();
     private final Set<String> ruinLoading = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private long lastTick, lastIdentityPoll, lastApproachRefresh, approachGeneration;private double lastApproachX=Double.NaN,lastApproachZ=Double.NaN;
     private long lastClaimDistanceCheck;
@@ -61,9 +65,13 @@ public final class HunterEarlyWarningSystem {
     }
     public void tick(Minecraft mc, List<PlayerMarker> players, List<TownData> townSnapshot) {
         towns=townSnapshot;
-        candidates.tick(townSnapshot);
         long now=System.currentTimeMillis();
         if (!config.hunterWarningEnabled || mc.player == null || mc.getUser() == null){if(mc.player==null){exposureSession.reset();playerIdentity=null;}threatFronts.clear();radiusOverlays.clear();minimapRadiusOverlays.clear();logHealth(now);return;}
+        if (DYNMAP_VISIBILITY_ONLY) {
+            tickDynmapVisibilityOnly(mc, players, now);
+            return;
+        }
+        candidates.tick(townSnapshot);
         if(playerIdentity!=null&&playerIdentity!=mc.player)exposureSession.reset();playerIdentity=mc.player;
         threats.setOfflineResidualMinutes(config.hunterOfflineResidualMinutes);
         if (now-lastTick<250) return; lastTick=now;
@@ -90,6 +98,58 @@ public final class HunterEarlyWarningSystem {
         minimapRadiusOverlays.publish(threatFronts.renderFronts(config.hunterMaxActiveTeleportThreatsGlobalMinimap,config.hunterMaxActiveTeleportThreatsPerHunterMinimap),now,config.hunterMaxActiveTeleportThreatsGlobalMinimap);
         successfulCycles++;lastSuccessfulCycle=now;logHealth(now);
     }
+
+    private void tickDynmapVisibilityOnly(Minecraft mc,List<PlayerMarker> players,long now) {
+        if(now-lastTick<250)return;
+        lastTick=now;
+        syncWatchlist();
+        candidateStates.clear();candidateOutlawCounts.clear();nearbyCandidates.clear();
+        threatFronts.clear();radiusOverlays.clear();minimapRadiusOverlays.clear();route=null;
+        double scale=net.townymap.TownyMapMod.dimensionCoordinateScale();
+        double px=mc.player.getX()*scale,pz=mc.player.getZ()*scale;
+        Map<String,PlayerMarker> visibleNow=new HashMap<>();
+        for(PlayerMarker marker:players)if(marker.name()!=null)visibleNow.put(key(marker.name()),marker);
+        visible=Map.copyOf(visibleNow);lastDynmapUpdate=now;lastOnlinePlayerCount=players.size();
+        dynmapNearby.keySet().retainAll(states.keySet());lastSeenAreaNearby.keySet().retainAll(states.keySet());
+        for(HunterState hunter:states.values()) {
+            String hunterKey=key(hunter.name);
+            PlayerMarker marker=visibleNow.get(key(hunter.name));
+            boolean nearby=marker!=null&&isNearbyDynmapHunter(px,pz,marker.x(),marker.z(),scale,config.hunterNearbyRadius);
+            boolean wasNearby=Boolean.TRUE.equals(dynmapNearby.put(hunterKey,nearby));
+            if(marker==null) {
+                HunterState.Observation lastSeen=hunter.lastSeen;
+                boolean nearLastSeen=lastSeen!=null&&isNearbyDynmapHunter(px,pz,lastSeen.x(),lastSeen.z(),scale,config.hunterNearbyRadius);
+                boolean wasNearLastSeen=Boolean.TRUE.equals(lastSeenAreaNearby.put(hunterKey,nearLastSeen));
+                if(hunter.visibility==HunterState.Visibility.VISIBLE&&nearLastSeen) {
+                    notifications.publish(HunterEvent.warning(hunter.configuredName+":dynmap-lost-nearby",tr("event.position_lost_nearby",hunter.name),now,
+                            tr("event.last_seen",(int)Math.round(Math.hypot(lastSeen.x()-px,lastSeen.z()-pz)/scale),lastSeen.claim())).positioned(lastSeen.x(),lastSeen.z()));
+                } else if(nearLastSeen&&!wasNearLastSeen) {
+                    notifications.publish(HunterEvent.warning(hunter.configuredName+":entered-last-seen-area",tr("event.position_lost_nearby",hunter.name),now,
+                            tr("event.last_seen",(int)Math.round(Math.hypot(lastSeen.x()-px,lastSeen.z()-pz)/scale),lastSeen.claim())).positioned(lastSeen.x(),lastSeen.z()));
+                }
+                hunter.visibility=HunterState.Visibility.HIDDEN;
+                hunter.direct=null;hunter.inferred=null;
+                continue;
+            }
+            lastSeenAreaNearby.put(hunterKey,false);
+            double distance=Math.hypot(marker.x()-px,marker.z()-pz)/scale;
+            TownData town=TownHoverOverlay.townAt(marker.x(),marker.z(),towns);
+            String claim=town==null?tr("common.wilderness").getString():town.name();
+            hunter.direct=new HunterState.Observation(marker.x(),marker.z(),now,HunterState.ObservationType.DIRECT_DYNMAP,claim,"",HunterState.Confidence.HIGH);
+            hunter.lastSeen=hunter.direct;hunter.visibility=HunterState.Visibility.VISIBLE;hunter.online=HunterState.OnlineStatus.ONLINE;
+            if(nearby&&!wasNearby) {
+                String bearing=config.hunterDirectionEnabled?" "+direction(px,pz,marker.x(),marker.z()):"";
+                notifications.publish(HunterEvent.warning(hunter.configuredName+":dynmap-nearby",tr("event.reappeared_nearby",hunter.name),now,
+                        tr("event.distance_from_you",(int)Math.round(distance)),
+                        Component.translatable("townymapaddon.hunter.hud.name_distance",hunter.name,(int)Math.round(distance),bearing)).positioned(marker.x(),marker.z()));
+            }
+        }
+        successfulCycles++;lastSuccessfulCycle=now;
+    }
+
+    static boolean isNearbyDynmapHunter(double playerX,double playerZ,double hunterX,double hunterZ,double dimensionScale,int radiusBlocks) {
+        return dimensionScale>0&&Math.hypot(hunterX-playerX,hunterZ-playerZ)/dimensionScale<=radiusBlocks;
+    }
     public void tickSafely(Minecraft mc,List<PlayerMarker> players,List<TownData> townSnapshot){try{tick(mc,players==null?List.of():players,townSnapshot==null?List.of():townSnapshot);}catch(RuntimeException error){recordError("cycle",null,error);long now=System.currentTimeMillis();if(now-lastHealthLog>=10_000){lastHealthLog=now;net.townymap.TownyMapMod.LOGGER.warn("[HunterAlert/Health] tracking cycle failed; scheduler remains active cycles={} manual={} outlaw={} errors={}",successfulCycles,states.size(),candidateStates.size(),trackingErrors);}}}
     private void syncCandidateThreatStates(List<PlayerMarker> players,Map<String,PlayerMarker> visibleNow,long now){
         lastAutoActorBuild=now;
@@ -102,7 +162,7 @@ public final class HunterEarlyWarningSystem {
     static boolean approachRefreshDue(boolean hasActors,boolean entriesChanged,boolean moved,long now,long lastRefresh,long interval){return hasActors&&(entriesChanged||moved||now-lastRefresh>=interval);}
     static boolean candidateShouldRemove(boolean manuallyWatched,boolean hasObservation,long observationAt,boolean visibleNow,long now){return manuallyWatched||(hasObservation&&!visibleNow&&now-observationAt>30*60_000L);}
     static boolean qualifiesAutomatic(boolean enabled,boolean manual,boolean online,int outlawCount,int threshold){return enabled&&!manual&&online&&outlawCount>threshold;}
-    public void onCommandSent(String command){exposureSession.recordCommand(command,System.currentTimeMillis());lastApproachRefresh=0;}
+    public void onCommandSent(String command){if(DYNMAP_VISIBILITY_ONLY)return;exposureSession.recordCommand(command,System.currentTimeMillis());lastApproachRefresh=0;}
     private void refreshApproaches(Minecraft mc,long now,double px,double pz){
         lastApproachRefresh=now;lastApproachX=px;lastApproachZ=pz;long generation=++approachGeneration;
         List<String> names=allThreatStates().stream().map(h->h.name).toList();
@@ -206,6 +266,7 @@ public final class HunterEarlyWarningSystem {
     private int zone(double d){if(d<=config.hunterCriticalRadius)return 4;if(d<=config.hunterHighRadius)return 3;if(d<=config.hunterElevatedRadius)return 2;if(d<=config.hunterNearbyRadius)return 1;return 0;}
     private int threshold(int z){return z==4?config.hunterCriticalRadius:z==3?config.hunterHighRadius:z==2?config.hunterElevatedRadius:config.hunterNearbyRadius;}
     public List<String> exposureHudLines() {
+        if(DYNMAP_VISIBILITY_ONLY)return List.of();
         if(!config.hunterWarningEnabled||!config.hunterShowHud||!config.hunterExposureHud)return List.of();
         long now=System.currentTimeMillis();
         String dynmapColor=exposure.visible()?"§e":"§a";
@@ -225,6 +286,7 @@ public final class HunterEarlyWarningSystem {
     private static double pointSegmentDistance(double px,double pz,double ax,double az,double bx,double bz){double dx=bx-ax,dz=bz-az,len2=dx*dx+dz*dz;if(len2==0)return Math.hypot(px-ax,pz-az);double t=Math.clamp(((px-ax)*dx+(pz-az)*dz)/len2,0,1);return Math.hypot(px-(ax+t*dx),pz-(az+t*dz));}
     public List<String> hunterHudLines(Minecraft mc){
         if(!config.hunterWarningEnabled||!config.hunterShowHud||mc.player==null)return List.of();
+        if(DYNMAP_VISIBILITY_ONLY)return dynmapHunterHudLines(mc);
         double s=net.townymap.TownyMapMod.dimensionCoordinateScale(),px=mc.player.getX()*s,pz=mc.player.getZ()*s;long now=System.currentTimeMillis();
         record Row(HunterState h,double d,int priority){} ArrayList<Row>rows=new ArrayList<>();
         if(config.hunterShowNearby)for(HunterState h:states.values()){var o=h.bestObservation();if(o!=null&&(h.online!=HunterState.OnlineStatus.OFFLINE||h.offlineResidualActive(now,config.hunterOfflineResidualMinutes*60_000L))){double d=Math.hypot(o.x()-px,o.z()-pz)/s;if(d<=config.hunterNearbyRadius){int priority=(h.online==HunterState.OnlineStatus.ONLINE?10_000:0)+Math.max(0,5_000-(int)Math.round(d))+h.threat.level().ordinal()*100;rows.add(new Row(h,d,priority));}}}
@@ -239,9 +301,27 @@ public final class HunterEarlyWarningSystem {
         }
         return out;
     }
-    public String safeRouteHudLine(Minecraft mc){if(!config.hunterWarningEnabled||!config.hunterShowHud||route==null||mc==null||mc.player==null)return "";double s=net.townymap.TownyMapMod.dimensionCoordinateScale(),px=mc.player.getX()*s,pz=mc.player.getZ()*s;int intersections=threatFronts.routeIntersectionCount(px,pz,route.x(),route.z(),System.currentTimeMillis());return intersections>0?"§c"+tr("hud.route_front_risk",intersections,route.destination()).getString():"§a"+tr("hud.safe_route",config.hunterDirectionEnabled?direction(px,pz,route.x(),route.z()):"",(int)Math.round(route.distance()/s),route.destination()).getString();}
+    private List<String> dynmapHunterHudLines(Minecraft mc){
+        double scale=net.townymap.TownyMapMod.dimensionCoordinateScale(),px=mc.player.getX()*scale,pz=mc.player.getZ()*scale;
+        record Row(HunterState hunter,double distance){}
+        List<Row> rows=states.values().stream().filter(h->h.visibility==HunterState.Visibility.VISIBLE&&h.direct!=null)
+                .map(h->new Row(h,Math.hypot(h.direct.x()-px,h.direct.z()-pz)/scale))
+                .filter(row->row.distance()<=config.hunterNearbyRadius).sorted(Comparator.comparingDouble(Row::distance)).toList();
+        if(rows.isEmpty())return List.of();
+        ArrayList<String> out=new ArrayList<>();out.add("§c§l"+Component.translatable("townymapaddon.hunter.watch.title").getString());
+        for(int i=0;i<Math.min(config.hunterMaxHudEntries,rows.size());i++){
+            Row row=rows.get(i);HunterState.Observation observation=row.hunter().direct;
+            String bearing=config.hunterDirectionEnabled?direction(px,pz,observation.x(),observation.z()):"";
+            out.add("§f"+Component.translatable("townymapaddon.hunter.hud.tracked",row.hunter().name,(int)Math.round(row.distance()),bearing).getString());
+            out.add("§7"+Component.translatable("townymapaddon.hunter.hud.visible_claim",observation.claim()).getString());
+        }
+        if(rows.size()>config.hunterMaxHudEntries)out.add("§7"+Component.translatable("townymapaddon.hunter.hud.more",rows.size()-config.hunterMaxHudEntries).getString());
+        return out;
+    }
+    public String safeRouteHudLine(Minecraft mc){if(DYNMAP_VISIBILITY_ONLY)return "";if(!config.hunterWarningEnabled||!config.hunterShowHud||route==null||mc==null||mc.player==null)return "";double s=net.townymap.TownyMapMod.dimensionCoordinateScale(),px=mc.player.getX()*s,pz=mc.player.getZ()*s;int intersections=threatFronts.routeIntersectionCount(px,pz,route.x(),route.z(),System.currentTimeMillis());return intersections>0?"§c"+tr("hud.route_front_risk",intersections,route.destination()).getString():"§a"+tr("hud.safe_route",config.hunterDirectionEnabled?direction(px,pz,route.x(),route.z()):"",(int)Math.round(route.distance()/s),route.destination()).getString();}
     public List<String> warningHudLines(){if(!config.hunterWarningEnabled||!config.hunterShowHud)return List.of();List<String> lines=notifications.hudLines(System.currentTimeMillis());return lines.isEmpty()?List.of():List.copyOf(lines.subList(0,Math.min(3,lines.size())));}
     public void onSystemMessage(String text){
+        if(DYNMAP_VISIBILITY_ONLY)return;
         if(!config.hunterWarningEnabled||text==null)return; Matcher m=DEATH.matcher(text.replaceAll("§.","").trim()); if(!m.matches())return;
         String victim=m.group(1),killer=m.group(3); long now=System.currentTimeMillis(); HunterState hk=actor(killer),hv=actor(victim);
         if(hk!=null){hk.combatHistory.addFirst(new HunterState.CombatEvent(tr("event.killed",victim).getString(),now,true));boolean inferred=infer(hk,victim,now);if(!inferred)notifications.publish(HunterEvent.normal(hk.configuredName+":kill:"+now,tr("event.hunter_killed",hk.name,victim),now,tr("event.no_victim_position")));}
@@ -260,7 +340,7 @@ public final class HunterEarlyWarningSystem {
     public HunterCandidateService candidateService(){return candidates;}
     private static final class NearbyCandidate{String name,claim="WILDERNESS";int outlawCount,x,z;double distance;long lastSeenAt;boolean inside,visibleNow;NearbyCandidate(String name,int count){this.name=name;this.outlawCount=count;}}
     /** Visible exact positions only; generic hidden last-known markers remain owned by EarthMC-map-addon. */
-    public void renderWorldMap(GuiGraphicsExtractor ctx,double cameraX,double cameraZ,double scale,int sw,int sh){if(!config.hunterWarningEnabled||scale<=0)return;if(config.hunterRadiusOnWorldMap)net.townymap.render.XaeroRadiusOverlayRenderer.worldMap(ctx,radiusOverlays.snapshot(),cameraX,cameraZ,scale,sw,sh);if(config.hunterShowLatentTeleportOriginsWorldMap)for(var latent:threatFronts.latentTeleports(Math.max(20,config.hunterFrontWorldMapLimit*4))){int x=sx(latent.x(),cameraX,scale,sw),y=sy(latent.z(),cameraZ,scale,sh),color=latent.type()==ApproachRoute.Type.NATION?0x886C55FF:0x8843DDEB;if(x>=0&&x<sw&&y>=0&&y<sh)ctx.fill(x-1,y-1,x+2,y+2,color);}for(HunterState h:allThreatStates())if(h.visibility==HunterState.Visibility.VISIBLE&&h.direct!=null)cross(ctx,sx(h.direct.x(),cameraX,scale,sw),sy(h.direct.z(),cameraZ,scale,sh),0xFFFF8C32);if(route!=null){int x=sx(route.x(),cameraX,scale,sw),y=sy(route.z(),cameraZ,scale,sh);Minecraft mc=Minecraft.getInstance();if(mc.player!=null){double ds=net.townymap.TownyMapMod.dimensionCoordinateScale();dottedLine(ctx,sx(mc.player.getX()*ds,cameraX,scale,sw),sy(mc.player.getZ()*ds,cameraZ,scale,sh),x,y,0xFF55DD77);}cross(ctx,x,y,0xFF55DD77);}}
+    public void renderWorldMap(GuiGraphicsExtractor ctx,double cameraX,double cameraZ,double scale,int sw,int sh){if(DYNMAP_VISIBILITY_ONLY)return;if(!config.hunterWarningEnabled||scale<=0)return;if(config.hunterRadiusOnWorldMap)net.townymap.render.XaeroRadiusOverlayRenderer.worldMap(ctx,radiusOverlays.snapshot(),cameraX,cameraZ,scale,sw,sh);if(config.hunterShowLatentTeleportOriginsWorldMap)for(var latent:threatFronts.latentTeleports(Math.max(20,config.hunterFrontWorldMapLimit*4))){int x=sx(latent.x(),cameraX,scale,sw),y=sy(latent.z(),cameraZ,scale,sh),color=latent.type()==ApproachRoute.Type.NATION?0x886C55FF:0x8843DDEB;if(x>=0&&x<sw&&y>=0&&y<sh)ctx.fill(x-1,y-1,x+2,y+2,color);}for(HunterState h:allThreatStates())if(h.visibility==HunterState.Visibility.VISIBLE&&h.direct!=null)cross(ctx,sx(h.direct.x(),cameraX,scale,sw),sy(h.direct.z(),cameraZ,scale,sh),0xFFFF8C32);if(route!=null){int x=sx(route.x(),cameraX,scale,sw),y=sy(route.z(),cameraZ,scale,sh);Minecraft mc=Minecraft.getInstance();if(mc.player!=null){double ds=net.townymap.TownyMapMod.dimensionCoordinateScale();dottedLine(ctx,sx(mc.player.getX()*ds,cameraX,scale,sw),sy(mc.player.getZ()*ds,cameraZ,scale,sh),x,y,0xFF55DD77);}cross(ctx,x,y,0xFF55DD77);}}
     public java.util.List<net.townymap.integration.XaeroRadiusOverlayProvider.Overlay> radiusOverlaySnapshot(){return radiusOverlays.snapshot();}
     public java.util.List<net.townymap.integration.XaeroRadiusOverlayProvider.Overlay> minimapRadiusOverlaySnapshot(){return minimapRadiusOverlays.snapshot();}
     private static int sx(double x,double camera,double scale,int size){return(int)Math.round((x-camera)*scale+size/2.0);}private static int sy(double z,double camera,double scale,int size){return(int)Math.round((z-camera)*scale+size/2.0);}private static void cross(GuiGraphicsExtractor c,int x,int y,int color){c.fill(x-5,y-1,x+6,y+2,color);c.fill(x-1,y-5,x+2,y+6,color);}private static void dottedLine(GuiGraphicsExtractor c,int x1,int y1,int x2,int y2,int color){int steps=Math.min(300,Math.max(Math.abs(x2-x1),Math.abs(y2-y1)));if(steps<=0)return;for(int i=0;i<=steps;i+=6){int x=x1+(x2-x1)*i/steps,y=y1+(y2-y1)*i/steps;c.fill(x-1,y-1,x+2,y+2,color);}}

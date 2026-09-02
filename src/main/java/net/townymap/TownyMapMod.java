@@ -176,6 +176,7 @@ public class TownyMapMod implements ClientModInitializer {
         ClientReceiveMessageEvents.GAME.register(TownyMapMod::onGameMessage);
         net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK.register(c -> {
             if(votePartyService!=null)votePartyService.tick();
+            if(c.level!=null&&isOnEarthMcServer())net.townymap.ice.IceRoadNetwork.tickAutoUpdate();
             net.townymap.integration.ShopWaypoints.tick();
             if(teleportAccess!=null&&isTeleportFeatureAvailable()&&c.level!=null&&c.getUser()!=null){String server=c.getCurrentServer()==null?"":c.getCurrentServer().ip;String session=server+":"+System.identityHashCode(c.getConnection());teleportAccess.tick(currentTownSnapshot(),c.getUser().getName(),session);}
             if (hunterSystem != null && apiClient != null && isHunterFeatureAvailable()) {
@@ -1123,6 +1124,9 @@ public class TownyMapMod implements ClientModInitializer {
         if (renderer == null || config == null) return;
         if (hunterSystem != null && isHunterFeatureAvailable()) hunterSystem.renderWorldMap(ctx, cameraX, cameraZ, scale, screenW, screenH);
         if (!isActiveOnCurrentServer()) return;
+        if (config.iceRoadOverlayEnabled && viewingEarth()) {
+            net.townymap.gui.IceRoadOverlay.render(ctx,cameraX,cameraZ,scale,screenW,screenH,config);
+        }
         // Join-range zone for the selected nation, under the player dots.
         if (config.nationRangeEnabled) {
             // Planning always shows its own nation's zone — that's the whole point of the mode — otherwise
@@ -2116,20 +2120,28 @@ public class TownyMapMod implements ClientModInitializer {
                 return false;
             }
 
-            var target = knownXaeroDimensionFor(mapWorld, activeWorldKey());
+            var target = knownXaeroDimensionFor(proc, mapWorld, activeWorldKey());
             if (target == null) {
-                // Xaero only lists dimensions it has created this session, so a world the player has
-                // been to before but not since logging in is absent -- and its own dimension button
-                // would not offer it either. getDimension() is a plain lookup that returns null (which
-                // GuiMap would then dereference), so the entry has to be created before it can be shown.
-                // Creating it makes Xaero load that dimension's saved regions from disk, which is the
-                // whole point: seeing where you have already been up there.
-                target = createXaeroDimension(mapWorld, activeWorldKey());
-                if (target == null) {
-                    LOGGER.info("[TownyMap] No Xaero dimension for {}; leaving its map where it is",
-                            activeWorldKey());
-                    return true;   // nothing more we can do; do not spin on it
+                // Do not fabricate a dimension entry. Xaero can create a MapDimension from a key, but
+                // it cannot infer the server's DimensionType for an unvisited custom world. Selecting
+                // that incomplete entry produces its "Currently unknown dimension type" warning and
+                // limits the map controls. Our squaremap tiles still render the requested world, so
+                // leave Xaero on its last valid dimension until it learns the Moon from an actual visit.
+                // A dimension can be present in Xaero's list but still have no resolvable DimensionType
+                // (notably stale earthmc:moon entries made before the player visited it). Leaving the
+                // previous custom selection untouched is unsafe because it may be that incomplete entry.
+                // Force a known-good fallback while squaremap continues to provide the requested terrain.
+                var fallback = knownXaeroDimensionFor(proc, mapWorld, WORLD_OVERWORLD);
+                if (fallback == null) {
+                    LOGGER.info("[TownyMap] Xaero has no dimension with a known type for {}; will retry",
+                            dimensionKeyFor(activeWorldKey()));
+                    return false;
                 }
+                mapWorld.setCustomDimensionId(fallback);
+                proc.checkForWorldUpdate();
+                LOGGER.info("[TownyMap] Xaero dimension {} has no known type; using {} terrain fallback",
+                        dimensionKeyFor(activeWorldKey()), fallback.identifier());
+                return true;
             }
             var own = client.level.dimension();
             mapWorld.setCustomDimensionId(target.equals(own) ? null : target);
@@ -2204,13 +2216,17 @@ public class TownyMapMod implements ClientModInitializer {
      * means earthmc:moon and nothing else.
      */
     private static net.minecraft.resources.ResourceKey<Level> knownXaeroDimensionFor(
-            xaero.map.world.MapWorld mapWorld, String worldKey) {
+            xaero.map.MapProcessor processor, xaero.map.world.MapWorld mapWorld, String worldKey) {
         net.minecraft.resources.ResourceKey<Level> want = dimensionKeyFor(worldKey);
         if (want == null) return null;
         for (var dim : mapWorld.getDimensionsList()) {
-            if (dim != null && want.equals(dim.getDimId())) return want;
+            if (dim != null && want.equals(dim.getDimId())) {
+                var registry = processor.getWorldDimensionTypeRegistry();
+                if (registry != null && !dim.isUsingUnknownDimensionType(registry)) return want;
+                return null;
+            }
         }
-        return null;   // not listed yet; the caller creates it
+        return null;
     }
 
     public static String xaeroViewedWorldKey() {
@@ -2702,12 +2718,12 @@ public class TownyMapMod implements ClientModInitializer {
         return isHunterFeatureAvailable() && MapToggleOverlay.handleHunterClick(mouseX, mouseY, screenH);
     }
     public static boolean onHunterActivityButtonClick(double mouseX,double mouseY,int screenH){
-        if(isHunterFeatureAvailable()&&config!=null&&MapToggleOverlay.handleActivityClick(mouseX,mouseY,screenH)){net.townymap.gui.HunterActivityOverlay.toggle(config);return true;}return false;
+        return false;
     }
     public static boolean onTeleportButtonClick(double x,double y,int sh){if(config!=null&&MapToggleOverlay.handleTeleportClick(x,y,sh,config)){Minecraft mc=Minecraft.getInstance();if(mc!=null)mc.gui.setScreen(new net.townymap.gui.TeleportViewerSettingsScreen(mc.gui.screen()));return true;}return false;}
-    public static void renderHunterActivity(GuiGraphicsExtractor ctx,int sw,int sh){if(isHunterFeatureAvailable()&&config!=null)net.townymap.gui.HunterActivityOverlay.render(ctx,sw,sh,config,true);}
-    public static void renderHunterActivityHud(GuiGraphicsExtractor ctx){Minecraft mc=Minecraft.getInstance();if(mc!=null&&mc.player!=null&&mc.gui.screen()==null&&isHunterFeatureAvailable()&&config!=null)net.townymap.gui.HunterActivityOverlay.render(ctx,mc.getWindow().getGuiScaledWidth(),mc.getWindow().getGuiScaledHeight(),config,false);}
-    public static void renderHunterActivityChat(GuiGraphicsExtractor ctx){Minecraft mc=Minecraft.getInstance();if(mc!=null&&mc.player!=null&&isHunterFeatureAvailable()&&config!=null)net.townymap.gui.HunterActivityOverlay.render(ctx,mc.getWindow().getGuiScaledWidth(),mc.getWindow().getGuiScaledHeight(),config,true);}
+    public static void renderHunterActivity(GuiGraphicsExtractor ctx,int sw,int sh){}
+    public static void renderHunterActivityHud(GuiGraphicsExtractor ctx){}
+    public static void renderHunterActivityChat(GuiGraphicsExtractor ctx){}
     public static void renderWildernessRiskHud(GuiGraphicsExtractor ctx,boolean actionBarVisible){
         if(!isHunterFeatureAvailable()||hunterSystem==null)return;Minecraft mc=Minecraft.getInstance();if(mc==null||mc.player==null||mc.gui.screen()!=null)return;String line=hunterSystem.wildernessRiskHudLine();if(line.isBlank())return;int sw=mc.getWindow().getGuiScaledWidth(),sh=mc.getWindow().getGuiScaledHeight(),w=mc.font.width(line),x=sw/2,y=Math.max(4,sh-(actionBarVisible?96:82));ctx.fill(x-w/2-6,y-3,x+w/2+6,y+12,0xD8101216);ctx.centeredText(mc.font,line,x,y,0xFFFFFFFF);
     }
@@ -2729,23 +2745,23 @@ public class TownyMapMod implements ClientModInitializer {
         if(!isHunterFeatureAvailable()||hunterSystem==null||Minecraft.getInstance().gui.screen()!=null)return 0;
         Minecraft mc=Minecraft.getInstance();int lines=hunterSystem.warningHudLines().size();boolean route=mc!=null&&!hunterSystem.safeRouteHudLine(mc).isBlank();return (lines==0?0:lines*13+22)+(route?19:0);
     }
-    public static boolean clickHunterActivity(double x,double y,int sw,int sh){return config!=null&&net.townymap.gui.HunterActivityOverlay.click(x,y,sw,sh,config);}
-    public static boolean releaseHunterActivity(){return config!=null&&net.townymap.gui.HunterActivityOverlay.release(config);}
-    public static void cancelHunterActivityDrag(){net.townymap.gui.HunterActivityOverlay.cancelDrag();}
-    public static boolean scrollHunterActivity(double x,double y,double amount,int sw,int sh){return config!=null&&net.townymap.gui.HunterActivityOverlay.scroll(x,y,amount,sw,sh,config);}
+    public static boolean clickHunterActivity(double x,double y,int sw,int sh){return false;}
+    public static boolean releaseHunterActivity(){return false;}
+    public static void cancelHunterActivityDrag(){}
+    public static boolean scrollHunterActivity(double x,double y,double amount,int sw,int sh){return false;}
 
     public static void openHunterWatchScreen() {
         Minecraft client = Minecraft.getInstance();
         if (client != null) client.gui.setScreen(new net.townymap.gui.HunterWatchScreen(client.gui.screen()));
     }
     public static java.util.List<net.townymap.hunter.alert.HunterEvent> hunterActivityHistory() {
-        return hunterSystem == null ? java.util.List.of() : hunterSystem.activityHistory();
+        return java.util.List.of();
     }
     public static net.townymap.hunter.HunterEarlyWarningSystem.TrackerHealth hunterTrackerHealth(){return hunterSystem==null?null:hunterSystem.health();}
-    public static java.util.List<net.townymap.integration.XaeroRadiusOverlayProvider.Overlay> hunterRadiusOverlays(){return hunterSystem==null?java.util.List.of():hunterSystem.radiusOverlaySnapshot();}
-    public static java.util.List<net.townymap.integration.XaeroRadiusOverlayProvider.Overlay> hunterMinimapRadiusOverlays(){return hunterSystem==null?java.util.List.of():hunterSystem.minimapRadiusOverlaySnapshot();}
+    public static java.util.List<net.townymap.integration.XaeroRadiusOverlayProvider.Overlay> hunterRadiusOverlays(){return java.util.List.of();}
+    public static java.util.List<net.townymap.integration.XaeroRadiusOverlayProvider.Overlay> hunterMinimapRadiusOverlays(){return java.util.List.of();}
     public static net.townymap.hunter.discovery.HunterCandidateService hunterCandidateService() {
-        return hunterSystem == null ? null : hunterSystem.candidateService();
+        return null;
     }
     public static java.util.List<TownData> currentTownSnapshot() { return apiClient == null ? java.util.List.of() : apiClient.getTowns(); }
     public static boolean consumeTeleportTarget(double worldX,double worldZ){if(!isTeleportFeatureAvailable())return false;net.townymap.gui.TeleportViewerOverlay.open(worldX,worldZ);return true;}
@@ -2755,9 +2771,10 @@ public class TownyMapMod implements ClientModInitializer {
     public static net.townymap.teleport.TeleportAccessService.Plan teleportPlan(double x,double z){if(teleportAccess==null)return new net.townymap.teleport.TeleportAccessService.Plan(java.util.List.of(),java.util.List.of(),null,false,"Unavailable");ensureTeleportData();return teleportAccess.plan(x,z);}
     public static void renderTeleportViewer(GuiGraphicsExtractor g,double camX,double camZ,double scale,int sw,int sh){if(isTeleportFeatureAvailable()&&config!=null)net.townymap.gui.TeleportViewerOverlay.render(g,camX,camZ,scale,sw,sh,config);}
     public static boolean clickTeleportViewer(double x,double y,int sw,int sh){return isTeleportFeatureAvailable()&&config!=null&&net.townymap.gui.TeleportViewerOverlay.click(x,y,sw,sh,config);}
+    public static boolean clickIceRoadOverlay(double x,double y,int sw,int sh){return config!=null&&viewingEarth()&&net.townymap.gui.IceRoadOverlay.click(x,y,sw,sh,config);}
     public static boolean releaseTeleportViewer(){return config!=null&&net.townymap.gui.TeleportViewerOverlay.release(config);}
     public static boolean scrollTeleportViewer(double x,double y,double amount,int sw,int sh){return config!=null&&net.townymap.gui.TeleportViewerOverlay.scroll(x,y,amount,sw,sh,config);}
-    public static void cycleTeleportSpawnReport(net.townymap.teleport.TeleportDestination destination){if(teleportAccess!=null)teleportAccess.cycleSpawnReport(destination);}
+    public static void setTeleportSpawnReport(net.townymap.teleport.TeleportDestination destination,net.townymap.teleport.TeleportDestination.PhysicalAccess access){if(teleportAccess!=null)teleportAccess.setSpawnReport(destination,access);}
     public static String teleportTargetContext(double x,double z){TownData t=TownHoverOverlay.townAt(x,z,currentTownSnapshot());return t==null?Component.translatable("townymapaddon.teleport.wilderness").getString():t.name();}
     public static String teleportTownName(double x,double z){TownData t=TownHoverOverlay.townAt(x,z,currentTownSnapshot());return t==null?null:t.name();}
 
