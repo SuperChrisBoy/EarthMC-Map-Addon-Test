@@ -2,6 +2,7 @@ package net.townymap.integration;
 
 import net.minecraft.client.MinecraftClient;
 import net.townymap.model.MapJumpTarget;
+import net.townymap.TownyMapMod;
 import xaero.common.minimap.waypoints.Waypoint;
 import xaero.hud.minimap.BuiltInHudModules;
 import xaero.hud.minimap.module.MinimapSession;
@@ -16,6 +17,9 @@ import java.util.List;
 public final class XaeroWaypointBridge {
 
     private static final String ROUTE_PREFIX = "TM: ";
+    private static final String TELEPORT_ROUTE_PREFIX = "TM · ";
+    private static final List<Waypoint> TELEPORT_VIEWER_WAYPOINTS = new ArrayList<>();
+    public record RouteWaypoint(String label,int x,int y,int z){}
 
     private XaeroWaypointBridge() {
     }
@@ -61,6 +65,8 @@ public final class XaeroWaypointBridge {
         WaypointSet set=currentWaypointSet();MinecraftClient client=MinecraftClient.getInstance();if(set==null||client==null||client.player==null)return false;
         double scale=net.townymap.TownyMapMod.dimensionCoordinateScale();Waypoint waypoint=new Waypoint((int)Math.round(x/scale),y<=0?client.player.getBlockY():y,(int)Math.round(z/scale),cleanLabel(label),symbol(label),WaypointColor.PURPLE,WaypointPurpose.NORMAL,true,y>0);set.add(waypoint,true);touch();return true;
     }
+    public static boolean replaceTeleportRouteWaypoints(List<RouteWaypoint> route){WaypointSet set=currentWaypointSet();MinecraftClient client=MinecraftClient.getInstance();if(set==null||client==null||client.player==null||route==null||route.isEmpty())return false;removeTeleportWaypoints();double scale=TownyMapMod.dimensionCoordinateScale();int n=1;for(RouteWaypoint p:route){Waypoint w=new Waypoint((int)Math.round(p.x()/scale),p.y()<=0?client.player.getBlockY():p.y(),(int)Math.round(p.z()/scale),TELEPORT_ROUTE_PREFIX+n+" "+cleanLabel(p.label()),Integer.toString(Math.min(9,n)),WaypointColor.PURPLE,WaypointPurpose.NORMAL,true,p.y()>0);set.add(w,true);TELEPORT_VIEWER_WAYPOINTS.add(w);n++;}touch();return true;}
+    public static boolean removeTeleportWaypoints(){WaypointSet set=currentWaypointSet();if(set==null)return false;List<Waypoint> remove=new ArrayList<>(TELEPORT_VIEWER_WAYPOINTS);for(Waypoint w:set.getWaypoints())if(w.isTemporary()&&w.getName()!=null&&w.getName().startsWith(TELEPORT_ROUTE_PREFIX)&&!remove.contains(w))remove.add(w);for(Waypoint w:remove)set.remove(w);TELEPORT_VIEWER_WAYPOINTS.clear();if(!remove.isEmpty())touch();return !remove.isEmpty();}
 
     /**
      * Adds one temporary shop waypoint. The coordinates are literal in-world positions in the

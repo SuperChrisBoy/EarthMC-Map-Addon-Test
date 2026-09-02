@@ -196,6 +196,7 @@ public abstract class MixinGuiMap {
                 double guiScale = (screenScale > 0) ? scale / screenScale : scale;
                 double mapScale = guiScale / dimMul;
                 TownyMapMod.renderWorldMapLatePass(ctx, cameraX * dimMul, cameraZ * dimMul, mapScale, w, h);
+                TownyMapMod.renderTeleportViewer(ctx,cameraX*dimMul,cameraZ*dimMul,mapScale,w,h);
             }
             // A clean map screenshot skips our own chrome for the frame, so the capture is just the map.
             if (!TownyMapMod.hideChromeForScreenshot()) {
@@ -401,6 +402,7 @@ public abstract class MixinGuiMap {
             if(button==0&&TownyMapMod.onHunterActivityButtonClick(click.x(),click.y(),sh)){cir.setReturnValue(true);return;}
             if(button==0&&TownyMapMod.clickHunterActivity(click.x(),click.y(),sw,sh)){cir.setReturnValue(true);return;}
             if(button==0&&TownyMapMod.onTeleportButtonClick(click.x(),click.y(),sh)){cir.setReturnValue(true);return;}
+            if(button==0&&TownyMapMod.clickTeleportViewer(click.x(),click.y(),sw,sh)){cir.setReturnValue(true);return;}
 
             if (button == 0 && TownyMapMod.onMapToggleClick(click.x(), click.y(), sh)) {
                 cir.setReturnValue(true);
@@ -532,6 +534,12 @@ public abstract class MixinGuiMap {
             logOnce(CLICK_ERROR_LOGGED, "Failed to handle Xaero world-map key press", e);
         }
     }
+
+    @Inject(require=0,method="mouseReleased",at=@At("HEAD"),remap=false,cancellable=true)
+    private void townymap$releaseTeleport(Click click,CallbackInfoReturnable<Boolean> cir){if(click.buttonInfo().button()==0&&TownyMapMod.releaseTeleportViewer())cir.setReturnValue(true);}
+
+    @Inject(require=0,method="mouseScrolled",at=@At("HEAD"),remap=false,cancellable=true)
+    private void townymap$scrollTeleport(double x,double y,double horizontal,double vertical,CallbackInfoReturnable<Boolean> cir){MinecraftClient mc=MinecraftClient.getInstance();if(TownyMapMod.scrollTeleportViewer(x,y,vertical,mc.getWindow().getScaledWidth(),mc.getWindow().getScaledHeight()))cir.setReturnValue(true);}
 
     @Inject(require = 0, method = "method_25400", at = @At("HEAD"), remap = false, cancellable = true)
     private void onCharTyped(CharInput input, CallbackInfoReturnable<Boolean> cir) {
