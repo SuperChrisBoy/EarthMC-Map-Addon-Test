@@ -384,12 +384,15 @@ public class TownyMapMod implements ClientModInitializer {
         long now = System.currentTimeMillis();
         optimisticClaimChunks.removeIf(chunk -> chunk.chunkX() == chunkX && chunk.chunkZ() == chunkZ);
         optimisticClaimChunks.add(new OptimisticClaimChunk(chunkX, chunkZ, townName, fillColor, outlineColor,
-                now + OPTIMISTIC_CLAIM_TTL_MS));
+                now + OPTIMISTIC_CLAIM_TTL_MS, playerWorldResolved()));
     }
 
     private static TownData townByName(String townName) {
         if (apiClient == null || townName == null) return null;
-        for (TownData town : apiClient.getTowns()) {
+        // The player's world: this seeds the colours of a chunk they just claimed, which happens where
+        // they stand. Reading the shown world meant claiming on Earth with the map pinned to the Moon
+        // found no town and fell back to default colours.
+        for (TownData town : apiClient.getTowns(playerWorldResolved())) {
             if (town.name().equalsIgnoreCase(townName)) return town;
         }
         return null;
@@ -509,6 +512,11 @@ public class TownyMapMod implements ClientModInitializer {
     public static void forceRefreshTownClaims() {
         if (apiClient == null) return;
         invalidateTownRenderCaches();
+        // Imagery too, not just the claims. Tiles are keyed by world so they never need clearing for
+        // correctness any more, which left no way to recover if a tile ever cached badly -- and one did,
+        // via the close-while-reachable race fixed alongside this. A deliberate refresh is the right
+        // place for that: only this path reaches it, so nothing automatic pays for it.
+        if (renderer != null) renderer.clearSquaremapTiles();
         apiClient.forceTownMarkerRefresh();
     }
 
@@ -890,8 +898,13 @@ public class TownyMapMod implements ClientModInitializer {
     public record GhostMarker(String name, String uuid, int x, int z, int alpha) {}
 
     private static final long GHOST_MAX_AGE_MS = 5 * 60_000L;   // stop showing a ghost 5 min after it vanished
-    private static volatile List<GhostMarker> cachedGhosts = List.of();
-    private static volatile long cachedGhostsAt;
+    /**
+     * Cached per world. One shared list was fine while ghosts were Earth-only; now that the world map
+     * and the minimap can ask about different worlds within the same recompute window, a single entry
+     * would hand the second caller the first one's ghosts.
+     */
+    private static final Map<String, List<GhostMarker>> cachedGhosts = new ConcurrentHashMap<>();
+    private static final Map<String, Long> cachedGhostsAt = new ConcurrentHashMap<>();
     private static final long GHOST_RECOMPUTE_MS = 500L;   // ghosts move slowly; no need to rebuild per frame
 
     /**
@@ -904,21 +917,37 @@ public class TownyMapMod implements ClientModInitializer {
      * list = logged off → drop them, so a logged-off player is removed rather than left as a headless dot.
      */
     public static List<GhostMarker> lastSeenGhosts() {
+        return lastSeenGhosts(activeWorldKey());
+    }
+
+    /** Ghosts for one surface's world -- the minimap passes the world the player is standing in. */
+    public static List<GhostMarker> lastSeenGhosts(String worldKey) {
+        return lastSeenGhostsInner(worldKey == null ? WORLD_OVERWORLD : worldKey);
+    }
+
+    private static List<GhostMarker> lastSeenGhostsInner(String worldKey) {
         if (config == null || !config.playerLastSeen || apiClient == null || !isActiveOnCurrentServer()) {
             return List.of();
         }
+
         // Recompute a few times a second, not every frame: the set of ghosts and their fixed positions
         // change slowly, so rebuilding the feed set and scanning history at 60fps was pure waste.
-        long sinceRecompute = System.currentTimeMillis() - cachedGhostsAt;
-        if (sinceRecompute >= 0 && sinceRecompute < GHOST_RECOMPUTE_MS) return cachedGhosts;
+        Long cachedAt = cachedGhostsAt.get(worldKey);
+        long sinceRecompute = cachedAt == null ? Long.MAX_VALUE : System.currentTimeMillis() - cachedAt;
+        if (sinceRecompute >= 0 && sinceRecompute < GHOST_RECOMPUTE_MS) {
+            return cachedGhosts.getOrDefault(worldKey, List.of());
+        }
 
         MinecraftClient client = MinecraftClient.getInstance();
         var handler = client == null ? null : client.getNetworkHandler();
         if (handler == null) return List.of();
 
         long now = System.currentTimeMillis();
+        // Both sides read the same world. Comparing one world's history against another's feed would
+        // call every player in the first a ghost -- which is exactly what happened before the history
+        // knew which world a position came from.
         Set<String> feed = new java.util.HashSet<>();
-        for (PlayerMarker m : apiClient.getPlayers()) {
+        for (PlayerMarker m : apiClient.getPlayers(worldKey)) {
             if (m.name() != null) feed.add(m.name().toLowerCase(Locale.ROOT));
         }
         Map<String, net.townymap.model.PlayerHistoryEntry> history = apiClient.getPlayerHistory();
@@ -926,6 +955,7 @@ public class TownyMapMod implements ClientModInitializer {
         List<GhostMarker> out = new ArrayList<>();
         for (var e : history.entrySet()) {
             if (feed.contains(e.getKey())) continue;       // still on the map → not a ghost
+            if (!worldKey.equals(e.getValue().worldOrDefault())) continue;   // last seen in another world
             var h = e.getValue();
             long age = now - h.lastSeenMs();
             if (age < 0 || age > GHOST_MAX_AGE_MS) continue;
@@ -933,14 +963,25 @@ public class TownyMapMod implements ClientModInitializer {
             out.add(new GhostMarker(h.name(), h.uuid(), h.x(), h.z(), 0xFF));
         }
 
-        cachedGhosts = out;
-        cachedGhostsAt = now;
+        cachedGhosts.put(worldKey, out);
+        cachedGhostsAt.put(worldKey, now);
         return out;
     }
 
     public static List<OptimisticClaimChunk> optimisticClaimChunks() {
+        return optimisticClaimChunks(activeWorldKey());
+    }
+
+    /** Claims belonging to one world -- the minimap asks for the one the player is standing in. */
+    public static List<OptimisticClaimChunk> optimisticClaimChunks(String worldKey) {
+        // Empty almost always -- claims live for seconds after claiming -- and this is called three
+        // times a frame across the two surfaces, so do not allocate for the common case.
+        if (optimisticClaimChunks.isEmpty()) return List.of();
         pruneOptimisticClaimChunks(false);
-        return List.copyOf(optimisticClaimChunks);
+        if (optimisticClaimChunks.isEmpty()) return List.of();
+        List<OptimisticClaimChunk> out = new ArrayList<>();
+        for (OptimisticClaimChunk c : optimisticClaimChunks) if (c.inWorld(worldKey)) out.add(c);
+        return out;
     }
 
     private static void pruneOptimisticClaimChunks(boolean clearAll) {
@@ -949,8 +990,14 @@ public class TownyMapMod implements ClientModInitializer {
             optimisticClaimChunks.clear();
             return;
         }
-        List<TownData> towns = apiClient.getTowns();
-        optimisticClaimChunks.removeIf(chunk -> chunk.expired(now) || confirmedClaimChunk(chunk, towns));
+        if (optimisticClaimChunks.isEmpty()) return;
+        // Checked against the claim's OWN world, not the one being shown. A claim made on Earth while
+        // the map was pinned to the Moon was compared with lunar towns, never matched, and so lingered
+        // as a pending overlay until its TTL ran out instead of clearing the moment it went live.
+        optimisticClaimChunks.removeIf(chunk -> chunk.expired(now)
+                || confirmedClaimChunk(chunk, apiClient.getTowns(
+                        chunk.world() == null || chunk.world().isEmpty()
+                                ? activeWorldKey() : chunk.world())));
     }
 
     private static boolean confirmedClaimChunk(OptimisticClaimChunk chunk, List<TownData> towns) {
@@ -1001,6 +1048,9 @@ public class TownyMapMod implements ClientModInitializer {
             lastSearchMapInstance = mapInstance;
             armedMapDismiss = false;
             TownSearchOverlay.reset();
+            // Opening the map is the first moment Xaero is certain to have a session, and the surest
+            // point to catch a login-time switch that had nowhere to land.
+            requestXaeroDimensionSync();
             return;
         }
         if (armedMapDismiss) {
@@ -1220,7 +1270,8 @@ public class TownyMapMod implements ClientModInitializer {
         long now = System.currentTimeMillis();
         if (now - lastMinimapNationAlertUpdateMs < 500L) return;
         lastMinimapNationAlertUpdateMs = now;
-        List<TownData> towns = apiClient.getTowns();
+        // Minimap alert, so it reads the world the player is standing in, not the pinned one.
+        List<TownData> towns = apiClient.getTowns(playerWorldResolved());
         if (towns.isEmpty()) {
             minimapOutsideNationPlayers.clear();
             return;
@@ -1231,7 +1282,9 @@ public class TownyMapMod implements ClientModInitializer {
         String selfName = client.getSession().getUsername();
 
         Set<String> currentlyVisibleWilderness = new HashSet<>();
-        for (var marker : apiClient.getPlayers()) {
+        // Same world as the towns above -- this half still read the shown world, so a Moon-pinned map
+        // compared lunar players against Earth claims and flagged them all as outside their nation.
+        for (var marker : apiClient.getPlayers(playerWorldResolved())) {
             if (marker.name() == null || marker.name().equalsIgnoreCase(selfName)) continue;
             if (Math.abs(marker.x() - playerX) > visibleBlocks
                     || Math.abs(marker.z() - playerZ) > visibleBlocks) continue;
@@ -1417,7 +1470,10 @@ public class TownyMapMod implements ClientModInitializer {
         double px = client.player.getX() * dimScale;
         double pz = client.player.getZ() * dimScale;
         long now = System.currentTimeMillis();
-        java.util.List<TownData> towns = apiClient.getTowns();
+        // Describes where the player physically stands, so it reads their world -- not the one the
+        // world map may be pinned to.
+        String hudWorld = playerWorldResolved();
+        java.util.List<TownData> towns = apiClient.getTowns(hudWorld);
         TownData here = TownHoverOverlay.townAt(px, pz, towns);
         java.util.List<String> lines = new java.util.ArrayList<>();
         if (hunterSystem != null) lines.addAll(hunterSystem.exposureHudLines());
@@ -1447,14 +1503,14 @@ public class TownyMapMod implements ClientModInitializer {
             // retention buffer means the list self-corrects within a refresh and honours the Last Seen toggle.
             record Nearby(String name, double dist, boolean ghost) {}
             java.util.List<Nearby> near = new java.util.ArrayList<>();
-            for (PlayerMarker m : apiClient.getPlayers()) {
+            for (PlayerMarker m : apiClient.getPlayers(hudWorld)) {
                 if (m.name() == null || m.name().equalsIgnoreCase(self)) continue;
                 double d = Math.hypot(m.x() - px, m.z() - pz) / dimScale;
                 if (d <= 100.0) near.add(new Nearby(m.name(), d, false));
             }
             // Recently-departed players at their last-seen position (red), exactly the minimap's ghost data —
             // so you can still see roughly where someone was after they drop off the live feed.
-            for (GhostMarker g : lastSeenGhosts()) {
+            for (GhostMarker g : lastSeenGhosts(hudWorld)) {
                 if (g.name() == null || g.name().equalsIgnoreCase(self)) continue;
                 double d = Math.hypot(g.x() - px, g.z() - pz) / dimScale;
                 if (d <= 100.0) near.add(new Nearby(g.name(), d, true));
@@ -1641,6 +1697,623 @@ public class TownyMapMod implements ClientModInitializer {
      * own position or Xaero's camera (always current-dimension) has to go through this, or the two
      * sides end up a factor of 8 apart in the Nether.
      */
+    // ── Squaremap worlds (Terra Nostra / Moon) ───────────────────────────────
+    public static final String WORLD_OVERWORLD = "minecraft_overworld";
+    public static final String WORLD_MOON = "earthmc_moon";
+
+    /** squaremap world key -> display name, from /tiles/settings.json. Empty until fetched. */
+    private static volatile java.util.Map<String, String> squaremapWorlds = java.util.Map.of();
+    private static volatile boolean squaremapWorldsFetching = false;
+    private static volatile long lastWorldsAttemptMs = 0;
+    private static volatile String lastActiveWorld = WORLD_OVERWORLD;
+    private static volatile String loggedUnknownWorld = null;
+
+    /**
+     * The worlds squaremap publishes, fetched once. Used to check that a dimension actually has map
+     * data before we try to show it, so an unknown dimension falls back instead of 404ing every tile.
+     */
+    public static java.util.Map<String, String> squaremapWorlds() {
+        // Retry on failure rather than latching. Latching meant one failed fetch left the list empty for
+        // the session, and everything keyed off it silently misbehaved.
+        long now = System.currentTimeMillis();
+        if (squaremapWorlds.isEmpty() && !squaremapWorldsFetching
+                && now - lastWorldsAttemptMs > 60_000L && config != null && apiClient != null) {
+            squaremapWorldsFetching = true;
+            lastWorldsAttemptMs = now;
+            apiClient.fetchWorlds().thenAccept(m -> {
+                if (m != null && !m.isEmpty()) {
+                    squaremapWorlds = m;
+                    LOGGER.info("[TownyMap] squaremap worlds: {}", m);
+                }
+                squaremapWorldsFetching = false;
+            }).exceptionally(t -> { squaremapWorldsFetching = false; return null; });
+        }
+        return squaremapWorlds;
+    }
+
+    /**
+     * The squaremap world key for the dimension the player is standing in, or null if squaremap has no
+     * map for it.
+     *
+     * <p>squaremap names worlds "namespace_path", which is exactly the dimension id with the colon
+     * swapped -- minecraft:overworld is minecraft_overworld, earthmc:moon is earthmc_moon. Deriving it
+     * means a world EarthMC adds later works with no code change.
+     */
+    public static String playerWorldKey() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.world == null) return null;
+        try {
+            var id = client.world.getRegistryKey().getValue();
+            String key = id.getNamespace() + "_" + id.getPath();
+            if (squaremapWorlds().containsKey(key)) return key;
+            // Say so once. The mapping from dimension id to squaremap world is derived, not hardcoded,
+            // so if EarthMC names the Moon dimension something unexpected this line is what reveals it.
+            if (!key.equals(loggedUnknownWorld) && !squaremapWorlds().isEmpty()) {
+                loggedUnknownWorld = key;
+                LOGGER.info("[TownyMap] Dimension {} has no squaremap world (known: {})",
+                        id, squaremapWorlds().keySet());
+            }
+            return null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    public static final int WORLD_MODE_AUTO  = 0;
+    public static final int WORLD_MODE_EARTH = 1;
+    public static final int WORLD_MODE_MOON  = 2;
+
+    /** Auto mode's answer, resolved on the client tick so fetch threads never touch the level. */
+    private static volatile String autoResolvedWorld = WORLD_OVERWORLD;
+    private static volatile String resolvedPlayerWorld = WORLD_OVERWORLD;
+    private static volatile String pendingRecentreWorld = null;
+    /** Where the camera was last left in each world, so switching back returns to it. */
+    private static final Map<String, double[]> lastCameraByWorld = new ConcurrentHashMap<>();
+
+    /** Records the world-map camera for the world being shown. World coordinates, not Xaero's units. */
+    public static void noteWorldMapCamera(double worldX, double worldZ) {
+        // Not while a switch is still waiting to be applied: the camera is then still sitting at the
+        // PREVIOUS world's coordinates, and recording those against the new world would both poison its
+        // memory and satisfy the very lookup that is about to read it.
+        if (pendingRecentreWorld != null) return;
+        lastCameraByWorld.put(activeWorldKey(), new double[]{worldX, worldZ});
+    }
+
+    /**
+     * True while the world map shows somewhere the player is not, so Xaero must not drag the camera onto
+     * them. Their position is a coordinate in a different world; on the Moon it is simply a place they
+     * have never been, and the further from origin they stand the further off the map it pulls.
+     */
+    public static boolean pinWorldMapCamera() {
+        return isActiveOnCurrentServer() && viewingOtherWorld();
+    }
+
+    /**
+     * Where the world map should re-aim after a world switch, or null if it should stay put.
+     *
+     * <p>Returns null while the target world's claims are still loading, so the request survives until
+     * there is something to aim at -- the first switch to a world usually lands before its markers do.
+     */
+    public static double[] consumeWorldMapRecentre() {
+        String world = pendingRecentreWorld;
+        if (world == null) return null;
+        if (world.equals(resolvedPlayerWorld)) {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client == null || client.player == null) return null;
+            pendingRecentreWorld = null;
+            return new double[]{client.player.getX(), client.player.getZ()};
+        }
+        // Where they left it last, so switching back and forth does not keep yanking the view; the
+        // claim centre is only the opening position for a world not visited yet this session.
+        double[] remembered = lastCameraByWorld.get(world);
+        if (remembered != null) {
+            pendingRecentreWorld = null;
+            return remembered;
+        }
+        double[] centre = worldClaimCentre(world);
+        if (centre == null) return null;   // markers not in yet; try again next frame
+        pendingRecentreWorld = null;
+        return centre;
+    }
+
+    /** Middle of a world's claimed area, or null if its markers have not arrived. */
+    private static double[] worldClaimCentre(String world) {
+        if (apiClient == null) return null;
+        List<TownData> towns = apiClient.getTowns(world);
+        if (towns.isEmpty()) return null;
+        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
+        int minZ = Integer.MAX_VALUE, maxZ = Integer.MIN_VALUE;
+        for (TownData t : towns) {
+            minX = Math.min(minX, t.centerX()); maxX = Math.max(maxX, t.centerX());
+            minZ = Math.min(minZ, t.centerZ()); maxZ = Math.max(maxZ, t.centerZ());
+        }
+        return new double[]{(minX + maxX) / 2.0, (minZ + maxZ) / 2.0};
+    }
+
+    /**
+     * The squaremap world the player is standing in, resolved on the client tick.
+     *
+     * <p>Safe from any thread, unlike {@link #playerMapWorld()}. The minimap always shows this world --
+     * it shows where the player actually is -- while the world map shows {@link #activeWorldKey()}.
+     */
+    public static String playerWorldResolved() { return resolvedPlayerWorld; }
+    private static volatile String loggedDimensionAlias = null;
+
+    /**
+     * The squaremap world the player is standing in. Never null -- Earth is the fallback.
+     *
+     * <p>The dimension id is NOT assumed to equal squaremap's world name for it. EarthMC's lunar
+     * dimension is referred to as "space" in-game while squaremap publishes the world as
+     * {@code earthmc_moon}, and a derived {@code namespace_path} match would silently never fire. So:
+     * exact match first, then the vanilla dimensions (all of which project onto Earth), then the single
+     * non-Earth world squaremap publishes -- which is right however EarthMC names the dimension.
+     *
+     * <p>Client thread only; {@link #activeWorldKey()} reads the resolved value instead.
+     */
+    public static String playerMapWorld() {
+        String raw = rawWorldKey();
+        if (raw == null) return WORLD_OVERWORLD;
+        Map<String, String> worlds = squaremapWorlds();
+        if (worlds.containsKey(raw)) return raw;                    // earthmc_moon, minecraft_overworld
+        if (raw.startsWith("minecraft_")) return WORLD_OVERWORLD;   // overworld, nether and end
+        // EarthMC has two lunar dimensions -- earthmc:space and earthmc:moon -- but squaremap publishes
+        // one world for them, earthmc_moon. So space has no world of its own and would otherwise fall
+        // back to Earth, putting Terra Nostra's map up while the player is off it.
+        // Deliberately not conditional on the fetched world list: that list is retried on a 60s timer,
+        // and requiring it meant stepping onto the Moon before it landed resolved to Earth and left
+        // Terra Nostra on screen until the retry.
+        if (raw.startsWith("earthmc_")) return WORLD_MOON;
+        String only = null;
+        for (String k : worlds.keySet()) {
+            if (WORLD_OVERWORLD.equals(k)) continue;
+            if (only != null) return WORLD_OVERWORLD;   // more than one candidate: refuse to guess
+            only = k;
+        }
+        if (only == null) return WORLD_OVERWORLD;
+        if (!raw.equals(loggedDimensionAlias)) {
+            loggedDimensionAlias = raw;
+            LOGGER.info("[TownyMap] Dimension {} is not a squaremap world name; treating it as {}",
+                    raw, only);
+        }
+        return only;
+    }
+
+    /** The squaremap world the map should currently show. */
+    public static String activeWorldKey() {
+        if (config == null) return WORLD_OVERWORLD;
+        return switch (config.mapWorldMode) {
+            case WORLD_MODE_EARTH -> WORLD_OVERWORLD;
+            case WORLD_MODE_MOON  -> WORLD_MOON;
+            // Auto: whatever the last client tick resolved. Read from fetch threads, so it must not
+            // reach into the level here.
+            default -> autoResolvedWorld;
+        };
+    }
+
+    /**
+     * True when the map is showing Terra Nostra.
+     *
+     * <p>Guards anything positioned from an EarthMC API coordinate -- nation spawns and the like are
+     * Earth coordinates, and the two worlds' coordinates overlap numerically, so using one off Earth
+     * plants a marker somewhere plausible-looking and wrong.
+     */
+    public static boolean viewingEarth() {
+        return WORLD_OVERWORLD.equals(activeWorldKey());
+    }
+
+    /**
+     * True when Xaero's own player arrow should be left undrawn on the world map.
+     *
+     * <p>The arrow marks the player's position, which means nothing on a world they are not standing in
+     * -- on the Moon it would plant them somewhere in the lunar landscape they have never been.
+     */
+    public static boolean hideWorldMapPlayerArrow() {
+        return hidePlayerWorldMarkers();
+    }
+
+    /**
+     * True when anything belonging to the world the PLAYER is in must stay off the world map, because
+     * the map is showing a different one. Their arrow, and their waypoints with the "Waypoints: x"
+     * banner that names the set -- all of it describes somewhere the map is not looking at.
+     */
+    public static boolean hidePlayerWorldMarkers() {
+        return isActiveOnCurrentServer() && viewingOtherWorld();
+    }
+
+    /** True when the map shows a world the player is not in -- markers there are not where they are. */
+    public static boolean viewingOtherWorld() {
+        // The tick-resolved value, not playerMapWorld(): that one rebuilds the key from the dimension
+        // id with a string concatenation on every call, and this is read several times a frame by the
+        // camera pin and both arrow suppressions. It is also the same source of truth every other
+        // caller uses, so the two can no longer disagree mid-frame.
+        return !playerWorldResolved().equals(activeWorldKey());
+    }
+
+    /** The town's claim polygon in the world currently shown, or null if it has none there. */
+    public static net.townymap.model.TownData townPolygon(String townName) {
+        if (apiClient == null || townName == null || townName.isBlank()) return null;
+        String key = townKey(townName);
+        for (net.townymap.model.TownData t : apiClient.getTowns()) {
+            if (t.key().equals(key)) return t;
+        }
+        return null;
+    }
+
+    /**
+     * The dimension Xaero's WORLD MAP is currently drawing, which is not always the one the player is in.
+     *
+     * <p>Xaero's map has its own dimension toggle (the button that cycles Overworld/Nether/End/...): it
+     * sets {@code MapWorld.customDimensionId} and {@code getCurrentDimension()} follows it, so someone
+     * standing on Earth can be looking at Nether or Moon terrain. Every decision about what to draw ON
+     * the world map belongs to this dimension, not {@code client.world.getRegistryKey()}. The minimap has no
+     * such toggle and always follows the player, which is why it still reads the level directly.
+     *
+     * <p>Null when Xaero is not loaded far enough to say. Wrapped because Xaero moves internals between
+     * versions and a hard failure here would take the whole overlay down (see the zoom-hook history).
+     */
+    public static net.minecraft.registry.RegistryKey<World> xaeroViewedDimension() {
+        try {
+            var session = xaero.map.core.XaeroWorldMapCore.currentSession;
+            if (session == null) return null;
+            var proc = session.getMapProcessor();
+            if (proc == null) return null;
+            var mw = proc.getMapWorld();
+            if (mw == null) return null;
+            var dim = mw.getCurrentDimension();
+            return dim == null ? null : dim.getDimId();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * The squaremap world key matching the dimension Xaero's world map is drawing, or null if unknown.
+     * Same "namespace_path" derivation as {@link #playerWorldKey()}, but for the VIEWED dimension.
+     */
+    /**
+     * Points Xaero's world map at the dimension matching the world we are showing, so its terrain and
+     * our claims agree instead of Moon borders sitting on Terra Nostra's ground.
+     *
+     * <p>Does exactly what Xaero's own dimension button does -- setCustomDimensionId then
+     * checkForWorldUpdate -- with null meaning "follow the player", which is what that button stores
+     * when the target is the dimension the player is already in.
+     *
+     * <p>Only ever targets a dimension Xaero already lists. GuiMap calls
+     * getCurrentDimension().getDimId() with no null check, so naming a dimension it has never seen
+     * (a player who has not been to the Moon) would crash inside Xaero's own render.
+     */
+    private static volatile boolean pendingXaeroSync = false;
+    private static volatile long lastXaeroSyncAttemptMs = 0;
+    private static volatile boolean loggedXaeroNotReady = false;
+
+    private static volatile boolean worldMapWasOpen = false;
+
+    /**
+     * Applies the dimension override only while the world map is on screen, and hands Xaero back its own
+     * dimension the moment it closes.
+     *
+     * <p>The override exists so Xaero's terrain matches the world we are drawing claims for, and the
+     * world map is the only surface that shows it -- but MapProcessor.updateWorldSynced, which runs on
+     * every switch, pauses the map writer and moves a FileLock onto that dimension's folder. Left set
+     * after the map closes, Xaero spends the rest of the session holding a lock on the Moon's folder
+     * while the player walks around Terra Nostra, and features anchored to the current dimension --
+     * the footsteps trail among them -- stop behaving.
+     */
+    /**
+     * True for the world map and the screens it opens on top of itself -- settings, dimension options,
+     * cave mode. Deliberately looser than {@link #isWorldMapOpen()}: those siblings are still "the map
+     * is up", and treating a hop into settings as a close would release and re-apply the dimension
+     * override, each of which pauses Xaero's writer and moves a FileLock.
+     */
+    private static boolean isWorldMapScreenActive() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        return client != null && client.currentScreen != null
+                && client.currentScreen.getClass().getName().startsWith("xaero.map.gui.");
+    }
+
+    private static void tickWorldMapOpenState() {
+        boolean open = isWorldMapScreenActive();
+        if (open == worldMapWasOpen) return;
+        worldMapWasOpen = open;
+        if (open) {
+            requestXaeroDimensionSync();
+        } else {
+            pendingXaeroSync = false;
+            releaseXaeroDimension();
+        }
+    }
+
+    /** Gives Xaero back control of its own dimension (null = follow the player). */
+    private static void releaseXaeroDimension() {
+        try {
+            var session = xaero.map.core.XaeroWorldMapCore.currentSession;
+            var proc = session == null ? null : session.getMapProcessor();
+            var mapWorld = proc == null ? null : proc.getMapWorld();
+            if (mapWorld == null || mapWorld.getCustomDimensionId() == null) return;
+            mapWorld.setCustomDimensionId(null);
+            proc.checkForWorldUpdate();
+            LOGGER.info("[TownyMap] Xaero map dimension released back to the player's own");
+        } catch (Throwable t) {
+            LOGGER.debug("[TownyMap] Could not release Xaero map dimension", t);
+        }
+    }
+
+    /** Ask for Xaero's map dimension to be brought in line; retried until it takes. */
+    public static void requestXaeroDimensionSync() {
+        pendingXaeroSync = true;
+        loggedXaeroNotReady = false;
+        lastXaeroSyncAttemptMs = 0;
+    }
+
+    /**
+     * Retries the dimension sync until Xaero is in a state to accept it.
+     *
+     * <p>XaeroWorldMapCore.currentSession is null for the first moments after joining, and the map world
+     * is resolved from config well before that -- so the switch that matters most, the one at login,
+     * always missed. Driven from the client tick, and cheap while waiting: three null checks.
+     */
+    private static void tickXaeroDimensionSync() {
+        if (!pendingXaeroSync) return;
+        long now = System.currentTimeMillis();
+        if (now - lastXaeroSyncAttemptMs < 500L) return;
+        lastXaeroSyncAttemptMs = now;
+        if (syncXaeroDimension()) pendingXaeroSync = false;
+    }
+
+    /** @return true once Xaero has actually been pointed at a dimension; false to retry later. */
+    private static boolean syncXaeroDimension() {
+        try {
+            var session = xaero.map.core.XaeroWorldMapCore.currentSession;
+            var proc = session == null ? null : session.getMapProcessor();
+            var mapWorld = proc == null ? null : proc.getMapWorld();
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (mapWorld == null || client == null || client.world == null) {
+                if (!loggedXaeroNotReady) {
+                    loggedXaeroNotReady = true;
+                    LOGGER.info("[TownyMap] Xaero not ready for a dimension switch yet "
+                            + "(session={}, world={}) - will retry", session != null, mapWorld != null);
+                }
+                return false;
+            }
+
+            var target = knownXaeroDimensionFor(mapWorld, activeWorldKey());
+            if (target == null) {
+                // Xaero only lists dimensions it has created this session, so a world the player has
+                // been to before but not since logging in is absent -- and its own dimension button
+                // would not offer it either. getDimension() is a plain lookup that returns null (which
+                // GuiMap would then dereference), so the entry has to be created before it can be shown.
+                // Creating it makes Xaero load that dimension's saved regions from disk, which is the
+                // whole point: seeing where you have already been up there.
+                target = createXaeroDimension(mapWorld, activeWorldKey());
+                if (target == null) {
+                    LOGGER.info("[TownyMap] No Xaero dimension for {}; leaving its map where it is",
+                            activeWorldKey());
+                    return true;   // nothing more we can do; do not spin on it
+                }
+            }
+            var own = client.world.getRegistryKey();
+            mapWorld.setCustomDimensionId(target.equals(own) ? null : target);
+            proc.checkForWorldUpdate();
+            LOGGER.info("[TownyMap] Xaero map dimension -> {} (known: {})", target.getValue(),
+                    mapWorld.getDimensionsList().stream()
+                            .filter(d -> d != null && d.getDimId() != null)
+                            .map(d -> d.getDimId().getValue().toString()).toList());
+            return true;
+        } catch (Throwable t) {
+            // Was DEBUG, which meant a failure here looked identical to the feature simply not running:
+            // the log showed a world switch and then nothing at all. Once per reason is enough.
+            if (loggedSyncFailure == null || !loggedSyncFailure.equals(t.toString())) {
+                loggedSyncFailure = t.toString();
+                LOGGER.warn("[TownyMap] Could not sync Xaero map dimension", t);
+            }
+            return true;   // a thrown failure will not fix itself by repeating
+        }
+    }
+
+    private static volatile String loggedSyncFailure = null;
+
+    /**
+     * A dimension Xaero already knows that belongs to the given squaremap world, or null if it knows
+     * none. EarthMC's two lunar dimensions share one squaremap world, so either satisfies the Moon --
+     * preferring whichever the player is standing in, then the exact world-name match.
+     */
+    /**
+     * Creates and registers the Xaero map dimension for a squaremap world it has not seen this session,
+     * returning its key, or null if we cannot name one.
+     */
+    private static net.minecraft.registry.RegistryKey<World> createXaeroDimension(
+            xaero.map.world.MapWorld mapWorld, String worldKey) {
+        net.minecraft.registry.RegistryKey<World> key = dimensionKeyFor(worldKey);
+        if (key == null) return null;
+        try {
+            var created = mapWorld.createDimensionUnsynced(key);
+            if (created == null) return null;
+            LOGGER.info("[TownyMap] Created Xaero map dimension {} for {}", key.getValue(), worldKey);
+            return key;
+        } catch (Throwable t) {
+            LOGGER.warn("[TownyMap] Could not create Xaero map dimension for {}: {}", worldKey, t.toString());
+            return null;
+        }
+    }
+
+    /** The Minecraft dimension a squaremap world corresponds to. */
+    private static net.minecraft.registry.RegistryKey<World> dimensionKeyFor(String worldKey) {
+        if (WORLD_OVERWORLD.equals(worldKey)) return World.OVERWORLD;
+        if (WORLD_MOON.equals(worldKey)) {
+            // Terrain the player walked is written under the dimension they were in. EarthMC has two
+            // lunar ones and squaremap publishes a single world for them, so prefer the surface.
+            return net.minecraft.registry.RegistryKey.of(
+                    net.minecraft.registry.RegistryKeys.WORLD,
+                    net.minecraft.util.Identifier.of("earthmc", "moon"));
+        }
+        int us = worldKey.indexOf('_');
+        if (us <= 0 || us >= worldKey.length() - 1) return null;
+        return net.minecraft.registry.RegistryKey.of(
+                net.minecraft.registry.RegistryKeys.WORLD,
+                net.minecraft.util.Identifier.of(worldKey.substring(0, us), worldKey.substring(us + 1)));
+    }
+
+    /**
+     * The dimension Xaero already lists for a squaremap world, or null if it does not have it yet.
+     *
+     * <p>Matched exactly against {@link #dimensionKeyFor}, never by namespace. A loose "any earthmc:
+     * dimension will do" match picked earthmc:space -- the rocket you sit in for ten minutes on the way
+     * up, which nobody explores and whose dimension type Xaero could not even resolve, so it reported
+     * "Currently unknown dimension type! The map functions are limited." over empty ground. The Moon
+     * means earthmc:moon and nothing else.
+     */
+    private static net.minecraft.registry.RegistryKey<World> knownXaeroDimensionFor(
+            xaero.map.world.MapWorld mapWorld, String worldKey) {
+        net.minecraft.registry.RegistryKey<World> want = dimensionKeyFor(worldKey);
+        if (want == null) return null;
+        for (var dim : mapWorld.getDimensionsList()) {
+            if (dim != null && want.equals(dim.getDimId())) return want;
+        }
+        return null;   // not listed yet; the caller creates it
+    }
+
+    public static String xaeroViewedWorldKey() {
+        var key = xaeroViewedDimension();
+        if (key == null) return null;
+        try {
+            var id = key.getValue();
+            return id.getNamespace() + "_" + id.getPath();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** "namespace_path" for the dimension the player is in, with no validation against squaremap. */
+    private static String rawWorldKey() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.world == null) return null;
+        try {
+            var id = client.world.getRegistryKey().getValue();
+            return id.getNamespace() + "_" + id.getPath();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** Display name for the active world, for labels. */
+    public static String activeWorldName() {
+        return worldDisplayName(activeWorldKey());
+    }
+
+    /** squaremap's display name for a world key ("Terra Nostra", "Moon"), falling back to the key. */
+    public static String worldDisplayName(String key) {
+        if (key == null || key.isBlank()) return "this world";
+        String name = squaremapWorlds().get(key);
+        return name != null ? name : key;
+    }
+
+    /**
+     * Detects a world switch and resets what belonged to the old one.
+     *
+     * <p>Driven from the client tick on purpose. activeWorldKey() is read from fetch threads (markers and
+     * every tile URL), and clearing the tile cache there could close a NativeImage another thread is
+     * still decoding. On the tick it happens once, on the main thread, between frames.
+     */
+    public static void tickWorldChange() {
+        // Auto mode is resolved here, on the client tick, so activeWorldKey() stays safe to call from
+        // the fetch threads that read it.
+        // Resolved every tick, not only in Auto: the minimap and the marker fetcher both need the
+        // player's world from threads that must not touch the level.
+        resolvedPlayerWorld = playerMapWorld();
+        if (config != null && config.mapWorldMode == WORLD_MODE_AUTO) {
+            autoResolvedWorld = resolvedPlayerWorld;
+        }
+        tickPlayerDimensionChange();
+        tickWorldMapOpenState();
+        tickXaeroDimensionSync();
+        String key = activeWorldKey();
+        if (key.equals(lastActiveWorld)) return;
+        lastActiveWorld = key;
+        onActiveWorldChanged(key);
+    }
+
+    private static volatile String lastPlayerWorld = null;
+    private static volatile String lastAnnouncedWorld = null;
+
+    /**
+     * Resets what belonged to the dimension the player just left.
+     *
+     * <p>Separate from the map-world toggle: travelling Earth -> Moon changes nothing about which world
+     * the MAP shows, but it does invalidate anything anchored to the player's own coordinates. Also the
+     * one place that can tell someone their map is still pointed at the world they came from.
+     */
+    private static void tickPlayerDimensionChange() {
+        String pk = rawWorldKey();
+        if (pk == null || pk.equals(lastPlayerWorld)) return;
+        boolean first = lastPlayerWorld == null;
+        lastPlayerWorld = pk;
+        if (first) return;   // joining a world is not a transition
+        // Chunk coordinates from the dimension just left; nothing marks which one they came from.
+        optimisticClaimChunks.clear();
+        minimapOutsideNationPlayers.clear();
+        cachedGhosts.clear();
+        cachedGhostsAt.clear();
+        net.townymap.integration.ShopWaypoints.onDimensionChanged();
+        if (!isOnEarthMcServer()) return;
+        String world = playerMapWorld();
+        if (config != null && config.mapWorldMode == WORLD_MODE_AUTO) {
+            // The switch itself happens above; this is only the notice. Say nothing when the world did
+            // not actually change -- a Nether trip resolves to Earth just like the overworld does.
+            if (!world.equals(lastAnnouncedWorld)) {
+                lastAnnouncedWorld = world;
+                sendFeedback("Map switched to " + worldDisplayName(world) + ".", Formatting.GREEN);
+            }
+            return;
+        }
+        // Pinned by hand: leave it alone, but do not let the map silently disagree with where they are.
+        if (!world.equals(activeWorldKey())) {
+            sendFeedback("You are on " + worldDisplayName(world) + " - the map is pinned to "
+                    + activeWorldName() + ".", Formatting.YELLOW);
+        }
+    }
+
+    private static void onActiveWorldChanged(String key) {
+        LOGGER.info("[TownyMap] Map world -> {}", key);
+        // The archive holds an Earth-only snapshot, and getTowns() hands it out no matter which world is
+        // shown - so leaving Earth with one loaded would paint Earth borders over Moon terrain. Every
+        // world switch funnels through here, so dropping it once covers the toggle and the settings screen.
+        if (!WORLD_OVERWORLD.equals(key) && isArchiveMode()) {
+            exitArchive();
+            sendFeedback("Archive closed - it only covers Terra Nostra.", Formatting.YELLOW);
+        }
+        // Moon and Terra Nostra coordinates overlap numerically, so nothing cached for one world may be
+        // reused for the other. Towns and tiles are keyed by world and so survive; what follows is the
+        // state that carries no world of its own.
+        if (apiClient != null) apiClient.onWorldChanged();
+        cachedGhosts.clear();
+        cachedGhostsAt.clear();
+        // Optimistic claims are NOT dropped here any more: they belong to the world the player claimed
+        // in and carry it, so pinning the map elsewhere must not wipe them off the minimap. The
+        // dimension-change hook still clears them.
+        townInfoRouteTarget = null;   // points into the world we just left
+        // The camera is sitting at coordinates that meant something in the world we just left. Re-aim it:
+        // at the player when the map is back on their own world, at the new world's claims otherwise --
+        // the Moon's sit around x 3600 z 250, so the player's Earth position there is empty ground.
+        pendingRecentreWorld = key;
+        // The result cache is keyed on collection SIZES, and 5,500 Earth towns against 47 lunar ones will
+        // always differ - but nothing guarantees that, so retire the results explicitly.
+        net.townymap.gui.TownSearchOverlay.invalidateResults();
+        if (renderer != null) {
+            renderer.invalidateTownCaches();
+            // Tiles are keyed by world now, so the world being switched away from keeps its cache
+            // instead of being thrown away -- the minimap is still drawing it. Wiping here meant
+            // pinning the world map to the Moon stripped the minimap's Terra Nostra imagery.
+        }
+        // Requested, not done here: at login the saved map world resolves before Xaero has built its
+        // world-map session, and a one-shot attempt at that moment was simply lost. Only while the map
+        // is actually open -- see tickWorldMapOpenState for why it must not linger past that.
+        if (isWorldMapScreenActive()) requestXaeroDimensionSync();
+    }
+
+    /**
+     * Coordinate scale of the dimension the PLAYER is in. The minimap and waypoints live here: both are
+     * anchored to the player, and neither can be pointed at another dimension.
+     */
     public static double dimensionCoordinateScale() {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null || client.world == null) return 1.0;
@@ -1648,6 +2321,21 @@ public class TownyMapMod implements ClientModInitializer {
         // server runs a non-standard scale. Guarded because a 0 here would blow up every caller.
         double scale = client.world.getDimension().coordinateScale();
         return scale > 0 ? scale : 1.0;
+    }
+
+    /**
+     * Coordinate scale of the dimension Xaero's WORLD MAP is drawing, which its dimension toggle can
+     * point somewhere the player is not. Only the player's own dimension has a loaded DimensionType to
+     * read, so a dimension viewed from elsewhere falls back to the vanilla ratios.
+     */
+    public static double worldMapCoordinateScale() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null || client.world == null) return 1.0;
+        var viewed = xaeroViewedDimension();
+        if (viewed != null && viewed != client.world.getRegistryKey()) {
+            return viewed == World.NETHER ? 8.0 : 1.0;
+        }
+        return dimensionCoordinateScale();
     }
 
     /**
@@ -1660,9 +2348,21 @@ public class TownyMapMod implements ClientModInitializer {
         if (!isActiveOnCurrentServer() || config == null) return 1.0;
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null || client.world == null) return 1.0;
-        var dim = client.world.getRegistryKey();
+        // Xaero's world map has its own dimension toggle, so the terrain on screen is not always the
+        // dimension the player is standing in. What we draw over it has to follow the terrain. With the
+        // toggle untouched Xaero reports the player's own dimension, so this changes nothing by default.
+        var viewed = xaeroViewedDimension();
+        var dim = viewed != null ? viewed : client.world.getRegistryKey();
         if (dim == World.OVERWORLD) return 1.0;
         if (config.netherMode == 2 && dim == World.NETHER) return 8.0;   // Overworld Coords
+        // Xaero is drawing a world squaremap maps and our toggle selects that same world: 1:1, like
+        // Earth. This used to fall through to the hide below, so stepping onto the Moon blanked the
+        // overlay even though squaremap has full tiles and claims for it.
+        String vk = xaeroViewedWorldKey();
+        if (vk != null && vk.equals(activeWorldKey())) return 1.0;
+        // Deliberately looking at a different world than the one you are in. Keep rendering -- that is
+        // the point of the switch - and the player markers are hidden separately.
+        if (viewingOtherWorld() || !viewingEarth()) return 1.0;
         // The overworld-only hide exists because EarthMC's map covers only its overworld, so raw X/Z
         // from another dimension would put the overlay in the wrong place relative to the player.
         // Off EarthMC there is no such correspondence to protect, and hiding would blank the whole
@@ -2402,6 +3102,15 @@ public class TownyMapMod implements ClientModInitializer {
      */
     public static void enterArchive(int yyyymmdd) {
         if (apiClient == null || archiveLoading) return;
+        // The other half of the archive/Moon exclusion (see onActiveWorldChanged): snapshots are Terra
+        // Nostra only, so loading one from the Moon has to bring the map back to Earth first.
+        // PINS Earth rather than selecting Auto: in Auto this would resolve straight back to the Moon
+        // for a player standing there, and the archive has no lunar data at all.
+        if (config != null && !WORLD_OVERWORLD.equals(activeWorldKey())) {
+            config.mapWorldMode = WORLD_MODE_EARTH;
+            tickWorldChange();
+            sendFeedback("Pinned to Terra Nostra - archives only cover Earth.", Formatting.YELLOW);
+        }
         archiveLoading = true;
         archiveStatus = "Loading archive…";
         lastArchiveError = "";
@@ -2723,6 +3432,18 @@ public class TownyMapMod implements ClientModInitializer {
 
     public static boolean createXaeroRoute(MapJumpTarget target) {
         if (!isActiveOnCurrentServer() || target == null) return false;
+        // Xaero files waypoints under the dimension the PLAYER is in, so a route to a Moon town created
+        // from Earth would land in the Earth waypoint set at lunar coordinates -- an arrow pointing at
+        // nothing. Refuse it rather than plant a waypoint that quietly lies.
+        // One symmetric test covers both directions. The earlier pair only refused when the map was off
+        // Earth, and otherwise leaned on Xaero's viewed dimension -- so standing on the Moon while
+        // viewing Terra Nostra slipped through whenever that dimension had not been switched, and it
+        // also went through the nullable playerWorldKey(), which needs squaremap's fetched world list.
+        if (viewingOtherWorld()) {
+            sendFeedback("Routes only work for the world you are standing in - the map is showing "
+                    + activeWorldName() + ".", Formatting.RED);
+            return false;
+        }
         try {
             boolean created = XaeroWaypointBridge.createRouteWaypoint(target);
             if (created) {
@@ -2938,8 +3659,10 @@ public class TownyMapMod implements ClientModInitializer {
         // per open, so halving the refresh rate halves the cost of flicking through the tabs.
         if (richPlayersLoading || now - richPlayersAtMs < 120_000L) return richPlayers;
         if (apiClient == null || earthMcApi == null) return richPlayers;
+        // Everyone online, not just the world on screen: this is a server-wide leaderboard, and
+        // pinning the map to the Moon would otherwise shrink it to whoever happens to be up there.
         List<String> names = new ArrayList<>();
-        for (net.townymap.model.PlayerMarker m : apiClient.getPlayers()) {
+        for (net.townymap.model.PlayerMarker m : apiClient.getAllPlayers()) {
             if (m.name() != null && !m.name().isBlank()) names.add(m.name());
         }
         if (names.isEmpty()) return richPlayers;

@@ -1,0 +1,69 @@
+name: Update Modrinth description
+
+# Description-only counterpart to publish-modrinth.yml. That workflow patches the project body as a
+# side effect of publishing a version, so editing the description alone used to mean re-running a
+# publish -- which either re-creates a live version (losing its downloads) or fails on a duplicate.
+# This does the metadata PATCH and nothing else.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      MODRINTH_PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+      MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+      PROJECT_DESCRIPTION: "Xaero's minimap extension that is built for EarthMC."
+      PROJECT_ISSUES_URL: "https://github.com/JR1258/EarthMC-Map-Addon/issues"
+      PROJECT_SOURCE_URL: "https://github.com/JR1258/EarthMC-Map-Addon"
+      PROJECT_TITLE: "EarthMC Map Addon"
+
+    steps:
+      - name: Checkout metadata assets
+        uses: actions/checkout@v4
+
+      - name: Sync Modrinth project metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${MODRINTH_PROJECT_ID}" ]]; then
+            echo "MODRINTH_PROJECT_ID repository variable is not set." >&2
+            exit 1
+          fi
+          if [[ ! -f docs/MODRINTH-description.md ]]; then
+            echo "docs/MODRINTH-description.md is missing on this ref." >&2
+            exit 1
+          fi
+
+          jq -n \
+            --arg title "${PROJECT_TITLE}" \
+            --arg description "${PROJECT_DESCRIPTION}" \
+            --arg source_url "${PROJECT_SOURCE_URL}" \
+            --arg issues_url "${PROJECT_ISSUES_URL}" \
+            '{
+              title: $title,
+              description: $description,
+              client_side: "required",
+              server_side: "unsupported",
+              categories: ["game-mechanics", "utility"],
+              source_url: $source_url,
+              issues_url: $issues_url
+            }' > modrinth-project-data.json
+
+          jq --rawfile body docs/MODRINTH-description.md '. + {body: $body}' \
+            modrinth-project-data.json > modrinth-project-data.tmp.json
+          mv modrinth-project-data.tmp.json modrinth-project-data.json
+
+          curl --fail-with-body \
+            -X PATCH "https://api.modrinth.com/v2/project/${MODRINTH_PROJECT_ID}" \
+            -H "Authorization: ${MODRINTH_TOKEN}" \
+            -H "User-Agent: JR1258/EarthMC-Map-Addon GitHub Actions" \
+            -H "Content-Type: application/json" \
+            --data-binary "@modrinth-project-data.json"
+
+          echo "Modrinth project description updated from docs/MODRINTH-description.md"

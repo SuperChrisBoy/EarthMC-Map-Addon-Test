@@ -226,6 +226,11 @@ public class WorldMapRenderer {
         return squaremapTiles.recentRefusalStatus();
     }
 
+    /** Drops every cached squaremap tile — used when the map switches world. */
+    public void clearSquaremapTiles() {
+        squaremapTiles.clearAll();
+    }
+
     public void invalidateTownCaches() {
         visibleTownScratch.clear();
         visibleTownSeen.clear();
@@ -253,8 +258,12 @@ public class WorldMapRenderer {
         List<RenderTown> visibleTowns = visibleTowns(blockScale, worldLeft, worldRight, worldTop, worldBottom);
         refreshFavoriteTownKeys();
 
-        borderOverlay.render(ctx, cameraX, cameraZ, blockScale, sw, sh,
-                worldLeft, worldRight, worldTop, worldBottom);
+        // Real-world country and state borders, so they mean nothing anywhere but Terra Nostra -- on
+        // the Moon they drew Earth's coastlines across lunar terrain.
+        if (TownyMapMod.viewingEarth()) {
+            borderOverlay.render(ctx, cameraX, cameraZ, blockScale, sw, sh,
+                    worldLeft, worldRight, worldTop, worldBottom);
+        }
 
         renderChunkGrid(ctx, cameraX, cameraZ, blockScale, sw, sh,
                 worldLeft, worldRight, worldTop, worldBottom);
@@ -1918,13 +1927,16 @@ public class WorldMapRenderer {
         for (EarthMcNationData nation : nationDetails.values()) {
             double markerX, markerZ;
 
-            // Prefer spawn coordinates from the EarthMC API — they are always accurate
-            // and don't depend on squaremap polygon names matching the API's capital name.
-            if (nation.hasSpawn()) {
+            // The API's nation spawn is an EARTH coordinate. On another world it would plant the star at
+            // a place that has nothing to do with the nation's presence there -- a moon outpost sits
+            // somewhere else entirely, and the two worlds' coordinates overlap numerically, so the star
+            // would look plausible while being wrong. Off Earth, use only the capital's polygon in the
+            // world actually being shown, and drop nations with no claim there at all.
+            if (TownyMapMod.viewingEarth() && nation.hasSpawn()) {
                 markerX = nation.spawnX();
                 markerZ = nation.spawnZ();
             } else if (!nation.capitalName().isBlank()) {
-                // Fall back to locating the capital town in the squaremap polygon list.
+                // The town list is the active world's, so this resolves to the capital's outpost there.
                 TownData capital = townByName(nation.capitalName());
                 if (capital == null) continue;
                 markerX = capital.centerX();
@@ -2141,7 +2153,10 @@ public class WorldMapRenderer {
     private void rebuildNationRange(String nationName, EarthMcNationData nd) {
         String capitalName = nd != null ? nd.capitalName() : null;
         List<int[]> circles = new java.util.ArrayList<>();
-        if (nd != null && nd.hasSpawn()) {
+        // Off Earth the API spawn is the wrong world's coordinate, and the per-town circles below already
+        // come from the active world -- mixing the two would put the capital's ring nowhere near its
+        // outpost.
+        if (nd != null && nd.hasSpawn() && TownyMapMod.viewingEarth()) {
             circles.add(new int[]{nd.spawnX(), nd.spawnZ(), NATION_JOIN_RANGE});
         } else if (capitalName != null) {
             TownData cap = townByName(capitalName);
@@ -2277,6 +2292,8 @@ public class WorldMapRenderer {
     private void renderPlayers(DrawContext ctx,
                                double cameraX, double cameraZ, double blockScale,
                                int sw, int sh, Map<String, EarthMcPlayerData> playerDetails) {
+        // Browsing a world you are not standing in: player positions belong to the other world,
+        // so drawing them here would put people in places they are not.
         if (TownyMapMod.isArchiveMode()) return;   // archived snapshots have no live players
         MinecraftClient client = MinecraftClient.getInstance();
         if (client == null) return;

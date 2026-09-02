@@ -73,7 +73,15 @@ public class SquaremapApiClient {
     private final ScheduledExecutorService scheduler;
     private final ExecutorService fetchExecutor;
 
-    private volatile List<TownData>     towns        = List.of();
+    /**
+     * Town polygons per squaremap world.
+     *
+     * <p>Two worlds are held at once whenever the map is pinned to a world the player is not in: the
+     * world map draws the active world while the minimap draws the one the player is standing in, and
+     * a single list could only ever satisfy one of them. Terra Nostra carries ~5,500 towns and the Moon
+     * 47, so the second world is nearly free.
+     */
+    private volatile Map<String, List<TownData>> townsByWorld = Map.of();
     private volatile List<PlayerMarker> players      = List.of();
     private volatile Map<String, PlayerHistoryEntry> playerHistory = Map.of();
     private volatile Map<String, String> townMayors  = Map.of();   // townKey → mayor, parsed from popups
@@ -133,8 +141,19 @@ public class SquaremapApiClient {
     /** When non-null, archive mode is active: getTowns() serves this frozen snapshot and live refresh is
      *  paused, so the whole renderer shows the historical claims with no other changes. */
     private volatile List<TownData> archiveTowns = null;
+    /** Bumped by onWorldChanged() so responses for the world just left can be recognised and dropped. */
+    private volatile int worldGeneration = 0;
+    /** Last parsed markers per world, kept so the identity maps can be rebuilt from every world held. */
+    private volatile Map<String, ParsedMarkers> markersByWorld = Map.of();
 
-    public List<TownData>     getTowns()        { return archiveTowns != null ? archiveTowns : towns; }
+    /** Towns of the world the map is showing. Archive snapshots override, and are Terra Nostra only. */
+    public List<TownData> getTowns() { return getTowns(TownyMapMod.activeWorldKey()); }
+
+    /** Towns of one specific world -- the minimap asks for the world the player is standing in. */
+    public List<TownData> getTowns(String world) {
+        if (archiveTowns != null) return archiveTowns;
+        return townsByWorld.getOrDefault(world, List.of());
+    }
     public boolean isArchiveActive()            { return archiveTowns != null; }
     /** When claims last actually landed, or 0 if none have yet. Not the same as the last attempt. */
     public long lastClaimsSuccessMs()           { return lastMarkerSuccessMs; }
@@ -152,7 +171,34 @@ public class SquaremapApiClient {
     /** Mayor parsed from the squaremap popup for this town key, or null if unknown. */
     public String getTownMayor(String townKey) { return townKey == null ? null : townMayors.get(townKey); }
     public String getTownNation(String townKey) { return townKey == null ? null : townNations.get(townKey); }
-    public List<PlayerMarker> getPlayers()      { return players;      }
+    /** Players on the world the map is showing. */
+    public List<PlayerMarker> getPlayers() { return getPlayers(TownyMapMod.activeWorldKey()); }
+
+    /** Everyone online, whatever world they are in -- for server-wide counts and leaderboards. */
+    public List<PlayerMarker> getAllPlayers() { return players; }
+
+    /** Players on one specific world -- the minimap asks for the world the player is standing in. */
+    public List<PlayerMarker> getPlayers(String world) {
+        // Memoised per world against the feed it was built from. Both renderers call this every frame,
+        // and filtering ~200 markers into a fresh list each time was pure garbage at frame rate; the
+        // feed itself only changes once a second.
+        List<PlayerMarker> all = players;
+        PlayerFilterCache cache = playerFilterCache;
+        if (cache.source() != all) {
+            cache = new PlayerFilterCache(all, new ConcurrentHashMap<>());
+            playerFilterCache = cache;   // a concurrent rebuild is harmless: same input, same output
+        }
+        return cache.byWorld().computeIfAbsent(world, w -> {
+            List<PlayerMarker> out = new ArrayList<>(all.size());
+            for (PlayerMarker m : all) if (m.inWorld(w)) out.add(m);
+            return List.copyOf(out);
+        });
+    }
+
+    /** The player feed plus its per-world filters, swapped as one so the two cannot disagree. */
+    private record PlayerFilterCache(List<PlayerMarker> source, Map<String, List<PlayerMarker>> byWorld) {}
+    private volatile PlayerFilterCache playerFilterCache =
+            new PlayerFilterCache(List.of(), new ConcurrentHashMap<>());
     public Map<String, PlayerHistoryEntry> getPlayerHistory() { return playerHistory; }
 
     public void tickWhileMapOpen() {
@@ -171,13 +217,62 @@ public class SquaremapApiClient {
     private void tickTownMarkers(long refreshMs) {
         if (archiveTowns != null) return;   // archive snapshot is frozen — don't overwrite it with live data
         long now = System.currentTimeMillis();
-        if (!towns.isEmpty() && now - lastMarkerTickCheckMs < 1_000L) return;
+        // Checked without building the needed-worlds set: this runs from the minimap render, so once a
+        // frame, and allocating a set there to answer a question about two strings was wasteful.
+        boolean missing = townsByWorld.getOrDefault(TownyMapMod.activeWorldKey(), List.of()).isEmpty()
+                || townsByWorld.getOrDefault(TownyMapMod.playerWorldResolved(), List.of()).isEmpty();
+        if (!missing && now - lastMarkerTickCheckMs < 1_000L) return;
         lastMarkerTickCheckMs = now;
-        if ((towns.isEmpty() || now - lastMarkerFetchMs >= refreshMs)
+        if ((missing || now - lastMarkerFetchMs >= refreshMs)
                 && markerFetchRunning.compareAndSet(false, true)) {
             lastMarkerFetchMs = now;
             fetchExecutor.execute(this::fetchMarkers);
         }
+    }
+
+    /** squaremap's published world list: key -> display name. Empty map on any failure. */
+    public java.util.concurrent.CompletableFuture<Map<String, String>> fetchWorlds() {
+        return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            Map<String, String> out = new java.util.LinkedHashMap<>();
+            try {
+                String json = get(config.worldsUrl());
+                if (json == null || json == NOT_MODIFIED) return out;
+                JsonElement root = JsonParser.parseString(json);
+                if (!root.isJsonObject()) return out;
+                JsonElement worlds = root.getAsJsonObject().get("worlds");
+                if (worlds == null || !worlds.isJsonArray()) return out;
+                for (JsonElement el : worlds.getAsJsonArray()) {
+                    if (!el.isJsonObject()) continue;
+                    JsonObject w = el.getAsJsonObject();
+                    String name = getString(w, "name");
+                    if (name == null || name.isBlank()) continue;
+                    String display = getString(w, "display_name");
+                    out.put(name, display == null || display.isBlank() ? name : display);
+                }
+            } catch (Exception e) {
+                LOGGER.warn("[TownyMap] Could not read the squaremap world list: {}", e.getMessage());
+            }
+            return out;
+        }, fetchExecutor);
+    }
+
+    /**
+     * Drops everything tied to the previous world and refetches.
+     *
+     * <p>Moon and Terra Nostra coordinates overlap numerically, so a stale town from one would render
+     * as a real claim on the other. The ETags go too: they identify a document for a different world.
+     */
+    /**
+     * Claims are filed per world now, so a switch throws nothing away -- both worlds stay valid and the
+     * one being switched to is usually already loaded. Only the player list, which carries no world of
+     * its own, has to go.
+     */
+    public void onWorldChanged() {
+        worldGeneration++;
+        // Positions are raw X/Z with no world attached, so the world we just left would keep drawing its
+        // players at those coordinates until the next 1s poll lands.
+        players = List.of();
+        forceTownMarkerRefresh();
     }
 
     public void forceTownMarkerRefresh() {
@@ -207,35 +302,88 @@ public class SquaremapApiClient {
 
     // ── Fetchers ─────────────────────────────────────────────────────────────
 
+    /**
+     * The worlds whose claims have to be in memory right now: the one the map is showing, and the one
+     * the player is standing in. Identical unless the map is pinned elsewhere, in which case the second
+     * is what the minimap draws.
+     */
+    private java.util.Set<String> neededWorlds() {
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        out.add(TownyMapMod.activeWorldKey());
+        out.add(TownyMapMod.playerWorldResolved());
+        return out;
+    }
+
     private void fetchMarkers() {
         try {
-            String json = get(config.markersUrl());
-            if (json == NOT_MODIFIED) {
-                // Unchanged is a success: the data on screen is current, there was just nothing to send.
-                lastMarkerSuccessMs = System.currentTimeMillis();
-                markerFetchFailing = false;
-                return;
-            }
-            if (json == null) markerFetchFailing = true;
-            if (json != null) {
-                List<TownData> parsed = parseMarkers(json);
-                List<TownData> updated = reuseUnchangedTowns(towns, parsed);
-                if (updated == towns) {
-                    LOGGER.debug("[TownyMap] Town polygons unchanged");
-                    // Unchanged still means the server answered: the data on screen is current.
-                    lastMarkerSuccessMs = System.currentTimeMillis();
-                    markerFetchFailing = false;
-                    return;
-                }
-                towns = updated;
-                lastMarkerSuccessMs = System.currentTimeMillis();
-                markerFetchFailing = false;
-                TownyMapMod.onTownMarkersUpdated();
-                LOGGER.info("[TownyMap] Loaded {} town polygons", updated.size());
-            }
+            for (String world : neededWorlds()) fetchMarkersFor(world);
+            // Once per cycle, not once per world: the union spans ~50,000 roster entries and rebuilding
+            // it after each world did that work twice for a result only the last pass could be right.
+            recomposeTownIdentity();
         } finally {
             markerFetchRunning.set(false);
         }
+    }
+
+    /**
+     * Fetches one world's markers. No generation guard is needed any more: results are filed under the
+     * world they were requested for, so a response that lands after a switch is stored correctly rather
+     * than being mistaken for the new world's data -- and is worth keeping, not discarding.
+     */
+    private void fetchMarkersFor(String world) {
+        String json = get(config.markersUrl(world));
+        if (json == NOT_MODIFIED) {
+            // Unchanged is a success: the data on screen is current, there was just nothing to send.
+            lastMarkerSuccessMs = System.currentTimeMillis();
+            markerFetchFailing = false;
+            return;
+        }
+        if (json == null) {
+            markerFetchFailing = true;
+            return;
+        }
+        ParsedMarkers parsed = parseMarkers(json);
+        List<TownData> current = townsByWorld.getOrDefault(world, List.of());
+        List<TownData> updated = reuseUnchangedTowns(current, parsed.towns());
+        if (updated != current) {
+            Map<String, List<TownData>> next = new HashMap<>(townsByWorld);
+            next.put(world, updated);
+            townsByWorld = Map.copyOf(next);
+            LOGGER.info("[TownyMap] Loaded {} town polygons for {}", updated.size(), world);
+        } else {
+            LOGGER.debug("[TownyMap] Town polygons unchanged for {}", world);
+        }
+        Map<String, ParsedMarkers> nextMeta = new HashMap<>(markersByWorld);
+        nextMeta.put(world, parsed);
+        markersByWorld = Map.copyOf(nextMeta);
+        lastMarkerSuccessMs = System.currentTimeMillis();
+        markerFetchFailing = false;
+        if (updated != current) TownyMapMod.onTownMarkersUpdated();
+    }
+
+    /**
+     * Rebuilds the town-identity lookups from every world currently held.
+     *
+     * <p>Mayor, nation, resident count and the resident roster describe the TOWN, not its claim in one
+     * world -- the Moon's popups carry a town's whole 437-resident roster, not the handful with an
+     * outpost. Rebuilding from all worlds each time keeps the union available while still dropping
+     * entries for towns that have disappeared, which a running merge could never do.
+     */
+    private void recomposeTownIdentity() {
+        Map<String, String> mayors = new HashMap<>();
+        Map<String, String> nations = new HashMap<>();
+        Map<String, Integer> residents = new HashMap<>();
+        Map<String, String> residentTown = new HashMap<>();
+        for (ParsedMarkers m : markersByWorld.values()) {
+            mayors.putAll(m.mayors());
+            nations.putAll(m.nations());
+            residents.putAll(m.residents());
+            residentTown.putAll(m.residentTowns());
+        }
+        townMayors = Map.copyOf(mayors);
+        townNations = Map.copyOf(nations);
+        townResidents = Map.copyOf(residents);
+        residentTowns = Map.copyOf(residentTown);
     }
 
     private static List<TownData> reuseUnchangedTowns(List<TownData> current, List<TownData> parsed) {
@@ -286,12 +434,15 @@ public class SquaremapApiClient {
 
     private void rememberPlayers(List<PlayerMarker> parsed) {
         if (parsed.isEmpty()) return;
+        // Every world is recorded now that the entry carries one. Filtering positions out here was what
+        // left the Moon with no last-seen markers at all.
         long now = System.currentTimeMillis();
         Map<String, PlayerHistoryEntry> updated = new HashMap<>(playerHistory);
         for (PlayerMarker marker : parsed) {
             if (marker.name() == null || marker.name().isBlank() || "?".equals(marker.name())) continue;
             updated.put(marker.name().toLowerCase(Locale.ROOT),
-                    new PlayerHistoryEntry(marker.name(), marker.uuid(), marker.x(), marker.z(), now));
+                    new PlayerHistoryEntry(marker.name(), marker.uuid(), marker.x(), marker.z(), now,
+                            marker.world()));
         }
         if (updated.size() > MAX_PLAYER_HISTORY) {
             ArrayList<PlayerHistoryEntry> entries = new ArrayList<>(updated.values());
@@ -392,7 +543,12 @@ public class SquaremapApiClient {
      * Parses markers.json town polygons.
      * Points nesting: points [ polygon [ ring [ {x,z}, … ] ] ]
      */
-    private List<TownData> parseMarkers(String json) {
+    /** One world's parsed markers: polygons plus the town-identity maps read out of the popups. */
+    private record ParsedMarkers(List<TownData> towns, Map<String, String> mayors,
+                                 Map<String, String> nations, Map<String, Integer> residents,
+                                 Map<String, String> residentTowns) {}
+
+    private ParsedMarkers parseMarkers(String json) {
         List<TownData> towns = new ArrayList<>();
         Map<String, String> mayors = new HashMap<>();
         Map<String, Integer> residents = new HashMap<>();
@@ -403,7 +559,7 @@ public class SquaremapApiClient {
             JsonElement root = JsonParser.parseString(json);
             if (!root.isJsonArray()) {
                 LOGGER.warn("[TownyMap] markers.json: expected top-level array");
-                return towns;
+                return new ParsedMarkers(towns, Map.of(), Map.of(), Map.of(), Map.of());
             }
 
             for (JsonElement layerEl : root.getAsJsonArray()) {
@@ -483,11 +639,8 @@ public class SquaremapApiClient {
         if (markerFailures > 0) {
             LOGGER.warn("[TownyMap] Skipped {} unparseable town markers", markerFailures);
         }
-        townMayors = Map.copyOf(mayors);
-        townNations = Map.copyOf(nations);
-        townResidents = Map.copyOf(residents);
-        residentTowns = Map.copyOf(residentTown);
-        return towns;
+        return new ParsedMarkers(towns, Map.copyOf(mayors), Map.copyOf(nations),
+                Map.copyOf(residents), Map.copyOf(residentTown));
     }
 
     private int[][] parseRing(JsonArray arr) {
@@ -526,8 +679,10 @@ public class SquaremapApiClient {
                 if (!el.isJsonObject()) continue;
                 JsonObject p = el.getAsJsonObject();
 
+                // Kept on the marker, not filtered away here: the world map wants the world it is
+                // showing and the minimap wants the one the player is standing in, and those differ
+                // whenever the map is pinned. Callers choose with getPlayers(world).
                 String world = getString(p, "world");
-                if (world != null && !world.contains("overworld")) continue;
 
                 boolean hidden = p.has("hidden") && p.get("hidden").getAsBoolean();
                 if (hidden) continue;
@@ -552,7 +707,9 @@ public class SquaremapApiClient {
                     try { yaw = p.get("yaw").getAsFloat(); } catch (Exception ignored) {}
                 }
 
-                result.add(new PlayerMarker(name != null ? name : "?", uuid, x, z, yaw));
+                String pname = name != null ? name : "?";
+                result.add(new PlayerMarker(pname, uuid, x, z, yaw,
+                        pname.toLowerCase(Locale.ROOT), world == null ? "" : world));
             }
         } catch (Exception e) {
             LOGGER.error("[TownyMap] Failed to parse players.json", e);

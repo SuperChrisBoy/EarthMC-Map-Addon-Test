@@ -253,6 +253,11 @@ public class TownyMapConfigScreen extends Screen {
         option("Town Borders", onOff(cfg.townsEnabled, v -> cfg.townsEnabled = v),
                 () -> cfg.townsEnabled == DEFAULTS.townsEnabled,
                 () -> cfg.townsEnabled = DEFAULTS.townsEnabled);
+        option("Map World", cycle(cfg.mapWorldMode, new int[]{0, 1, 2},
+                        TownyMapConfigScreen::mapWorldModeText,
+                        v -> cfg.mapWorldMode = v),
+                () -> cfg.mapWorldMode == DEFAULTS.mapWorldMode,
+                () -> cfg.mapWorldMode = DEFAULTS.mapWorldMode);
         option("Data Freshness Line", onOff(cfg.dataStatusEnabled, v -> cfg.dataStatusEnabled = v),
                 () -> cfg.dataStatusEnabled == DEFAULTS.dataStatusEnabled,
                 () -> cfg.dataStatusEnabled = DEFAULTS.dataStatusEnabled);
@@ -1005,6 +1010,15 @@ public class TownyMapConfigScreen extends Screen {
             case 1 -> "Countries";
             case 2 -> "States + Countries";
             default -> "Off";
+        });
+    }
+
+    /** Auto follows the dimension you are in; the others pin the map to one squaremap world. */
+    private static Text mapWorldModeText(Integer mode) {
+        return Text.literal(switch (mode) {
+            case 1 -> "Terra Nostra";
+            case 2 -> "Moon";
+            default -> "Auto";
         });
     }
 

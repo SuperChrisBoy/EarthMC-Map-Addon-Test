@@ -6,8 +6,14 @@ public record OptimisticClaimChunk(
         String townName,
         int fillColor,
         int outlineColor,
-        long expiresAtMs
+        long expiresAtMs,
+        String world
 ) {
+    /** True if this claim belongs on a map showing {@code worldKey}. */
+    public boolean inWorld(String worldKey) {
+        return world == null || world.isEmpty() || world.equals(worldKey);
+    }
+
     public int blockX() {
         return chunkX * 16;
     }

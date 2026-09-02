@@ -42,6 +42,15 @@ final class SquaremapTileRenderer {
     // once they load they stay cached and the overview never has to re-fetch them. They're tiny in number
     // (the whole map is ~1-21 tiles at zoom 0-2), so this costs almost nothing.
     private static final int OVERVIEW_PIN_ZOOM = 2;
+    /**
+     * Textures kept for the world the minimap is drawing before the cache may start evicting them.
+     *
+     * <p>With the map pinned to one world and the player standing in another, both worlds share this
+     * cache -- and the world map floods it while it is open, so on closing it the minimap found its own
+     * imagery gone and had to fetch the lot again. Its working set is a few dozen tiles, so holding this
+     * many back costs little of the 1024.
+     */
+    private static final int MINIMAP_WORLD_RESERVE = 128;
     private static final long FAILED_RETRY_MS = 60_000;
     private static final long TILE_REFRESH_MS = 20 * 60_000L;
     private static final int QUALITY_ZOOM_BIAS = 2;
@@ -68,6 +77,13 @@ final class SquaremapTileRenderer {
     private volatile int lastRefusedStatus = 0;
     private volatile long lastRefusedMs = 0;
     private final Map<TileKey, LoadedTile> completedTiles = new ConcurrentHashMap<>();
+    /** Bumped on every clearAll() so responses for the previous world can be told apart and dropped. */
+    private volatile int worldGeneration = 0;
+    /**
+     * World the current render pass is drawing. Set on the client thread at the top of each entry point;
+     * the async fetch never reads it, taking its world from the TileKey instead.
+     */
+    private String passWorld = net.townymap.TownyMapMod.WORLD_OVERWORLD;
     private final LinkedHashMap<TileKey, Identifier> textures =
             new LinkedHashMap<>(64, 0.75f, true);
     private final Map<TileKey, Long> textureLoadedAt = new ConcurrentHashMap<>();
@@ -88,6 +104,7 @@ final class SquaremapTileRenderer {
     void render(DrawContext ctx, double cameraX, double cameraZ, double blockScale, int sw, int sh,
                 double worldLeft, double worldRight, double worldTop, double worldBottom,
                 boolean moving) {
+        this.passWorld = net.townymap.TownyMapMod.activeWorldKey();
         render(ctx, cameraX, cameraZ, blockScale, sw, sh, worldLeft, worldRight, worldTop, worldBottom,
                 moving, NetworkPolicy.WORLD_MAP, null);
     }
@@ -102,6 +119,9 @@ final class SquaremapTileRenderer {
     void renderMinimap(DrawContext ctx, double cameraX, double cameraZ, double blockScale, int sw, int sh,
                        double worldLeft, double worldRight, double worldTop, double worldBottom,
                        boolean moving, double circularClipRadius) {
+        // The minimap shows where the player actually is, so its imagery is the player's world even when
+        // the map is pinned to the other one.
+        this.passWorld = net.townymap.TownyMapMod.playerWorldResolved();
         CircleClip circleClip = circularClipRadius > 0.0
                 ? new CircleClip(sw / 2.0, sh / 2.0, circularClipRadius,
                 circularClipRadius * circularClipRadius, circleClipStripHeight(circularClipRadius))
@@ -188,7 +208,7 @@ final class SquaremapTileRenderer {
                     if (tileX < minTileX || tileX > maxTileX || tileY < minTileY || tileY > maxTileY) continue;
                     if (Math.max(Math.abs(tileX - centerTileX), Math.abs(tileY - centerTileY)) != radius) continue;
 
-                    TileKey key = new TileKey(zoom, tileX, tileY);
+                    TileKey key = new TileKey(passWorld, zoom, tileX, tileY);
                     Identifier texture = textures.get(key);
                     if (texture == null) {
                         if (requested++ < requestBudget) requestTile(key, false, policy.maxConcurrentLoads());
@@ -271,7 +291,7 @@ final class SquaremapTileRenderer {
                 for (int tileX = centerTileX - radius; tileX <= centerTileX + radius && requested < maxRequests; tileX++) {
                     if (tileX < minTileX || tileX > maxTileX || tileY < minTileY || tileY > maxTileY) continue;
                     if (Math.max(Math.abs(tileX - centerTileX), Math.abs(tileY - centerTileY)) != radius) continue;
-                    TileKey key = new TileKey(zoom, tileX, tileY);
+                    TileKey key = new TileKey(passWorld, zoom, tileX, tileY);
                     if (!textures.containsKey(key)) {
                         requestTile(key);
                         requested++;
@@ -286,7 +306,7 @@ final class SquaremapTileRenderer {
                                          int sw, int sh, CircleClip circleClip) {
         for (int parentZoom = childKey.zoom() - 1; parentZoom >= 0; parentZoom--) {
             int factor = 1 << (childKey.zoom() - parentZoom);
-            TileKey parentKey = new TileKey(parentZoom,
+            TileKey parentKey = new TileKey(passWorld, parentZoom,
                     Math.floorDiv(childKey.x(), factor),
                     Math.floorDiv(childKey.y(), factor));
             Identifier parentTexture = textures.get(parentKey);
@@ -449,8 +469,13 @@ final class SquaremapTileRenderer {
             if (!completedTiles.remove(loaded.key(), loaded)) continue;
             try {
                 TileKey key = loaded.key();
+                // The world belongs in the texture name too, not just in TileKey. Without it Terra
+                // Nostra and the Moon share one Identifier per tile coordinate: registering one
+                // overwrote the other's imagery, and evicting either released the id the other was
+                // still pointing at -- which draws as the missing-texture checkerboard.
                 Identifier id = Identifier.of("townymapaddon",
-                        "squaremap/" + key.zoom + "/" + key.x + "_" + key.y);
+                        "squaremap/" + sanitiseWorld(key.world()) + "/" + key.zoom
+                                + "/" + key.x + "_" + key.y);
                 Identifier old = textures.remove(key);
                 if (old != null) {
                     client.getTextureManager().destroyTexture(old);
@@ -506,7 +531,11 @@ final class SquaremapTileRenderer {
 
     private void requestTile(TileKey key, boolean refreshExisting, int maxConcurrentLoads) {
         if ((!refreshExisting && textures.containsKey(key)) || !loading.add(key)) return;
-        if (loading.size() > maxConcurrentLoads) {
+        // Counted per world, not across the whole set. The minimap is allowed 8 concurrent loads while
+        // the world map takes 40; measured against the shared total, the minimap could not start a
+        // single fetch until the world map's requests drained, so closing a Moon map left the Earth
+        // minimap stalled behind 40 lunar tiles.
+        if (loadsForWorld(key.world()) > maxConcurrentLoads) {
             loading.remove(key);
             return;
         }
@@ -528,6 +557,11 @@ final class SquaremapTileRenderer {
     }
 
     private void fetchTile(TileKey key) {
+        // TileKey is (zoom, x, y) with no world in it, and a switch clears the caches immediately while
+        // requests already in flight keep running. Without this stamp a Terra Nostra tile that landed
+        // after a switch to the Moon was filed under a key the Moon view then drew: Earth terrain on
+        // the Moon, until something happened to evict it.
+        final int generation = worldGeneration;
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(tileUrl(key)))
                 .timeout(Duration.ofSeconds(20))
@@ -545,6 +579,7 @@ final class SquaremapTileRenderer {
             if (response.statusCode() == 304) {
                 // Unchanged: keep the texture we already uploaded and reset its age so the next
                 // stale-check waits a full interval instead of asking again immediately.
+                if (generation != worldGeneration) return;
                 textureLoadedAt.put(key, System.currentTimeMillis());
                 return;
             }
@@ -569,8 +604,9 @@ final class SquaremapTileRenderer {
                 }
                 return;
             }
-            response.headers().firstValue("ETag").ifPresent(tag -> tileEtags.put(key, tag));
             byte[] bytes = response.body();
+            if (generation != worldGeneration) return;   // belongs to the world we just left
+            response.headers().firstValue("ETag").ifPresent(tag -> tileEtags.put(key, tag));
             LoadedTile previous = completedTiles.put(key, new LoadedTile(key, NativeImage.read(bytes)));
             if (previous != null) previous.image().close();
         } catch (Exception e) {
@@ -585,16 +621,47 @@ final class SquaremapTileRenderer {
         requestTile(key, true, maxConcurrentLoads);
     }
 
+    /** World key reduced to characters an Identifier path allows. */
+    private static String sanitiseWorld(String world) {
+        if (world == null || world.isEmpty()) return "unknown";
+        return world.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9_.-]", "_");
+    }
+
+    /** How many fetches are in flight for one world. Bounded by the concurrency caps, so a scan is fine. */
+    private int loadsForWorld(String world) {
+        int n = 0;
+        for (TileKey k : loading) if (world.equals(k.world())) n++;
+        return n;
+    }
+
     private void evictOldTextures(MinecraftClient client) {
+        if (textures.size() <= MAX_TEXTURES) return;
+        // Spare the minimap's world until it holds a working set of its own; the world map otherwise
+        // evicts imagery that is on screen right now in favour of tiles for a world the player is only
+        // looking at.
+        String spared = net.townymap.TownyMapMod.playerWorldResolved();
+        int sparedCount = 0;
+        for (TileKey k : textures.keySet()) if (spared.equals(k.world())) sparedCount++;
+
         while (textures.size() > MAX_TEXTURES) {
             // Evict the least-recently-used tile, but SKIP the pinned low-zoom overview tiles so zooming
             // in (which floods the cache with high-zoom tiles) can't drop them and force a reload on the
             // next zoom-out. entrySet() is access-order (eldest first); iterating doesn't re-order it.
+            boolean sparing = sparedCount <= MINIMAP_WORLD_RESERVE;
             Map.Entry<TileKey, Identifier> victim = null;
             for (Map.Entry<TileKey, Identifier> e : textures.entrySet()) {
-                if (e.getKey().zoom() > OVERVIEW_PIN_ZOOM) { victim = e; break; }
+                if (e.getKey().zoom() <= OVERVIEW_PIN_ZOOM) continue;
+                if (sparing && spared.equals(e.getKey().world())) continue;
+                victim = e; break;
+            }
+            if (victim == null && sparing) {
+                // Nothing outside the reserve left to drop -- fall back to plain LRU rather than spin.
+                for (Map.Entry<TileKey, Identifier> e : textures.entrySet()) {
+                    if (e.getKey().zoom() > OVERVIEW_PIN_ZOOM) { victim = e; break; }
+                }
             }
             if (victim == null) break;   // only pinned overview tiles remain — keep them all
+            if (spared.equals(victim.getKey().world())) sparedCount--;
             client.getTextureManager().destroyTexture(victim.getValue());
             textures.remove(victim.getKey());
             textureLoadedAt.remove(victim.getKey());
@@ -607,7 +674,8 @@ final class SquaremapTileRenderer {
     }
 
     private String tileUrl(TileKey key) {
-        return config.squaremapBaseUrl + "/tiles/" + config.worldKey + "/"
+        // From the key, not the active world: a request outlives the switch that started it.
+        return config.squaremapBaseUrl + "/tiles/" + key.world() + "/"
                 + key.zoom + "/" + key.x + "_" + key.y + ".png";
     }
 
@@ -646,6 +714,32 @@ final class SquaremapTileRenderer {
         ctx.drawTexturedQuad(texture, l, t, r, b, u1, u2, v1, v2);
     }
 
+    /**
+     * Releases every cached tile and its bookkeeping. Called when the map changes world: Moon and Terra
+     * Nostra use the same tile coordinates, so a kept texture would show the wrong world's ground.
+     */
+    void clearAll() {
+        worldGeneration++;   // anything already in flight now belongs to the world we are leaving
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client != null) {
+            for (Identifier id : textures.values()) client.getTextureManager().destroyTexture(id);
+        }
+        textures.clear();
+        textureLoadedAt.clear();
+        tileEtags.clear();
+        failedAt.clear();
+        // Take each tile OUT of the map before closing its image. processCompletedTiles claims one with
+        // remove(key, value) and uploads only if it wins that race; closing while the entry was still
+        // reachable let it win and then upload freed memory, which uploads as a black or noise-filled
+        // tile that stays in the cache. Removing first means the render thread either gets a live image
+        // or never sees the entry.
+        for (TileKey key : java.util.List.copyOf(completedTiles.keySet())) {
+            LoadedTile t = completedTiles.remove(key);
+            if (t != null) t.image().close();
+        }
+        completedTiles.clear();
+    }
+
     /** Status code of a tile refusal in the last 30s, or 0 if the imagery is loading normally. */
     int recentRefusalStatus() {
         return System.currentTimeMillis() - lastRefusedMs < 30_000L ? lastRefusedStatus : 0;
@@ -667,7 +761,12 @@ final class SquaremapTileRenderer {
         return sh / 2 + (int) Math.round((worldZ - camZ) * scale);
     }
 
-    private record TileKey(int zoom, int x, int y) {}
+    /**
+     * A tile identity. The world is part of it: Terra Nostra and the Moon use the same tile coordinates,
+     * so without it one world's imagery was served for the other, and the two could not be cached at
+     * once -- which the minimap now needs, since it draws the player's world while the map draws another.
+     */
+    private record TileKey(String world, int zoom, int x, int y) {}
     private record LoadedTile(TileKey key, NativeImage image) {}
     private record PanDirection(double x, double z) {}
     private record CircleClip(double centerX, double centerY, double radius, double radiusSq,
@@ -696,7 +795,15 @@ final class SquaremapTileRenderer {
 
     private enum NetworkPolicy {
         WORLD_MAP(true, true, MAX_CONCURRENT_LOADS),
-        MINIMAP(false, false, 8);
+        // Refresh allowed, prefetch still not. Prefetch is the expensive half -- whole rings of
+        // neighbouring tiles and adjacent zooms -- while a refresh only re-pulls a tile already on
+        // screen that is over TILE_REFRESH_MS old, at 8 at a time and usually answered with a 304.
+        //
+        // It matters now that two worlds are held: the world map only ever refreshes the world it is
+        // showing, so with the map pinned to one world the OTHER one -- the one the minimap draws,
+        // where the player actually is -- had no path to updated imagery at all. Its tiles stayed as
+        // first fetched for the whole session.
+        MINIMAP(false, true, 8);
 
         private final boolean allowPrefetch;
         private final boolean allowRefresh;
