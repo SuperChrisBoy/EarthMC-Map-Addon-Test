@@ -177,7 +177,6 @@ public class TownyMapMod implements ClientModInitializer {
             if (c.world != null && isActiveOnCurrentServer()) net.townymap.ice.IceRoadNetwork.tickAutoUpdate();
             if (hunterSystem != null && apiClient != null && isActiveOnCurrentServer()) {
                 apiClient.tickPlayers();
-                hunterSystem.tick(c, apiClient.getPlayers(), apiClient.getTowns());
             }
         });
 
@@ -2669,19 +2668,17 @@ public class TownyMapMod implements ClientModInitializer {
         return MapToggleOverlay.handleSettingsClick(mouseX, mouseY, screenH);
     }
 
-    public static boolean onHunterButtonClick(double mouseX, double mouseY, int screenH) {
-        return MapToggleOverlay.handleHunterClick(mouseX, mouseY, screenH);
-    }
+    public static boolean onHunterButtonClick(double mouseX, double mouseY, int screenH) { return false; }
     public static boolean onHunterActivityButtonClick(double mouseX,double mouseY,int screenH){
-        if(config!=null&&MapToggleOverlay.handleActivityClick(mouseX,mouseY,screenH)){net.townymap.gui.HunterActivityOverlay.toggle(config);return true;}return false;
+        return false;
     }
     public static boolean onTeleportButtonClick(double x,double y,int sh){if(config!=null&&MapToggleOverlay.handleTeleportClick(x,y,sh,config)){toggleTeleportTarget();return true;}return false;}
-    public static void renderHunterActivity(DrawContext ctx,int sw,int sh){if(config!=null)net.townymap.gui.HunterActivityOverlay.render(ctx,sw,sh,config,true);}
-    public static void renderHunterActivityHud(DrawContext ctx){MinecraftClient mc=MinecraftClient.getInstance();if(mc.player!=null&&mc.currentScreen==null&&config!=null&&config.hunterWarningEnabled)net.townymap.gui.HunterActivityOverlay.render(ctx,mc.getWindow().getScaledWidth(),mc.getWindow().getScaledHeight(),config,false);}
-    public static void renderWildernessRiskHud(DrawContext ctx,boolean actionBarVisible){if(config==null||!config.hunterWarningEnabled||hunterSystem==null)return;MinecraftClient mc=MinecraftClient.getInstance();if(mc.player==null||mc.currentScreen!=null)return;String line=hunterSystem.wildernessRiskHudLine();if(line.isBlank())return;int sw=mc.getWindow().getScaledWidth(),sh=mc.getWindow().getScaledHeight(),w=mc.textRenderer.getWidth(line),x=sw/2,y=Math.max(4,sh-(actionBarVisible?96:82));ctx.fill(x-w/2-6,y-3,x+w/2+6,y+12,0xD8101216);ctx.drawCenteredTextWithShadow(mc.textRenderer,line,x,y,0xFFFFFFFF);}
-    public static void renderHunterWarningHud(DrawContext ctx){if(config==null||!config.hunterWarningEnabled||hunterSystem==null)return;MinecraftClient mc=MinecraftClient.getInstance();if(mc.player==null||mc.currentScreen!=null)return;java.util.List<String> lines=hunterSystem.warningHudLines();int sw=mc.getWindow().getScaledWidth(),y=8;for(String line:lines){ctx.drawCenteredTextWithShadow(mc.textRenderer,line,sw/2,y,0xFFFFFFFF);y+=13;}}
-    public static boolean clickHunterActivity(double x,double y,int sw,int sh){return config!=null&&net.townymap.gui.HunterActivityOverlay.click(x,y,sw,sh,config);}
-    public static boolean scrollHunterActivity(double x,double y,double amount,int sw,int sh){return config!=null&&net.townymap.gui.HunterActivityOverlay.scroll(x,y,amount,sw,sh,config);}
+    public static void renderHunterActivity(DrawContext ctx,int sw,int sh){}
+    public static void renderHunterActivityHud(DrawContext ctx){}
+    public static void renderWildernessRiskHud(DrawContext ctx,boolean actionBarVisible){}
+    public static void renderHunterWarningHud(DrawContext ctx){}
+    public static boolean clickHunterActivity(double x,double y,int sw,int sh){return false;}
+    public static boolean scrollHunterActivity(double x,double y,double amount,int sw,int sh){return false;}
 
     public static void openHunterWatchScreen() {
         MinecraftClient client = MinecraftClient.getInstance();
