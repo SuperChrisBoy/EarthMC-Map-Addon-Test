@@ -232,6 +232,14 @@ public class TownyMapConfigScreen extends Screen {
                         v -> cfg.borderThicknessMultiplier = (float) v),
                 () -> cfg.borderThicknessMultiplier == DEFAULTS.borderThicknessMultiplier,
                 () -> cfg.borderThicknessMultiplier = DEFAULTS.borderThicknessMultiplier);
+        option(ui("ice_road_line_width"), cycle(cfg.iceRoadLineWidth, new int[]{1, 3, 5, 7, 9},
+                        v -> Component.literal(v + " px"), v -> cfg.iceRoadLineWidth = v),
+                () -> cfg.iceRoadLineWidth == DEFAULTS.iceRoadLineWidth,
+                () -> cfg.iceRoadLineWidth = DEFAULTS.iceRoadLineWidth);
+        option(ui("ice_road_marker_size"), cycle(cfg.iceRoadMarkerSize, new int[]{8, 10, 12, 14, 18, 24},
+                        v -> Component.literal(v + " px"), v -> cfg.iceRoadMarkerSize = v),
+                () -> cfg.iceRoadMarkerSize == DEFAULTS.iceRoadMarkerSize,
+                () -> cfg.iceRoadMarkerSize = DEFAULTS.iceRoadMarkerSize);
         option(ui("map_mode_rgb"), onOff(cfg.statusHighlightRainbow, v -> cfg.statusHighlightRainbow = v),
                 () -> cfg.statusHighlightRainbow == DEFAULTS.statusHighlightRainbow,
                 () -> cfg.statusHighlightRainbow = DEFAULTS.statusHighlightRainbow);
@@ -498,7 +506,8 @@ public class TownyMapConfigScreen extends Screen {
             "last_seen_positions", "nation_capital_stars", "nation_join_range", "ui_scale",
             "screenshot_players", "screenshot_nation_stars", "screenshot_hides_dimmed_towns",
             "map_screenshot_key", "data_freshness_line", "reload_claims", "open_info_panel",
-            "info_panel_key", "reload_claims_key", "view_archive"
+            "info_panel_key", "reload_claims_key", "view_archive", "ice_road_line_width",
+            "ice_road_marker_size"
     };
     private static String settingDescription(String label) {
         for (String id : DESCRIPTION_IDS) {

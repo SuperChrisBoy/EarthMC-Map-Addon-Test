@@ -384,6 +384,8 @@ public abstract class MixinGuiMap {
                     return;
                 }
                 if(TownyMapMod.clickTeleportViewer(click.x(),click.y(),sw,sh)){cir.setReturnValue(true);return;}
+                if(TownyMapMod.onMapToggleClick(click.x(),click.y(),sh)){cir.setReturnValue(true);return;}
+                if(net.townymap.gui.IceRoadPlannerOverlay.active()){double[] world=overlayWorldFromScreen(click.x(),click.y(),sw,sh);if(world!=null&&TownyMapMod.clickIceRoadPlanner(click.x(),click.y(),world[0],world[1],sw)){cir.setReturnValue(true);return;}}
                 if(TownyMapMod.clickIceRoadOverlay(click.x(),click.y(),sw,sh)){cir.setReturnValue(true);return;}
                 TownSearchOverlay.ClickResult result =
                         TownyMapMod.onTownSearchClick(click.x(), click.y(), sw, sh);
@@ -417,10 +419,6 @@ public abstract class MixinGuiMap {
             if(button==0&&TownyMapMod.clickHunterActivity(click.x(),click.y(),sw,sh)){cir.setReturnValue(true);return;}
             if(button==0&&TownyMapMod.onTeleportButtonClick(click.x(),click.y(),sh)){cir.setReturnValue(true);return;}
 
-            if (button == 0 && TownyMapMod.onMapToggleClick(click.x(), click.y(), sh)) {
-                cir.setReturnValue(true);
-                return;
-            }
             // Planning counter chips ("+" arms placement, T# removes that planned town).
             if (button == 0 && TownyMapMod.onPlanningCounterClick(click.x(), click.y())) {
                 cir.setReturnValue(true);
@@ -513,7 +511,7 @@ public abstract class MixinGuiMap {
 
     @Inject(require = 0, method = "mouseReleased", at = @At("HEAD"), remap = false, cancellable = true)
     private void townymap$releaseTeleportWindow(MouseButtonEvent click,CallbackInfoReturnable<Boolean> cir){
-        if(click.buttonInfo().button()==0&&(TownyMapMod.releaseTeleportViewer()||TownyMapMod.releaseHunterActivity()))cir.setReturnValue(true);
+        if(click.buttonInfo().button()==0&&(TownyMapMod.releaseIceRoadPlanner()||TownyMapMod.releaseTeleportViewer()||TownyMapMod.releaseHunterActivity()))cir.setReturnValue(true);
     }
 
     @Inject(require = 0, method = "mouseScrolled", at = @At("HEAD"), remap = false, cancellable = true)
@@ -528,6 +526,7 @@ public abstract class MixinGuiMap {
                               CallbackInfoReturnable<Boolean> cir) {
         if (TownyMapMod.isAccessBlocked()) return;   // let Xaero handle it as if we were not installed
         try {
+            if(net.townymap.gui.IceRoadPlannerOverlay.keyPressed(input.key())){cir.setReturnValue(true);return;}
             // The clean-screenshot key is a normal rebindable keybind (Options -> Controls). Screens
             // swallow key presses, so match it here too — but never while the search bar has focus.
             if (!TownSearchOverlay.isFocused()
@@ -568,7 +567,7 @@ public abstract class MixinGuiMap {
             boolean consumed = false;
             String text = input.codepointAsString();
             for (int i = 0; i < text.length(); i++) {
-                consumed |= TownyMapMod.onTownSearchCharTyped(text.charAt(i));
+                char c=text.charAt(i);consumed |= net.townymap.gui.IceRoadPlannerOverlay.charTyped(c)||TownyMapMod.onTownSearchCharTyped(c);
             }
             if (consumed) {
                 cir.setReturnValue(true);

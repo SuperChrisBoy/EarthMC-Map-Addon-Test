@@ -209,6 +209,13 @@ public final class TownyMinimapOverlay {
             }
             renderChunkCounterSelection(ctx, client, config, mapX, mapY, size, centerX, centerY,
                     playerX, playerZ, pixelsPerBlock, angle, sin, cos, clip);
+            if (TownyMapMod.WORLD_OVERWORLD.equals(minimapWorld)) {
+                net.townymap.gui.IceRoadOverlay.renderMinimap(ctx, playerX, playerZ, pixelsPerBlock,
+                        angle, mapX, mapY, size, circular, config);
+                net.townymap.gui.TeleportViewerOverlay.minimapRoute().ifPresent(route ->
+                        net.townymap.gui.IceRoadOverlay.renderSelectedRouteMinimap(ctx, route, playerX,
+                                playerZ, pixelsPerBlock, angle, mapX, mapY, size, circular, config));
+            }
             if(config.hunterWarningEnabled&&config.hunterRadiusOnMinimap&&!TownyMapMod.isArchiveMode())XaeroRadiusOverlayRenderer.minimap(ctx,TownyMapMod.hunterMinimapRadiusOverlays(),centerX,centerY,playerX,playerZ,pixelsPerBlock,sin,cos,clip.left(),clip.top(),clip.right(),clip.bottom());
             if (squaremapRendered) ctx.extractDeferredElements(0, 0, 0.0F);
             return;
@@ -317,6 +324,15 @@ public final class TownyMinimapOverlay {
             }
         } finally {
             ctx.disableScissor();
+        }
+
+        // Roads belong above claim fills/outlines, matching the world-map layer order.
+        if (TownyMapMod.WORLD_OVERWORLD.equals(minimapWorld)) {
+            net.townymap.gui.IceRoadOverlay.renderMinimap(ctx, playerX, playerZ, pixelsPerBlock,
+                    angle, mapX, mapY, size, circular, config);
+            net.townymap.gui.TeleportViewerOverlay.minimapRoute().ifPresent(route ->
+                    net.townymap.gui.IceRoadOverlay.renderSelectedRouteMinimap(ctx, route, playerX,
+                            playerZ, pixelsPerBlock, angle, mapX, mapY, size, circular, config));
         }
 
         if(config.hunterWarningEnabled&&config.hunterRadiusOnMinimap&&!TownyMapMod.isArchiveMode())XaeroRadiusOverlayRenderer.minimap(ctx,TownyMapMod.hunterMinimapRadiusOverlays(),centerX,centerY,playerX,playerZ,pixelsPerBlock,sin,cos,clip.left(),clip.top(),clip.right(),clip.bottom());

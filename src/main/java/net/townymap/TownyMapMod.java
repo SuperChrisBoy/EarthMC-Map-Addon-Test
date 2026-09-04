@@ -665,6 +665,11 @@ public class TownyMapMod implements ClientModInitializer {
         return cleanShotFrames > 0 || cleanShotReady;
     }
 
+    /** True only for the planner's image export, whose frame contains the base map and planner artwork. */
+    public static boolean composingPlannerExport() {
+        return composingScreenshot() && net.townymap.gui.IceRoadPlannerOverlay.imageExportPending();
+    }
+
     /** Whether player dots belong in the screenshot being composed. */
     public static boolean screenshotWantsPlayers() {
         return config == null || config.screenshotPlayers;
@@ -696,6 +701,7 @@ public class TownyMapMod implements ClientModInitializer {
      * framebuffer holds the finished picture, which is what we want anyway.
      */
     public static void captureMapScreenshotIfReady() {
+        net.townymap.gui.IceRoadPlannerOverlay.imageExportFinished();
         if (!cleanShotReady) return;
         cleanShotReady = false;
         Minecraft client = Minecraft.getInstance();
@@ -704,6 +710,7 @@ public class TownyMapMod implements ClientModInitializer {
             // 26.2 exposes neither the main render target nor the chat component, so use the convenience
             // grab that does the whole job. The filename is Minecraft's default rather than ours.
             net.minecraft.client.Screenshot.grab(client, true);
+            net.townymap.gui.IceRoadPlannerOverlay.imageExportFinished();
         } catch (Exception e) {
             LOGGER.warn("[TownyMap] Map screenshot failed: {}", e.toString());
         }
@@ -1098,7 +1105,7 @@ public class TownyMapMod implements ClientModInitializer {
     public static void renderOnWorldMap(GuiGraphicsExtractor ctx,
                                         double cameraX, double cameraZ,
                                         double scale, int screenW, int screenH) {
-        if (!isActiveOnCurrentServer()) return;
+        if (!isActiveOnCurrentServer() || composingPlannerExport()) return;
         if (renderer != null) {
             apiClient.tickWhileMapOpen();
             refreshPlayerIndexIfNeeded();
@@ -1122,9 +1129,14 @@ public class TownyMapMod implements ClientModInitializer {
                                              double scale, int screenW, int screenH) {
         if (renderer == null || config == null) return;
         if (!isActiveOnCurrentServer()) return;
+        if (composingPlannerExport()) {
+            if(viewingEarth())net.townymap.gui.IceRoadPlannerOverlay.render(ctx,cameraX,cameraZ,scale,screenW,screenH);
+            return;
+        }
         if (config.iceRoadOverlayEnabled && viewingEarth()) {
             net.townymap.gui.IceRoadOverlay.render(ctx,cameraX,cameraZ,scale,screenW,screenH,config);
         }
+        if(viewingEarth())net.townymap.gui.IceRoadPlannerOverlay.render(ctx,cameraX,cameraZ,scale,screenW,screenH);
         // Join-range zone for the selected nation, under the player dots.
         if (config.nationRangeEnabled) {
             // Planning always shows its own nation's zone — that's the whole point of the mode — otherwise
@@ -2750,9 +2762,12 @@ public class TownyMapMod implements ClientModInitializer {
     public static void refreshTeleportData(double x,double z){Minecraft mc=Minecraft.getInstance();if(mc!=null&&mc.getUser()!=null&&teleportAccess!=null)teleportAccess.beginQuery(currentTownSnapshot(),mc.getUser().getName(),x,z);}
     public static void forceRefreshTeleportData(double x,double z){Minecraft mc=Minecraft.getInstance();if(mc!=null&&mc.getUser()!=null&&teleportAccess!=null){teleportAccess.beginQuery(currentTownSnapshot(),mc.getUser().getName(),x,z);teleportAccess.refresh(currentTownSnapshot(),mc.getUser().getName());}}
     public static net.townymap.teleport.TeleportAccessService.Plan teleportPlan(double x,double z){if(teleportAccess==null)return new net.townymap.teleport.TeleportAccessService.Plan(java.util.List.of(),java.util.List.of(),null,false,"Unavailable");ensureTeleportData();return teleportAccess.plan(x,z);}
+    public static java.util.concurrent.CompletableFuture<net.townymap.teleport.TeleportAccessService.Plan> teleportPlanAsync(double x,double z){ensureTeleportData();if(teleportAccess==null)return java.util.concurrent.CompletableFuture.completedFuture(new net.townymap.teleport.TeleportAccessService.Plan(java.util.List.of(),java.util.List.of(),null,false,"Unavailable"));return java.util.concurrent.CompletableFuture.supplyAsync(()->teleportAccess.plan(x,z));}
     public static void renderTeleportViewer(GuiGraphicsExtractor g,double camX,double camZ,double scale,int sw,int sh){if(isTeleportFeatureAvailable()&&config!=null)net.townymap.gui.TeleportViewerOverlay.render(g,camX,camZ,scale,sw,sh,config);}
     public static boolean clickTeleportViewer(double x,double y,int sw,int sh){return isTeleportFeatureAvailable()&&config!=null&&net.townymap.gui.TeleportViewerOverlay.click(x,y,sw,sh,config);}
     public static boolean clickIceRoadOverlay(double x,double y,int sw,int sh){return config!=null&&viewingEarth()&&net.townymap.gui.IceRoadOverlay.click(x,y,sw,sh,config);}
+    public static boolean clickIceRoadPlanner(double screenX,double screenY,double worldX,double worldZ,int sw){return viewingEarth()&&net.townymap.gui.IceRoadPlannerOverlay.click(screenX,screenY,worldX,worldZ,sw);}
+    public static boolean releaseIceRoadPlanner(){return net.townymap.gui.IceRoadPlannerOverlay.release();}
     public static boolean releaseTeleportViewer(){return config!=null&&net.townymap.gui.TeleportViewerOverlay.release(config);}
     public static boolean scrollTeleportViewer(double x,double y,double amount,int sw,int sh){return config!=null&&net.townymap.gui.TeleportViewerOverlay.scroll(x,y,amount,sw,sh,config);}
     public static void setTeleportSpawnReport(net.townymap.teleport.TeleportDestination destination,net.townymap.teleport.TeleportDestination.PhysicalAccess access){if(teleportAccess!=null)teleportAccess.setSpawnReport(destination,access);}

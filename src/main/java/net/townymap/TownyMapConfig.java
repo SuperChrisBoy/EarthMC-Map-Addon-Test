@@ -223,6 +223,10 @@ public class TownyMapConfig {
     public boolean teleportIncludeIceRoads = true;
     /** Draw XiLeF2211's ice-highway lines/stations on the world map. Off by default. */
     public boolean iceRoadOverlayEnabled = false;
+    /** Ice-highway stroke width in screen pixels. */
+    public int iceRoadLineWidth = 1;
+    /** Ice-highway station glyph size in screen pixels. */
+    public int iceRoadMarkerSize = 8;
     /** 0 everything, 1 accessible, 2 blocked; applies to ice-road station symbols. */
     public int iceRoadStationFilter = 0;
     public boolean teleportRouteLineVisible = true;
@@ -431,6 +435,11 @@ public class TownyMapConfig {
             mapWorldMode = 0;
             changed = true;
         }
+        int iceWidth = Math.clamp(iceRoadLineWidth, 1, 9);
+        int iceMarker = Math.clamp(iceRoadMarkerSize, 8, 24);
+        if (iceWidth != iceRoadLineWidth || iceMarker != iceRoadMarkerSize) changed = true;
+        iceRoadLineWidth = iceWidth;
+        iceRoadMarkerSize = iceMarker;
         if (borderOverlayMode < 0 || borderOverlayMode > 2) {
             borderOverlayMode = 0;
             changed = true;

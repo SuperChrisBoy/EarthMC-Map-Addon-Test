@@ -49,6 +49,17 @@ class IceRoadNetworkTest {
                 .toLowerCase(java.util.Locale.ROOT).startsWith("elev"));
     }
 
+    @Test void junctionsRemainGraphNodesButCannotBeRouteEndpoints() {
+        IceRoadNetwork network=IceRoadNetwork.get();
+        var junction=network.stations().stream()
+                .filter(station->station!=null&&station.type().toLowerCase(java.util.Locale.ROOT).startsWith("jct"))
+                .findFirst().orElseThrow();
+
+        assertFalse(IceRoadNetwork.canEnterOrExit(junction));
+        assertFalse(network.nearest(junction.x(),junction.z(),Map.of()).type()
+                .toLowerCase(java.util.Locale.ROOT).startsWith("jct"));
+    }
+
     @Test void routeEdgesAreClippedAtStationsInsideLongSegments() {
         var a=new IceRoadNetwork.Station(0,"A","station",40,0,"",java.util.List.of());
         var b=new IceRoadNetwork.Station(1,"B","station",100,60,"",java.util.List.of());

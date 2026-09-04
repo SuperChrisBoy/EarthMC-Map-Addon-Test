@@ -65,7 +65,7 @@ public final class IceRoadNetwork {
     boolean edgePathsAreSimple(){for(List<Edge> edges:graph)for(Edge edge:edges){Set<String> seen=new HashSet<>();for(Point point:edge.path)if(!seen.add(pointKey(point)))return false;}return true;}
     private static String text(JsonObject o,String k,String f){return o.has(k)&&o.get(k).isJsonPrimitive()?o.get(k).getAsString():f;}private static double number(JsonObject o,String k){return o.has(k)?o.get(k).getAsDouble():0;}private static int parseColor(String s){try{return 0xFF000000|Integer.parseInt(s,16);}catch(Exception e){return 0xFFFFFFFF;}}private static double distance(double x1,double z1,double x2,double z2){return Math.hypot(x2-x1,z2-z1);}
 
-    static boolean canEnterOrExit(Station station){return station!=null&&!station.type().toLowerCase(Locale.ROOT).startsWith("elev");}
+    static boolean canEnterOrExit(Station station){if(station==null)return false;String type=station.type().toLowerCase(Locale.ROOT);return !type.startsWith("elev")&&!type.startsWith("jct");}
     private static boolean usableEndpoint(Station station,Map<String,String> reports,boolean accessibleOnly){if(!canEnterOrExit(station))return false;String status=reports.getOrDefault(reportKey(station.id),"UNKNOWN");return !"OBSTRUCTED".equals(status)&&(!accessibleOnly||"ACCESSIBLE".equals(status));}
     public Station nearest(double x,double z,Map<String,String>reports){return nearest(x,z,reports,false);}
     public Station nearest(double x,double z,Map<String,String>reports,boolean accessibleOnly){Station best=null;double bd=Double.POSITIVE_INFINITY;for(Station s:stations){if(!usableEndpoint(s,reports,accessibleOnly))continue;double d=distance(x,z,s.x,s.z);if(d<bd){bd=d;best=s;}}return best;}

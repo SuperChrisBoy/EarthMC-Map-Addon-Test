@@ -24,7 +24,7 @@ public final class MapToggleOverlay {
     private static final int ADD_WIDTH = 20;
     private static final int FILL_WIDTH = 34;
     private static final int SETTINGS_GAP = 7;   // extra gap above the settings button
-    private static final int TOGGLE_ROWS = 7;    // Squaremap | Borders | Map mode | World | Chunks | Counter | Ice roads
+    private static final int TOGGLE_ROWS = 8;    // Squaremap | Borders | Map mode | World | Chunks | Counter | Ice roads | Planner
 
     private MapToggleOverlay() {}
 
@@ -46,6 +46,7 @@ public final class MapToggleOverlay {
         drawToggle(ctx, tr, 4, y, tr("chunks"), config.chunkGridEnabled);
         drawMode(ctx, tr, 5, y, tr("counter"), ChunkCounterOverlay.toolbarLabel(config), config.chunkCounterEnabled);
         drawToggle(ctx, tr, 6, y, tr("ice_roads"), config.iceRoadOverlayEnabled);
+        drawToggle(ctx, tr, 7, y, "Ice Planner", IceRoadPlannerOverlay.active());
         if (config.chunkCounterEnabled) {
             if (ChunkCounterOverlay.isMultiMode(config)) {
                 drawCounterGroupButtons(ctx, tr, config);
@@ -110,6 +111,7 @@ public final class MapToggleOverlay {
                     }
                 }
                 case 6 -> {if(backward){config.iceRoadOverlayEnabled=true;config.iceRoadStationFilter=(config.iceRoadStationFilter+1)%3;}else config.iceRoadOverlayEnabled=!config.iceRoadOverlayEnabled;}
+                case 7 -> IceRoadPlannerOverlay.toggle();
                 default -> { return false; }
             }
             config.save();
